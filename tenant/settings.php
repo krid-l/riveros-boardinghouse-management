@@ -47,16 +47,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $params = [$contact, $occupation, $emergency];
 
             if (isset($_FILES['profile_picture']) && $_FILES['profile_picture']['error'] !== UPLOAD_ERR_NO_FILE) {
-                $uploadDir = __DIR__ . '/../uploads/profiles/';
-                if (!is_dir($uploadDir)) mkdir($uploadDir, 0777, true);
-                
                 $fileTmpPath = $_FILES['profile_picture']['tmp_name'];
                 $cleanFileName = preg_replace('/[^A-Za-z0-9.\-_]/', '_', basename($_FILES['profile_picture']['name']));
                 $fileName = time() . '_' . $cleanFileName;
                 
-                if (move_uploaded_file($fileTmpPath, $uploadDir . $fileName)) {
+                $supabaseUrl = getenv('SUPABASE_URL') ?: 'https://edswwvalfxehdklaackx.supabase.co';
+                $supabaseKey = getenv('SUPABASE_SERVICE_KEY');
+                $destPath = null;
+                
+                if ($supabaseUrl && $supabaseKey) {
+                    $bucketName = 'profiles';
+                    $fileData = file_get_contents($fileTmpPath);
+                    $mimeType = mime_content_type($fileTmpPath);
+                    
+                    $ch = curl_init();
+                    curl_setopt($ch, CURLOPT_URL, "$supabaseUrl/storage/v1/object/$bucketName/$fileName");
+                    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+                    curl_setopt($ch, CURLOPT_POST, true);
+                    curl_setopt($ch, CURLOPT_POSTFIELDS, $fileData);
+                    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+                        "Authorization: Bearer $supabaseKey",
+                        "Content-Type: $mimeType"
+                    ]);
+                    
+                    $response = curl_exec($ch);
+                    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                    curl_close($ch);
+                    
+                    if ($httpCode == 200) {
+                        $destPath = "$supabaseUrl/storage/v1/object/public/$bucketName/$fileName";
+                    }
+                } else {
+                    $uploadDir = __DIR__ . '/../uploads/profiles/';
+                    if (!is_dir($uploadDir)) mkdir($uploadDir, 0777, true);
+                    
+                    if (move_uploaded_file($fileTmpPath, $uploadDir . $fileName)) {
+                        $destPath = 'uploads/profiles/' . $fileName;
+                    }
+                }
+                
+                if ($destPath) {
                     $picUpdate = ', profile_picture = ?';
-                    $params[] = 'uploads/profiles/' . $fileName;
+                    $params[] = $destPath;
                 }
             }
             $params[] = $_SESSION['tenant_id'];
