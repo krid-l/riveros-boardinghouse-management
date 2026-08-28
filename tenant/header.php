@@ -57,7 +57,7 @@ $current_page = basename($_SERVER['PHP_SELF']);
                 <div class="mt-auto bg-dark p-3 rounded-3 mb-2 d-flex align-items-center">
                     <?php
                     $hFullName = htmlspecialchars($currentTenant['first_name'] . ' ' . $currentTenant['last_name']);
-                    $hAvatar = !empty($currentTenant['profile_picture']) ? '../' . htmlspecialchars($currentTenant['profile_picture']) : 'https://ui-avatars.com/api/?name=' . urlencode($hFullName) . '&background=10b981&color=fff';
+                    $hAvatar = !empty($currentTenant['profile_picture']) ? (str_starts_with($currentTenant['profile_picture'], 'http') ? htmlspecialchars($currentTenant['profile_picture']) : '../' . htmlspecialchars($currentTenant['profile_picture'])) : 'https://ui-avatars.com/api/?name=' . urlencode($hFullName) . '&background=10b981&color=fff';
                     ?>
                     <img src="<?= $hAvatar ?>" class="rounded-circle me-3" width="40" height="40" style="object-fit: cover;" alt="Tenant">
                     <div>

@@ -111,7 +111,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 // Generate Avatar URL
 $fullName = htmlspecialchars($currentTenant['first_name'] . ' ' . $currentTenant['last_name']);
 if (!empty($currentTenant['profile_picture'])) {
-    $avatarUrl = '../' . htmlspecialchars($currentTenant['profile_picture']);
+    $avatarUrl = str_starts_with($currentTenant['profile_picture'], 'http') ? htmlspecialchars($currentTenant['profile_picture']) : '../' . htmlspecialchars($currentTenant['profile_picture']);
 } else {
     $avatarUrl = "https://ui-avatars.com/api/?name=" . urlencode($fullName) . "&background=10b981&color=fff&size=128";
 }
