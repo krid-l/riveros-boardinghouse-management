@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 // includes/db.php
 
 $host = 'aws-0-ap-northeast-2.pooler.supabase.com';
