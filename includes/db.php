@@ -1,29 +1,11 @@
-<?php
+﻿<?php
 // includes/db.php
 
-// Railway + Supabase Connection Setup
-// Railway securely passes credentials via Environment Variables, typically as a DATABASE_URL.
-
-$dbUrl = getenv('DATABASE_URL');
-
-if ($dbUrl) {
-    // Parse the URL provided by Railway/Supabase
-    // Format: postgresql://username:password@host:port/dbname
-    $parsedUrl = parse_url($dbUrl);
-    
-    $host = $parsedUrl['host'];
-    $port = isset($parsedUrl['port']) ? $parsedUrl['port'] : '5432';
-    $dbname = ltrim($parsedUrl['path'], '/');
-    $username = $parsedUrl['user'];
-    $password = $parsedUrl['pass'];
-} else {
-    // Fallback for local development if Environment Variables are not set
-    $host = 'aws-0-ap-northeast-2.pooler.supabase.com';
-    $port = '5432'; 
-    $dbname = 'postgres';
-    $username = 'postgres.edswwvalfxehdklaackx';
-    $password = 'DirkLabiaga@20';
-}
+$host = 'aws-0-ap-northeast-2.pooler.supabase.com';
+$port = '5432'; 
+$dbname = 'postgres';
+$username = 'postgres.edswwvalfxehdklaackx';
+$password = 'DirkLabiaga@20';
 
 try {
     $dsn = "pgsql:host=$host;port=$port;dbname=$dbname";
