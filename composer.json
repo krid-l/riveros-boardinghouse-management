@@ -3,6 +3,7 @@
     "description": "Digital Boarding House Management System",
     "require": {
         "ext-pdo": "*",
-        "ext-pdo_pgsql": "*"
+        "ext-pdo_pgsql": "*",
+        "ext-pgsql": "*"
     }
 }
