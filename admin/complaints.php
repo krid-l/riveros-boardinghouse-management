@@ -28,9 +28,10 @@ $stmt = $pdo->query("
 $complaints = $stmt->fetchAll();
 
 $totalComplaints = count($complaints);
-$pendingCount = 0;
+$openCount = 0;
 $inProgressCount = 0;
 $resolvedCount = 0;
+$closedCount = 0;
 
 // Fetch Category Counts
 $catStmt = $pdo->query("SELECT category, COUNT(*) as cat_count FROM complaints GROUP BY category ORDER BY cat_count DESC LIMIT 4");
