@@ -1,8 +1,7 @@
-{
+﻿{
     "name": "riveros/boarding-house",
     "description": "Digital Boarding House Management System",
     "require": {
-        "php": "^8.0",
         "ext-pdo": "*",
         "ext-pdo_pgsql": "*"
     }
