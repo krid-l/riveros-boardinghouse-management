@@ -182,7 +182,8 @@ $payments = $stmt->fetchAll();
 .footer-text { font-size: 0.7rem; color: #64748b; text-align: center; margin-top: 1rem; display: flex; justify-content: center; align-items: center; gap: 6px; }
 
 /* History List */
-.history-item { border-bottom: 1px solid #f1f5f9; padding: 1rem 0; display: flex; justify-content: space-between; align-items: center; }
+.history-item { border-bottom: 1px solid #f1f5f9; padding: 1rem 0; display: flex; justify-content: space-between; align-items: center; min-width: 500px; }
+.history-container { overflow-x: auto; padding-bottom: 0.5rem; }
 .history-item:last-child { border-bottom: none; padding-bottom: 0; }
 .badge-pending { background: #fef3c7; color: #d97706; padding: 0.25rem 0.6rem; border-radius: 6px; font-size: 0.65rem; font-weight: 700; border: 1px solid #fde68a; }
 .badge-verified { background: #dcfce7; color: #166534; padding: 0.25rem 0.6rem; border-radius: 6px; font-size: 0.65rem; font-weight: 700; border: 1px solid #bbf7d0; }
@@ -364,7 +365,7 @@ $payments = $stmt->fetchAll();
             <a href="receipts.php" class="text-primary fw-bold text-decoration-none" style="font-size: 0.75rem;">View All</a>
         </div>
 
-        <div>
+        <div class="history-container">
             <?php if (empty($payments)): ?>
                 <div class="text-center py-4 text-muted" style="font-size: 0.8rem;">No payment history found.</div>
             <?php endif; ?>

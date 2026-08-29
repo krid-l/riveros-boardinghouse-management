@@ -47,7 +47,7 @@ foreach ($payments as $p) {
 .filter-input { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 0.6rem 1rem; font-size: 0.8rem; font-weight: 500; color: #475569; display: flex; align-items: center; gap: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.02); flex: 1; }
 .filter-input select, .filter-input input { border: none; background: transparent; outline: none; width: 100%; font-weight: 500; color: #475569; }
 
-.receipt-card { background: #ffffff; border-radius: 16px; border: 1px solid #f1f5f9; box-shadow: 0 4px 12px rgba(0,0,0,0.03); padding: 1.5rem; margin-bottom: 1rem; transition: transform 0.2s; position: relative; }
+.receipt-card { min-width: 650px; background: #ffffff; border-radius: 16px; border: 1px solid #f1f5f9; box-shadow: 0 4px 12px rgba(0,0,0,0.03); padding: 1.5rem; margin-bottom: 1rem; transition: transform 0.2s; position: relative; }
 .receipt-card:hover { transform: translateY(-2px); box-shadow: 0 8px 16px rgba(0,0,0,0.06); }
 .rc-left { display: flex; flex-direction: column; align-items: center; text-align: center; width: 100px; border-right: 1px solid #f1f5f9; padding-right: 1.5rem; }
 .rc-circle { width: 48px; height: 48px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1.25rem; margin-bottom: 0.75rem; color: white; }
@@ -83,12 +83,12 @@ foreach ($payments as $p) {
     .stat-col { border-right: none; border-bottom: 1px solid #f1f5f9; }
     .stat-col:last-child { border-bottom: none; }
     .filter-row { flex-direction: column; }
-    .receipt-card { flex-direction: column; text-align: left; padding: 1rem; }
-    .rc-left { width: 100%; border-right: none; border-bottom: 1px solid #f1f5f9; padding-right: 0; padding-bottom: 1rem; margin-bottom: 1rem; flex-direction: row; align-items: center; text-align: left; gap: 1rem; }
-    .rc-left .rc-circle { margin-bottom: 0; width: 40px; height: 40px; font-size: 1rem; }
-    .rc-left .rc-badge { margin-bottom: 0; }
-    .rc-middle { padding: 0; }
-    .rc-right { padding-left: 0; margin-top: -0.5rem; }
+    
+    
+    
+    
+    
+    
 }
 </style>
 

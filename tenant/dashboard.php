@@ -131,7 +131,7 @@ $balance = $currentTenant['balance'] ?? 0;
     box-shadow: 0 2px 12px rgba(0,0,0,0.04);
     margin-bottom: 1.25rem;
 }
-.transaction-table { width: 100%; }
+.transaction-table { width: 100%; min-width: 600px; }
 .transaction-table th { font-size: 0.65rem; color: #64748b; text-transform: uppercase; padding-bottom: 1rem; border-bottom: 1px solid #f1f5f9; font-weight: 700; letter-spacing: 0.5px;}
 .transaction-table td { font-size: 0.8rem; vertical-align: middle; padding: 1rem 0; border-bottom: 1px solid #f1f5f9; }
 .transaction-table tr:last-child td { border-bottom: none; padding-bottom: 0; }

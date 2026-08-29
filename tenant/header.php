@@ -98,4 +98,4 @@ $current_page = basename($_SERVER['PHP_SELF']);
             </div>
             
             <!-- Scrollable Content -->
-            <div class="p-4 flex-grow-1 overflow-auto container-fluid pb-5">
+            <div class="p-2 p-md-4 flex-grow-1 overflow-auto container-fluid pb-5">
