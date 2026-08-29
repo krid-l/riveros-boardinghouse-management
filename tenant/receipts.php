@@ -165,7 +165,7 @@ foreach ($payments as $p) {
     </div>
 
     <!-- Receipt List -->
-    <div id="receiptList">
+    <div id="receiptList" class="table-responsive" style="overflow-x: auto;">
         <?php if (empty($payments)): ?>
             <div class="text-center py-5 text-muted">No receipts or payments found.</div>
         <?php endif; ?>
