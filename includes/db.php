@@ -1,6 +1,9 @@
 <?php
 // includes/db.php
 
+// Due dates and billing months follow Philippine time, not the server's UTC clock.
+date_default_timezone_set('Asia/Manila');
+
 // Credentials come from environment variables (set them in Railway → Variables).
 $host = getenv('DB_HOST') ?: 'aws-0-ap-northeast-2.pooler.supabase.com';
 $port = getenv('DB_PORT') ?: '5432';
@@ -25,4 +28,10 @@ try {
 } catch(PDOException $e) {
     die("Database connection failed. Check the DB_* environment variables. Error: " . $e->getMessage());
 }
+
+require_once __DIR__ . '/migrations.php';
+runMigrations($pdo);
+
+// Post any rent charges that have come due, before any page reads balances.
+runBilling($pdo);
 ?>

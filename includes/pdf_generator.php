@@ -8,43 +8,33 @@ if (!class_exists('FPDF')) {
 function generateReceipt($paymentId, $tenantName, $amount, $date, $reference, $paymentMethod = 'GCash') {
     global $pdo;
     
-    // Attempt to fetch current balance, pay_for_room status, and move-in date
+    require_once __DIR__ . '/billing.php';
+
+    // Attempt to fetch current balance, pay_for_room status, and the month the payment covers
     $remaining = 0;
     $payForRoom = false;
-    $moveInDate = $date;
-    
+    $billedMonth = date('Y-m', strtotime($date));
+    $moveInDate = null;
+
     if (isset($pdo)) {
-        $stmt = $pdo->prepare("SELECT p.pay_for_room, t.balance, u.created_at AS move_in_date 
-                               FROM payments p 
-                               JOIN tenants t ON p.tenant_id = t.id 
-                               JOIN users u ON t.user_id = u.id 
+        $stmt = $pdo->prepare("SELECT p.pay_for_room, t.balance, t.move_in_date, t.last_billed_month
+                               FROM payments p
+                               JOIN tenants t ON p.tenant_id = t.id
                                WHERE p.id = ?");
         $stmt->execute([$paymentId]);
         $data = $stmt->fetch();
         if ($data) {
-            $remaining = (float)$data['balance'];
+            $remaining = max(0, (float)$data['balance']);
             $payForRoom = (bool)$data['pay_for_room'];
             $moveInDate = $data['move_in_date'];
+            if (!empty($data['last_billed_month'])) {
+                $billedMonth = $data['last_billed_month'];
+            }
         }
     }
-    
-    // Calculate Billing Cycle based on payment date and move-in day
-    $paymentDateTs = strtotime($date);
-    $moveInDay = (int)date('d', strtotime($moveInDate));
-    $currentDay = (int)date('d', $paymentDateTs);
-    $currentMonth = (int)date('m', $paymentDateTs);
-    $currentYear = (int)date('Y', $paymentDateTs);
 
-    if ($currentDay >= $moveInDay) {
-        $startCycle = date('m/d/Y', strtotime("$currentYear-$currentMonth-$moveInDay"));
-        $nextMonth = $currentMonth + 1; $nextYear = $currentYear; if($nextMonth>12){$nextMonth=1;$nextYear++;}
-        $endCycle = date('m/d/Y', strtotime("$nextYear-$nextMonth-$moveInDay"));
-    } else {
-        $prevMonth = $currentMonth - 1; $prevYear = $currentYear; if($prevMonth<1){$prevMonth=12;$prevYear--;}
-        $startCycle = date('m/d/Y', strtotime("$prevYear-$prevMonth-$moveInDay"));
-        $endCycle = date('m/d/Y', strtotime("$currentYear-$currentMonth-$moveInDay"));
-    }
-    $cycleStr = "$startCycle to $endCycle";
+    // Rent months run from the 1st (or move-in day) to month end, due on the 30th.
+    $cycleStr = billingPeriodLabel($billedMonth, $moveInDate);
     
     // Type string
     $typeStr = 'Individual Rent';

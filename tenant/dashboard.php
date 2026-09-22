@@ -6,7 +6,7 @@ $room = null;
 $roomOccupants = 0;
 if (!empty($currentTenant['room_id'])) {
     $stmt = $pdo->prepare("
-        SELECT r.*, (SELECT COUNT(*) FROM tenants WHERE room_id = r.id) as occupant_count 
+        SELECT r.*, (SELECT COUNT(*) FROM tenants WHERE room_id = r.id AND status = 'active') as occupant_count 
         FROM rooms r WHERE r.id = ?
     ");
     $stmt->execute([$currentTenant['room_id']]);
@@ -24,30 +24,11 @@ $settings = $pdo->query("SELECT setting_key, setting_value FROM settings")->fetc
 $gcashNumber = $settings['gcash_number'] ?? '0917 123 4567';
 $gcashName = $settings['gcash_name'] ?? 'Boarding House';
 
-// Get user's move-in date
-$uStmt = $pdo->prepare("SELECT created_at FROM users WHERE id = ?");
-$uStmt->execute([$_SESSION['user_id']]);
-$userCreatedAt = $uStmt->fetchColumn();
-$moveInDay = (int)date('d', strtotime($userCreatedAt));
-
-// Calculate Next Due Date based on move-in day
-$currentDay = (int)date('d');
-$currentMonth = (int)date('m');
-$currentYear = (int)date('Y');
-
-if ($currentDay >= $moveInDay) {
-    // Due date has passed this month, so next due date is next month
-    $nextMonth = $currentMonth + 1;
-    $nextYear = $currentYear;
-    if ($nextMonth > 12) {
-        $nextMonth = 1;
-        $nextYear++;
-    }
-    $nextDueDate = date('M d, Y', strtotime("$nextYear-$nextMonth-$moveInDay"));
-} else {
-    // Due date is coming up this month
-    $nextDueDate = date('M d, Y', strtotime("$currentYear-$currentMonth-$moveInDay"));
-}
+// Rent is due every 30th (see includes/billing.php)
+require_once '../includes/billing.php';
+$nextDue = nextDueDate($currentTenant);
+$nextDueDate = $nextDue ? date('M d, Y', strtotime($nextDue)) : 'No room assigned';
+$billing = tenantBillingStatus($currentTenant, chargesNotYetDue($pdo, (int)$currentTenant['id']));
 
 $balance = $currentTenant['balance'] ?? 0;
 ?>
@@ -203,6 +184,9 @@ $balance = $currentTenant['balance'] ?? 0;
             <?php else: ?>
                 <div class="text-white-50 fw-semibold" style="font-size: 0.7rem; letter-spacing: 0.5px;">Outstanding Balance</div>
                 <div class="fw-bolder" style="font-size: 1.25rem; color: #ff6b6b;">PHP <?= number_format($balance, 2) ?></div>
+                <?php if ($billing['overdue'] > 0): ?>
+                    <div class="fw-semibold" style="font-size: 0.65rem; color: #fecaca;"><i class="fa-solid fa-triangle-exclamation me-1"></i>PHP <?= number_format($billing['overdue'], 2) ?> overdue</div>
+                <?php endif; ?>
             <?php endif; ?>
         </div>
         <a href="payments.php" class="btn bg-white text-primary fw-bold rounded-pill shadow-sm px-3 py-2" style="font-size: 0.75rem;">

@@ -25,7 +25,7 @@ $rooms = $roomsStmt->fetchAll();
 
 // Fetch all assigned tenants
 $tenantsByRoom = [];
-$tenantsStmt = $pdo->query("SELECT t.id, t.first_name, t.last_name, t.room_id, u.created_at FROM tenants t JOIN users u ON t.user_id = u.id WHERE t.room_id IS NOT NULL");
+$tenantsStmt = $pdo->query("SELECT t.id, t.first_name, t.last_name, t.room_id, COALESCE(t.move_in_date, u.created_at::date) AS created_at FROM tenants t JOIN users u ON t.user_id = u.id WHERE t.room_id IS NOT NULL AND t.status = 'active'");
 foreach ($tenantsStmt->fetchAll() as $t) {
     $tenantsByRoom[$t['room_id']][] = $t;
 }

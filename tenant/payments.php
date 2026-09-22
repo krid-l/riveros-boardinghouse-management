@@ -1,148 +1,139 @@
 <?php
 require_once 'header.php';
+require_once '../includes/billing.php';
 
 // Fetch settings (for GCash)
 $settings = $pdo->query("SELECT setting_key, setting_value FROM settings")->fetchAll(PDO::FETCH_KEY_PAIR);
 $gcashNumber = $settings['gcash_number'] ?? '0917 123 4567';
 $gcashName = $settings['gcash_name'] ?? 'Boarding House';
 
-$myBalance = (float)($currentTenant['balance'] ?? 0);
+$myBalance = round((float)($currentTenant['balance'] ?? 0), 2);
+$myExpected = max($myBalance, 0);
 
-// Calculate total room balance
-$roomTotalBalance = $myBalance;
+// Paying for the whole room covers every active roommate who still owes.
+$roomExpected = $myExpected;
 if (!empty($currentTenant['room_id'])) {
-    $stmt = $pdo->prepare("SELECT SUM(balance) FROM tenants WHERE room_id = ?");
-    $stmt->execute([$currentTenant['room_id']]);
-    $roomTotalBalance = (float)$stmt->fetchColumn();
+    $stmt = $pdo->prepare("SELECT COALESCE(SUM(balance), 0) FROM tenants WHERE room_id = ? AND status = 'active' AND balance > 0 AND id <> ?");
+    $stmt->execute([$currentTenant['room_id'], $currentTenant['id']]);
+    $roomExpected = round($myExpected + (float)$stmt->fetchColumn(), 2);
 }
+$roomTotalBalance = $roomExpected;
 
-// Get user's move-in date
-$uStmt = $pdo->prepare("SELECT created_at FROM users WHERE id = ?");
-$uStmt->execute([$_SESSION['user_id']]);
-$userCreatedAt = $uStmt->fetchColumn();
-$moveInDay = (int)date('d', strtotime($userCreatedAt));
+// One payment awaiting verification at a time, including a roommate's pending "pay for room",
+// so the same balance can't be paid twice.
+function hasPendingPayment(PDO $pdo, array $tenant): bool {
+    $stmt = $pdo->prepare("
+        SELECT COUNT(*) FROM payments p JOIN tenants t ON t.id = p.tenant_id
+        WHERE p.status = 'pending'
+          AND (p.tenant_id = ? OR (p.pay_for_room = true AND t.room_id IS NOT NULL AND t.room_id = ?))
+    ");
+    $stmt->execute([$tenant['id'], $tenant['room_id']]);
+    return (int)$stmt->fetchColumn() > 0;
+}
+$hasPending = hasPendingPayment($pdo, $currentTenant);
 
-$currentDay = (int)date('d');
-$currentMonth = (int)date('m');
-$currentYear = (int)date('Y');
-
-// Fetch base rent for advance payment fallback
-$roomStmt = $pdo->prepare("SELECT price_per_month FROM rooms WHERE id = ?");
-$roomStmt->execute([$currentTenant['room_id']]);
-$baseRent = (float)$roomStmt->fetchColumn();
-
-$isAdvance = false;
-
-if ($myBalance <= 0) {
-    $isAdvance = true;
-    // Calculate Next Cycle
-    if ($currentDay >= $moveInDay) {
-        $nextMonth = $currentMonth + 1; $nextYear = $currentYear; if($nextMonth>12){$nextMonth=1;$nextYear++;}
-        $startCycle = date('m/d', strtotime("$nextYear-$nextMonth-$moveInDay"));
-        $nextNextMonth = $nextMonth + 1; $nextNextYear = $nextYear; if($nextNextMonth>12){$nextNextMonth=1;$nextNextYear++;}
-        $endCycle = date('m/d', strtotime("$nextNextYear-$nextNextMonth-$moveInDay"));
-    } else {
-        $startCycle = date('m/d', strtotime("$currentYear-$currentMonth-$moveInDay"));
-        $nextMonth = $currentMonth + 1; $nextYear = $currentYear; if($nextMonth>12){$nextMonth=1;$nextYear++;}
-        $endCycle = date('m/d', strtotime("$nextYear-$nextMonth-$moveInDay"));
-    }
-    $billingPeriodStr = "$startCycle - $endCycle (Advance Payment)";
-    $myExpected = $baseRent;
-    $roomExpected = $baseRent; // Assume room advance is just 1 room base rent
-} else {
-    // Current Cycle
-    if ($currentDay >= $moveInDay) {
-        $startCycle = date('m/d', strtotime("$currentYear-$currentMonth-$moveInDay"));
-        $nextMonth = $currentMonth + 1; $nextYear = $currentYear; if($nextMonth>12){$nextMonth=1;$nextYear++;}
-        $endCycle = date('m/d', strtotime("$nextYear-$nextMonth-$moveInDay"));
-    } else {
-        $prevMonth = $currentMonth - 1; $prevYear = $currentYear; if($prevMonth<1){$prevMonth=12;$prevYear--;}
-        $startCycle = date('m/d', strtotime("$prevYear-$prevMonth-$moveInDay"));
-        $endCycle = date('m/d', strtotime("$currentYear-$currentMonth-$moveInDay"));
-    }
-    $billingPeriodStr = "$startCycle - $endCycle";
-    $myExpected = $myBalance;
-    $roomExpected = $roomTotalBalance;
+// What this balance is for
+$billing = tenantBillingStatus($currentTenant, chargesNotYetDue($pdo, (int)$currentTenant['id']));
+$billingPeriodStr = !empty($currentTenant['last_billed_month'])
+    ? billingPeriodLabel($currentTenant['last_billed_month'], $currentTenant['move_in_date'])
+    : 'Current balance';
+$nextDue = nextDueDate($currentTenant);
+if ($nextDue && $billing['overdue'] <= 0) {
+    $billingPeriodStr .= ' (due ' . date('M j, Y', strtotime($nextDue)) . ')';
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    if ($myBalance <= 0) {
-        $error = "Advance payments are disabled. You have no outstanding balance.";
-    } else {
-        $amount = (float)$_POST['amount'];
-        $payment_date = $_POST['payment_date'];
-    $payment_method = $_POST['payment_method'] ?? 'gcash';
-    $reference_number = trim($_POST['reference_number']);
-    $pay_for_room = isset($_POST['pay_for_room']) ? 'true' : 'false';
-    
-    // Determine expected exact amount
-    $expectedAmount = isset($_POST['pay_for_room']) ? $roomExpected : $myExpected;
-    
+    $amount = round((float)($_POST['amount'] ?? 0), 2);
+    $payment_date = $_POST['payment_date'] ?? '';
+    $payment_method = ($_POST['payment_method'] ?? 'gcash') === 'cash' ? 'cash' : 'gcash';
+    $reference_number = trim($_POST['reference_number'] ?? '');
+    $payForRoom = isset($_POST['pay_for_room']) && $roomExpected > $myExpected;
+    $expectedAmount = $payForRoom ? $roomExpected : $myExpected;
+    $dateObj = DateTime::createFromFormat('Y-m-d', $payment_date);
+
     if (empty($reference_number) && $payment_method === 'cash') {
         $reference_number = 'CASH-' . time();
     }
-    
+
+    // Validate everything before uploading the screenshot, so rejected submissions don't leave files behind.
+    if ($myBalance <= 0) {
+        $error = "You have no outstanding balance to pay.";
+    } elseif (hasPendingPayment($pdo, $currentTenant)) {
+        $error = "A payment for your balance is already awaiting verification. Please wait for the admin to review it.";
+    } elseif (abs($amount - $expectedAmount) > 0.009) {
+        $error = "Partial or incorrect payments are not allowed. You must pay the exact amount of PHP " . number_format($expectedAmount, 2);
+    } elseif (!$dateObj || $dateObj->format('Y-m-d') !== $payment_date || $payment_date > date('Y-m-d')) {
+        $error = "Please enter a valid payment date (not in the future).";
+    } elseif ($payment_method === 'gcash' && $reference_number === '') {
+        $error = "Please enter the GCash reference number.";
+    }
+
     $destPath = null;
-    
-    if (isset($_FILES['screenshot']) && $_FILES['screenshot']['error'] !== UPLOAD_ERR_NO_FILE) {
+    $hasFile = isset($_FILES['screenshot']) && $_FILES['screenshot']['error'] !== UPLOAD_ERR_NO_FILE;
+
+    if (empty($error) && $hasFile) {
         $fileTmpPath = $_FILES['screenshot']['tmp_name'];
-        // Remove spaces and special characters from filename for better compatibility
-        $cleanFileName = preg_replace('/[^A-Za-z0-9.\-_]/', '_', basename($_FILES['screenshot']['name']));
-        $fileName = time() . '_' . $cleanFileName;
-        
-        // Use env variable if available, otherwise fallback to the known project URL
-        $supabaseUrl = getenv('SUPABASE_URL') ?: 'https://edswwvalfxehdklaackx.supabase.co';
-        $supabaseKey = getenv('SUPABASE_SERVICE_KEY');
-        
-        if ($supabaseUrl && $supabaseKey) {
-            // Upload to Supabase Storage
-            $bucketName = 'payments';
-            $fileData = file_get_contents($fileTmpPath);
-            $mimeType = mime_content_type($fileTmpPath);
-            
-            $ch = curl_init();
-            curl_setopt($ch, CURLOPT_URL, "$supabaseUrl/storage/v1/object/$bucketName/$fileName");
-            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-            curl_setopt($ch, CURLOPT_POST, true);
-            curl_setopt($ch, CURLOPT_POSTFIELDS, $fileData);
-            curl_setopt($ch, CURLOPT_HTTPHEADER, [
-                "Authorization: Bearer $supabaseKey",
-                "Content-Type: $mimeType"
-            ]);
-            
-            $response = curl_exec($ch);
-            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            curl_close($ch);
-            
-            if ($httpCode == 200) {
-                // If the bucket is public, the URL will be accessible directly
-                $destPath = "$supabaseUrl/storage/v1/object/public/$bucketName/$fileName";
-            } else {
-                $error = "Failed to upload image to Supabase. Please try again.";
-            }
+        $mimeType = $_FILES['screenshot']['error'] === UPLOAD_ERR_OK ? mime_content_type($fileTmpPath) : '';
+        $allowed = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/webp' => 'webp', 'image/gif' => 'gif'];
+
+        if (!isset($allowed[$mimeType])) {
+            $error = "The screenshot must be an image (JPG, PNG, WEBP or GIF).";
+        } elseif ($_FILES['screenshot']['size'] > 5 * 1024 * 1024) {
+            $error = "The screenshot must be 5MB or smaller.";
         } else {
-            // Fallback to local storage if Supabase is not configured
-            $uploadDir = __DIR__ . '/../uploads/payments/';
-            if (!is_dir($uploadDir)) mkdir($uploadDir, 0777, true);
-            
-            if (move_uploaded_file($fileTmpPath, $uploadDir . $fileName)) {
-                $destPath = 'uploads/payments/' . $fileName;
+            // Name the file ourselves (never trust the uploaded name/extension)
+            $fileName = time() . '_' . bin2hex(random_bytes(4)) . '.' . $allowed[$mimeType];
+
+            // Use env variable if available, otherwise fallback to the known project URL
+            $supabaseUrl = getenv('SUPABASE_URL') ?: 'https://edswwvalfxehdklaackx.supabase.co';
+            $supabaseKey = getenv('SUPABASE_SERVICE_KEY');
+
+            if ($supabaseUrl && $supabaseKey) {
+                // Upload to Supabase Storage
+                $bucketName = 'payments';
+                $fileData = file_get_contents($fileTmpPath);
+
+                $ch = curl_init();
+                curl_setopt($ch, CURLOPT_URL, "$supabaseUrl/storage/v1/object/$bucketName/$fileName");
+                curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+                curl_setopt($ch, CURLOPT_POST, true);
+                curl_setopt($ch, CURLOPT_POSTFIELDS, $fileData);
+                curl_setopt($ch, CURLOPT_HTTPHEADER, [
+                    "Authorization: Bearer $supabaseKey",
+                    "Content-Type: $mimeType"
+                ]);
+
+                $response = curl_exec($ch);
+                $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                curl_close($ch);
+
+                if ($httpCode == 200) {
+                    // If the bucket is public, the URL will be accessible directly
+                    $destPath = "$supabaseUrl/storage/v1/object/public/$bucketName/$fileName";
+                } else {
+                    $error = "Failed to upload image to Supabase. Please try again.";
+                }
+            } else {
+                // Fallback to local storage if Supabase is not configured
+                $uploadDir = __DIR__ . '/../uploads/payments/';
+                if (!is_dir($uploadDir)) mkdir($uploadDir, 0755, true);
+
+                if (move_uploaded_file($fileTmpPath, $uploadDir . $fileName)) {
+                    $destPath = 'uploads/payments/' . $fileName;
+                }
             }
         }
     }
-    
-    // Validation
-    if (isset($error)) {
-        // Keep the upload error
-    } elseif (abs($amount - $expectedAmount) > 0.01) {
-        $error = "Partial or incorrect payments are not allowed. You must pay the exact amount of PHP " . number_format($expectedAmount, 2);
-    } elseif ($payment_method === 'gcash' && !$destPath) {
-        $error = "Please upload a GCash screenshot.";
-    } else {
-        $stmt = $pdo->prepare("INSERT INTO payments (tenant_id, amount, payment_date, reference_number, screenshot_path, payment_method, pay_for_room) VALUES (?, ?, ?, ?, ?, ?, ?)");
-        $stmt->execute([$currentTenant['id'], $amount, $payment_date, $reference_number, $destPath, $payment_method, $pay_for_room]);
-        $success = "Payment submitted successfully. Awaiting Admin verification.";
-    }
+
+    if (empty($error)) {
+        if ($payment_method === 'gcash' && !$destPath) {
+            $error = "Please upload a GCash screenshot.";
+        } else {
+            $stmt = $pdo->prepare("INSERT INTO payments (tenant_id, amount, payment_date, reference_number, screenshot_path, payment_method, pay_for_room) VALUES (?, ?, ?, ?, ?, ?, ?)");
+            $stmt->execute([$currentTenant['id'], $amount, $payment_date, $reference_number, $destPath, $payment_method, $payForRoom ? 'true' : 'false']);
+            $success = "Payment submitted successfully. Awaiting Admin verification.";
+            $hasPending = true;
+        }
     }
 }
 
@@ -281,8 +272,13 @@ $payments = $stmt->fetchAll();
                 
                 <div class="alert alert-info border-0 p-2 mt-2 mb-0 d-flex align-items-center" style="font-size: 0.7rem; background-color:#e0f2fe; color:#0284c7;">
                     <i class="fa-regular fa-calendar-check me-2 fs-6"></i>
-                    <div>You are paying your rent for the billing cycle: <strong class="ms-1"><?= $billingPeriodStr ?></strong></div>
+                    <div>You are paying your rent for the billing cycle: <strong class="ms-1"><?= htmlspecialchars($billingPeriodStr) ?></strong></div>
                 </div>
+                <?php if ($billing['overdue'] > 0): ?>
+                <div class="alert alert-danger border-0 p-2 mt-2 mb-0" style="font-size: 0.7rem;">
+                    <i class="fa-solid fa-triangle-exclamation me-1"></i> PHP <?= number_format($billing['overdue'], 2) ?> of your balance is overdue. Rent is due every 30th of the month.
+                </div>
+                <?php endif; ?>
             </div>
             
             <script>
@@ -346,6 +342,11 @@ $payments = $stmt->fetchAll();
                     <i class="fa-solid fa-check me-2"></i> Fully Paid
                 </button>
                 <div class="text-center mt-2 text-muted" style="font-size:0.75rem;">You have no outstanding balance to pay.</div>
+            <?php elseif ($hasPending): ?>
+                <button type="button" class="btn-submit bg-warning border-0 text-dark opacity-75" style="cursor: not-allowed;">
+                    <i class="fa-regular fa-clock me-2"></i> Awaiting Verification
+                </button>
+                <div class="text-center mt-2 text-muted" style="font-size:0.75rem;">A payment for your balance is being reviewed by the admin.</div>
             <?php else: ?>
                 <button type="submit" class="btn-submit">
                     <i class="fa-solid fa-cloud-arrow-up me-2"></i> Submit for Verification

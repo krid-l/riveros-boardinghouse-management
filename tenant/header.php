@@ -10,8 +10,14 @@ $currentTenant = $stmt->fetch();
 if (!$currentTenant) {
     die("Tenant profile not found!");
 }
+// A deactivated tenant loses portal access, even mid-session.
+if (($currentTenant['status'] ?? 'active') !== 'active') {
+    session_unset();
+    session_destroy();
+    header('Location: /login.php?deactivated=1');
+    exit;
+}
 $_SESSION['tenant_id'] = $currentTenant['id'];
-require_once '../includes/auto_biller.php';
 $current_page = basename($_SERVER['PHP_SELF']);
 ?>
 <!DOCTYPE html>

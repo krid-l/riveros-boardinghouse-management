@@ -24,8 +24,36 @@ CREATE TABLE tenants (
     contact_number VARCHAR(20),
     room_id INT,
     balance DECIMAL(10,2) DEFAULT 0.00,
+    status VARCHAR(20) NOT NULL DEFAULT 'active',     -- 'active' | 'deactivated'
+    move_in_date DATE,                                -- set when the tenant first gets a room
+    deactivated_at DATE,
+    last_billed_month VARCHAR(7),                     -- 'YYYY-MM' of the latest rent posted
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
     FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE SET NULL
+);
+
+-- Every rent charge posted to a tenant (tenants.balance = charges - payments credited)
+CREATE TABLE charges (
+    id SERIAL PRIMARY KEY,
+    tenant_id INT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    room_id INT REFERENCES rooms(id) ON DELETE SET NULL,
+    kind VARCHAR(20) NOT NULL DEFAULT 'rent',
+    billing_month VARCHAR(7) NOT NULL,
+    description VARCHAR(255),
+    amount DECIMAL(10,2) NOT NULL,
+    due_date DATE NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (tenant_id, billing_month, kind)
+);
+
+CREATE TABLE room_transfers (
+    id SERIAL PRIMARY KEY,
+    tenant_id INT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    from_room_id INT REFERENCES rooms(id) ON DELETE SET NULL,
+    to_room_id INT REFERENCES rooms(id) ON DELETE SET NULL,
+    transferred_at DATE NOT NULL,
+    note VARCHAR(255),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE payments (
@@ -37,6 +65,7 @@ CREATE TABLE payments (
     screenshot_path VARCHAR(255) NOT NULL,
     status VARCHAR(20) CHECK (status IN ('pending', 'verified', 'rejected')) DEFAULT 'pending',
     receipt_path VARCHAR(255),
+    covered_by_payment_id INT REFERENCES payments(id) ON DELETE CASCADE, -- roommate's share of a room payment (not extra revenue)
     FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
 );
 

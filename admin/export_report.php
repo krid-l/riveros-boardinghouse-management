@@ -20,6 +20,7 @@ $stmt = $pdo->prepare("
     JOIN tenants t ON p.tenant_id = t.id
     LEFT JOIN rooms r ON t.room_id = r.id
     WHERE p.payment_date BETWEEN ? AND ?
+      AND p.covered_by_payment_id IS NULL -- roommate shares are already inside the room payment
     ORDER BY p.payment_date DESC
 ");
 $stmt->execute([$startDate, $endDate]);

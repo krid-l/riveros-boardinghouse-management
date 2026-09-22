@@ -1,30 +1,38 @@
 <?php
 require_once '../includes/db.php';
 require_once '../includes/auth.php';
+require_once '../includes/billing.php';
 requireAdmin();
 
 // --- DATA FETCHING ---
 
-// Batched Tenant Aggregates
-$tenantStats = $pdo->query("SELECT 
-    COUNT(*) as total_tenants, 
-    COALESCE(SUM(CASE WHEN balance > 0 THEN balance ELSE 0 END), 0) as total_outstanding, 
-    SUM(CASE WHEN balance > 0 THEN 1 ELSE 0 END) as overdue_count
+// Batched Tenant Aggregates (unpaid rent includes moved-out tenants who still owe)
+$tenantStats = $pdo->query("SELECT
+    SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as total_tenants,
+    COALESCE(SUM(CASE WHEN balance > 0 THEN balance ELSE 0 END), 0) as total_outstanding
     FROM tenants")->fetch();
 
-$totalTenants = $tenantStats['total_tenants'];
+$totalTenants = (int)$tenantStats['total_tenants'];
 $totalOutstanding = $tenantStats['total_outstanding'];
-$overdueTenantsCount = $tenantStats['overdue_count'];
+
+// Overdue = balance past its due date (the 30th), not just any unpaid balance
+$notYetDue = chargesNotYetDue($pdo);
+$overdueTenantsCount = 0;
+foreach ($pdo->query("SELECT id, balance, status FROM tenants WHERE balance > 0")->fetchAll() as $t) {
+    if (tenantBillingStatus($t, $notYetDue)['overdue'] > 0) $overdueTenantsCount++;
+}
 
 // Batched Rooms Aggregate
 $totalRooms = $pdo->query("SELECT COUNT(*) FROM rooms")->fetchColumn();
 
-// Batched Payments Aggregate
-$paymentStats = $pdo->query("SELECT 
-    COALESCE(SUM(CASE WHEN status = 'verified' THEN amount ELSE 0 END), 0) as total_collected,
+// Batched Payments Aggregate (collected = this month's money received)
+$payStmt = $pdo->prepare("SELECT
+    COALESCE(SUM(CASE WHEN " . REVENUE_FILTER_SQL . " AND payment_date BETWEEN ? AND ? THEN amount ELSE 0 END), 0) as total_collected,
     COALESCE(SUM(CASE WHEN status = 'pending' THEN amount ELSE 0 END), 0) as total_pending,
-    SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending_count
-    FROM payments")->fetch();
+    COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) as pending_count
+    FROM payments");
+$payStmt->execute([date('Y-m-01'), date('Y-m-t')]);
+$paymentStats = $payStmt->fetch();
 
 $totalCollected = $paymentStats['total_collected'];
 $totalPending = $paymentStats['total_pending'];
@@ -33,7 +41,7 @@ $pendingPaymentsCount = $paymentStats['pending_count'];
 // Rooms Capacity & Occupancy Analysis
 $roomsData = $pdo->query("
     SELECT r.id, r.room_number, r.capacity, 
-           (SELECT COUNT(*) FROM tenants t WHERE t.room_id = r.id) as tenant_count
+           (SELECT COUNT(*) FROM tenants t WHERE t.room_id = r.id AND t.status = 'active') as tenant_count
     FROM rooms r
     ORDER BY r.room_number ASC
 ")->fetchAll();
@@ -77,17 +85,18 @@ $recentPayments = $pdo->query("
 ")->fetchAll();
 
 // Monthly Revenue Data for Charts (PostgreSQL)
-$monthlyRevData = $pdo->query("
+// Latest 6 months of revenue, shown oldest to newest
+$monthlyRevData = array_reverse($pdo->query("
     SELECT TO_CHAR(payment_date, 'Mon') as month_name,
            EXTRACT(MONTH FROM payment_date) as month_num,
            EXTRACT(YEAR FROM payment_date) as year_num,
            SUM(amount) as total
     FROM payments
-    WHERE status = 'verified'
+    WHERE " . REVENUE_FILTER_SQL . "
     GROUP BY year_num, month_num, month_name
-    ORDER BY year_num ASC, month_num ASC
+    ORDER BY year_num DESC, month_num DESC
     LIMIT 6
-")->fetchAll();
+")->fetchAll());
 
 $monthNames = [];
 $monthTotals = [];
@@ -104,11 +113,17 @@ if (empty($monthlyRevData)) {
 $jsMonthNames = json_encode($monthNames);
 $jsMonthTotals = json_encode($monthTotals);
 
-// Trend placeholders
-$tenantTrend = "↑ 2 this month";
-$roomTrend = "No change";
-$spaceTrend = "↑ 1 this month";
-$balanceTrend = "↓ ₱2,150 from last month";
+// Card sub-lines (real figures, not placeholders)
+$moveStmt = $pdo->prepare("SELECT
+    COALESCE(SUM(CASE WHEN to_room_id IS NOT NULL AND note LIKE 'Moved in%' THEN 1 ELSE 0 END), 0) AS move_ins,
+    COALESCE(SUM(CASE WHEN note LIKE 'Moved out%' THEN 1 ELSE 0 END), 0) AS move_outs
+    FROM room_transfers WHERE transferred_at BETWEEN ? AND ?");
+$moveStmt->execute([date('Y-m-01'), date('Y-m-t')]);
+$moves = $moveStmt->fetch();
+$tenantTrend = $moves['move_ins'] . " moved in, " . $moves['move_outs'] . " moved out this month";
+$roomTrend = "$occupiedRooms occupied";
+$spaceTrend = "of $totalCapacity beds";
+$balanceTrend = $overdueTenantsCount . " tenant" . ($overdueTenantsCount == 1 ? '' : 's') . " overdue";
 
 require_once 'header.php';
 ?>
@@ -182,7 +197,7 @@ require_once 'header.php';
                 <div>
                     <div class="card-title-sm">Total Tenants</div>
                     <h5 class="fw-bold mb-0 text-dark"><?= $totalTenants ?></h5>
-                    <div class="trend-text text-success mt-1"><?= $tenantTrend ?></div>
+                    <div class="trend-text text-muted mt-1"><?= $tenantTrend ?></div>
                 </div>
             </div>
         </div>
@@ -212,7 +227,7 @@ require_once 'header.php';
                 <div>
                     <div class="card-title-sm">Available Spaces</div>
                     <h5 class="fw-bold mb-0 text-dark"><?= $availableSpaces ?></h5>
-                    <div class="trend-text text-success mt-1"><?= $spaceTrend ?></div>
+                    <div class="trend-text text-muted mt-1"><?= $spaceTrend ?></div>
                 </div>
             </div>
         </div>
@@ -280,10 +295,7 @@ require_once 'header.php';
             <div class="card-body p-3">
                 <div class="d-flex justify-content-between align-items-center mb-3">
                     <h6 class="fw-bold text-dark mb-0" style="font-size:0.8rem;"><i class="fa-solid fa-wallet text-primary me-2"></i> Payment Overview</h6>
-                    <select class="form-select form-select-sm w-auto shadow-none text-muted py-0 pe-4" style="font-size: 0.7rem;">
-                        <option>This Month</option>
-                        <option>Last Month</option>
-                    </select>
+                    <span class="text-muted fw-semibold" style="font-size: 0.7rem;"><?= date('F Y') ?></span>
                 </div>
                 
                 <div class="row align-items-center">

@@ -4,6 +4,7 @@ require_once '../includes/auth.php';
 requireAdmin();
 require_once '../includes/pdf_generator.php';
 require_once '../includes/sms.php';
+require_once '../includes/billing.php';
 
 // --- ACTION HANDLING ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
@@ -15,124 +16,147 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     $stmt->execute([$paymentId]);
     $payment = $stmt->fetch();
     
-    if ($payment && $payment['status'] === 'pending') {
-        if ($action === 'verify') {
-            $pdo->beginTransaction();
-            try {
-                // Update payment
-                $upd = $pdo->prepare("UPDATE payments SET status = 'verified' WHERE id = ?");
-                $upd->execute([$paymentId]);
-                
-                // Update balance(s)
-                if (!empty($payment['pay_for_room']) && !empty($payment['room_id'])) {
-                    // Fetch all boardmates and their current balances BEFORE updating
-                    $stmtRoom = $pdo->prepare("SELECT id, first_name, last_name, contact_number, balance FROM tenants WHERE room_id = ? AND id != ?");
-                    $stmtRoom->execute([$payment['room_id'], $payment['tenant_id']]);
-                    $boardmates = $stmtRoom->fetchAll();
-
-                    // Fetch base rent to subtract if it's an advance payment
-                    $rStmt = $pdo->prepare("SELECT price_per_month FROM rooms WHERE id = ?");
-                    $rStmt->execute([$payment['room_id']]);
-                    $baseRent = (float)$rStmt->fetchColumn();
-
-                    // Pay for entire room -> if they had a balance, clear it to 0. If they were already at 0 (advance), subtract base rent.
-                    $updBal = $pdo->prepare("UPDATE tenants SET balance = CASE WHEN balance > 0 THEN 0 ELSE balance - ? END WHERE room_id = ?");
-                    $updBal->execute([$baseRent, $payment['room_id']]);
-                    
-                    // Process boardmates' receipts
-                    foreach ($boardmates as $bm) {
-                        // Only generate proxy receipt if they actually had a balance being covered, OR if it's an advance payment we generate it for the advance amount
-                        $bmCoveredAmount = $bm['balance'] > 0 ? $bm['balance'] : $baseRent;
-                        
-                        // Insert a proxy payment record for the boardmate's portal
-                        $ins = $pdo->prepare("INSERT INTO payments (tenant_id, amount, payment_date, reference_number, screenshot_path, payment_method, status, pay_for_room) VALUES (?, ?, ?, ?, ?, ?, 'verified', false)");
-                        $payMethodStr = 'Covered by ' . $payment['first_name'];
-                        $ins->execute([$bm['id'], $bmCoveredAmount, $payment['payment_date'], $payment['reference_number'], $payment['screenshot_path'], $payMethodStr]);
-                        $newPaymentId = $pdo->lastInsertId();
-
-                        // Generate PDF
-                        $bmFullName = $bm['first_name'] . ' ' . $bm['last_name'];
-                        $proxyReceiptPath = generateReceipt($newPaymentId, $bmFullName, $bmCoveredAmount, $payment['payment_date'], $payment['reference_number'], $payMethodStr);
-                        $pdo->prepare("UPDATE payments SET receipt_path = ? WHERE id = ?")->execute([$proxyReceiptPath, $newPaymentId]);
-
-                        // Send SMS
-                        $msg = "Your rent of PHP " . number_format($bmCoveredAmount, 2) . " was paid by " . $payment['first_name'] . ". Receipt: RCP-" . str_pad($newPaymentId, 6, '0', STR_PAD_LEFT);
-                        sendSMS($bm['contact_number'], $msg);
-                    }
-                } else {
-                    // Pay individual balance (Allows negative balance for advance payments)
-                    $newBalance = $payment['balance'] - $payment['amount'];
-                    $updBal = $pdo->prepare("UPDATE tenants SET balance = ? WHERE id = ?");
-                    $updBal->execute([$newBalance, $payment['tenant_id']]);
-                }
-                
-                // Generate Receipt PDF
-                $fullName = $payment['first_name'] . ' ' . $payment['last_name'];
-                $receiptPath = generateReceipt($paymentId, $fullName, $payment['amount'], $payment['payment_date'], $payment['reference_number'], $payment['payment_method'] ?? 'gcash');
-                $pdo->prepare("UPDATE payments SET receipt_path = ? WHERE id = ?")->execute([$receiptPath, $paymentId]);
-                
-                $pdo->commit();
-                
-                // Send SMS using PhilSMS
-                $msg = "Your payment of PHP " . number_format($payment['amount'], 2) . " has been VERIFIED. Receipt: RCP-" . str_pad($paymentId, 6, '0', STR_PAD_LEFT);
-                sendSMS($payment['contact_number'], $msg);
-                
-                $success = "Payment verified successfully. Receipt generated and SMS sent.";
-            } catch (Exception $e) {
-                $pdo->rollBack();
-                $error = "Error verifying payment: " . $e->getMessage();
-            }
-        } elseif ($action === 'reject') {
-            $upd = $pdo->prepare("UPDATE payments SET status = 'rejected' WHERE id = ?");
+    if (!$payment || $payment['status'] !== 'pending') {
+        $error = "This payment was already processed.";
+    } elseif ($action === 'verify') {
+        $smsQueue = [];
+        $pdo->beginTransaction();
+        try {
+            // Claim the payment atomically so a double click can't apply it twice.
+            $upd = $pdo->prepare("UPDATE payments SET status = 'verified' WHERE id = ? AND status = 'pending'");
             $upd->execute([$paymentId]);
-            
-            // Send SMS
+            if ($upd->rowCount() !== 1) {
+                throw new Exception("This payment was already processed.");
+            }
+
+            $amount = round((float)$payment['amount'], 2);
+            $lockBal = $pdo->prepare("SELECT balance FROM tenants WHERE id = ? FOR UPDATE");
+            $lockBal->execute([$payment['tenant_id']]);
+            $payerBalance = (float)$lockBal->fetchColumn();
+            $subtract = $pdo->prepare("UPDATE tenants SET balance = balance - ? WHERE id = ?");
+
+            // Split the money: every peso of the payment is applied to exactly one tenant's balance.
+            $remaining = $amount;
+            $boardmateShares = [];
+            if (!empty($payment['pay_for_room']) && !empty($payment['room_id'])) {
+                $payerShare = min(max($payerBalance, 0), $remaining);
+                $remaining = round($remaining - $payerShare, 2);
+
+                $stmtRoom = $pdo->prepare("SELECT id, first_name, last_name, contact_number, balance FROM tenants
+                                           WHERE room_id = ? AND id <> ? AND status = 'active' AND balance > 0
+                                           ORDER BY id FOR UPDATE");
+                $stmtRoom->execute([$payment['room_id'], $payment['tenant_id']]);
+                foreach ($stmtRoom->fetchAll() as $bm) {
+                    if ($remaining <= 0) break;
+                    $share = min((float)$bm['balance'], $remaining);
+                    $remaining = round($remaining - $share, 2);
+                    $boardmateShares[] = ['bm' => $bm, 'share' => round($share, 2)];
+                }
+                // If balances dropped since the tenant submitted, the extra stays with the payer as credit.
+                $payerShare = round($payerShare + $remaining, 2);
+            } else {
+                $payerShare = $amount; // anything above the balance becomes credit toward the next bill
+            }
+
+            $subtract->execute([$payerShare, $payment['tenant_id']]);
+
+            $payMethodStr = 'Covered by ' . $payment['first_name'];
+            $ins = $pdo->prepare("INSERT INTO payments (tenant_id, amount, payment_date, reference_number, screenshot_path, payment_method, status, pay_for_room, covered_by_payment_id)
+                                  VALUES (?, ?, ?, ?, ?, ?, 'verified', false, ?) RETURNING id");
+            foreach ($boardmateShares as $s) {
+                $bm = $s['bm'];
+                $subtract->execute([$s['share'], $bm['id']]);
+
+                // Record of the covered share for the boardmate's portal. Linked to the real payment,
+                // so it isn't counted as extra revenue.
+                $ins->execute([$bm['id'], $s['share'], $payment['payment_date'], $payment['reference_number'], $payment['screenshot_path'], $payMethodStr, $paymentId]);
+                $newPaymentId = $ins->fetchColumn();
+
+                $bmFullName = $bm['first_name'] . ' ' . $bm['last_name'];
+                $proxyReceiptPath = generateReceipt($newPaymentId, $bmFullName, $s['share'], $payment['payment_date'], $payment['reference_number'], $payMethodStr);
+                $pdo->prepare("UPDATE payments SET receipt_path = ? WHERE id = ?")->execute([$proxyReceiptPath, $newPaymentId]);
+
+                $smsQueue[] = [$bm['contact_number'], "Your rent of PHP " . number_format($s['share'], 2) . " was paid by " . $payment['first_name'] . ". Receipt: RCP-" . str_pad($newPaymentId, 6, '0', STR_PAD_LEFT)];
+            }
+
+            // Generate Receipt PDF
+            $fullName = $payment['first_name'] . ' ' . $payment['last_name'];
+            $receiptPath = generateReceipt($paymentId, $fullName, $amount, $payment['payment_date'], $payment['reference_number'], $payment['payment_method'] ?? 'gcash');
+            $pdo->prepare("UPDATE payments SET receipt_path = ? WHERE id = ?")->execute([$receiptPath, $paymentId]);
+
+            $pdo->commit();
+
+            // SMS only after the money is committed.
+            $smsQueue[] = [$payment['contact_number'], "Your payment of PHP " . number_format($amount, 2) . " has been VERIFIED. Receipt: RCP-" . str_pad($paymentId, 6, '0', STR_PAD_LEFT)];
+            foreach ($smsQueue as [$to, $msg]) {
+                sendSMS($to, $msg);
+            }
+
+            $success = "Payment verified successfully. Receipt generated and SMS sent.";
+        } catch (Exception $e) {
+            $pdo->rollBack();
+            $error = "Error verifying payment: " . $e->getMessage();
+        }
+    } elseif ($action === 'reject') {
+        $upd = $pdo->prepare("UPDATE payments SET status = 'rejected' WHERE id = ? AND status = 'pending'");
+        $upd->execute([$paymentId]);
+        if ($upd->rowCount() === 1) {
             $msg = "Your recent payment submission of PHP " . number_format($payment['amount'], 2) . " was REJECTED. Please contact admin.";
             sendSMS($payment['contact_number'], $msg);
-            
             $success = "Payment rejected and SMS sent.";
+        } else {
+            $error = "This payment was already processed.";
         }
     }
 }
 
 // --- METRICS ---
-$paymentStats = $pdo->query("SELECT 
-    COALESCE(SUM(CASE WHEN status = 'verified' THEN amount ELSE 0 END), 0) as total_collected,
-    SUM(CASE WHEN status = 'verified' THEN 1 ELSE 0 END) as paid_count,
-    SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending_count
-    FROM payments")->fetch();
+// Collected = money actually received (roommate "covered" rows are part of another payment).
+$monthStart = date('Y-m-01');
+$monthEnd = date('Y-m-t');
+$lastMonthStart = date('Y-m-01', strtotime('first day of last month'));
+$lastMonthEnd = date('Y-m-t', strtotime('first day of last month'));
+$stmtStats = $pdo->prepare("SELECT
+    COALESCE(SUM(CASE WHEN " . REVENUE_FILTER_SQL . " AND payment_date BETWEEN ? AND ? THEN amount ELSE 0 END), 0) as total_collected,
+    COALESCE(SUM(CASE WHEN " . REVENUE_FILTER_SQL . " AND payment_date BETWEEN ? AND ? THEN amount ELSE 0 END), 0) as last_month_collected,
+    COALESCE(SUM(CASE WHEN " . REVENUE_FILTER_SQL . " AND payment_date BETWEEN ? AND ? THEN 1 ELSE 0 END), 0) as paid_count,
+    COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) as pending_count
+    FROM payments");
+$stmtStats->execute([$monthStart, $monthEnd, $lastMonthStart, $lastMonthEnd, $monthStart, $monthEnd]);
+$paymentStats = $stmtStats->fetch();
 
-$totalCollected = $paymentStats['total_collected'];
-$paidCount = $paymentStats['paid_count'];
-$pendingCount = $paymentStats['pending_count'];
+$totalCollected = (float)$paymentStats['total_collected'];
+$lastMonthCollected = (float)$paymentStats['last_month_collected'];
+$paidCount = (int)$paymentStats['paid_count'];
+$pendingCount = (int)$paymentStats['pending_count'];
+if ($lastMonthCollected > 0) {
+    $pct = ($totalCollected - $lastMonthCollected) / $lastMonthCollected * 100;
+    $collectedTrend = ($pct >= 0 ? '↑ ' : '↓ ') . number_format(abs($pct), 1) . '% from last month';
+} else {
+    $collectedTrend = 'No payments last month';
+}
 
-$tenantStats = $pdo->query("SELECT 
-    COALESCE(SUM(balance), 0) as overdue_amount,
-    SUM(CASE WHEN balance > 0 THEN 1 ELSE 0 END) as overdue_count
-    FROM tenants")->fetch();
-
-$overdueAmount = $tenantStats['overdue_amount'];
-$overdueCount = $tenantStats['overdue_count'];
-
+// Overdue = unpaid amounts past their due date (the 30th). Due soon = unpaid but not yet past due.
 $actualOverdueAmount = 0;
 $actualOverdueCount = 0;
 $dueSoonAmount = 0;
 $dueSoonCount = 0;
 
-$stmtBal = $pdo->query("SELECT t.balance, EXTRACT(DAY FROM u.created_at) as due_day FROM tenants t JOIN users u ON t.user_id = u.id WHERE t.balance > 0");
-$tenantsWithBal = $stmtBal->fetchAll();
-$currentDay = (int)date('d');
-
-foreach($tenantsWithBal as $t) {
-    $due_day = (int)$t['due_day'];
-    if ($currentDay >= $due_day) {
-        $actualOverdueAmount += $t['balance'];
+$notYetDue = chargesNotYetDue($pdo);
+$tenantsWithBal = $pdo->query("SELECT id, balance, status FROM tenants WHERE balance > 0")->fetchAll();
+foreach ($tenantsWithBal as $t) {
+    $bs = tenantBillingStatus($t, $notYetDue);
+    if ($bs['overdue'] > 0) {
+        $actualOverdueAmount += $bs['overdue'];
         $actualOverdueCount++;
-    } elseif ($due_day - $currentDay <= 7) {
-        $dueSoonAmount += $t['balance'];
+    }
+    $notDuePart = round($bs['balance'] - $bs['overdue'], 2);
+    if ($notDuePart > 0) {
+        $dueSoonAmount += $notDuePart;
         $dueSoonCount++;
     }
 }
+$chartTotal = max(1, $paidCount + $dueSoonCount + $actualOverdueCount + $pendingCount);
 
 // Fetch payments list
 $paymentsStmt = $pdo->query("
@@ -243,7 +267,7 @@ require_once 'header.php';
                 <div>
                     <div class="card-title-sm">Total Collected (This Month)</div>
                     <h5 class="fw-bold mb-0 text-dark">₱<?= number_format($totalCollected, 2) ?></h5>
-                    <div class="trend-text text-success mt-1">↑ 18.5% from last month</div>
+                    <div class="trend-text <?= $totalCollected >= $lastMonthCollected ? 'text-success' : 'text-danger' ?> mt-1"><?= $collectedTrend ?></div>
                 </div>
             </div>
         </div>
@@ -258,7 +282,7 @@ require_once 'header.php';
                 <div>
                     <div class="card-title-sm">Due Soon</div>
                     <h5 class="fw-bold mb-0 text-dark">₱<?= number_format($dueSoonAmount, 2) ?></h5>
-                    <div class="trend-text text-warning mt-1"><?= $dueSoonCount ?> payments</div>
+                    <div class="trend-text text-warning mt-1"><?= $dueSoonCount ?> tenants · due <?= date('M j', strtotime(billingDueDate(date('Y-m')))) ?></div>
                 </div>
             </div>
         </div>
@@ -273,7 +297,7 @@ require_once 'header.php';
                 <div>
                     <div class="card-title-sm">Overdue</div>
                     <h5 class="fw-bold mb-0 text-dark">₱<?= number_format($actualOverdueAmount, 2) ?></h5>
-                    <div class="trend-text text-danger mt-1"><?= $actualOverdueCount ?> payments</div>
+                    <div class="trend-text text-danger mt-1"><?= $actualOverdueCount ?> tenants</div>
                 </div>
             </div>
         </div>
@@ -440,27 +464,27 @@ require_once 'header.php';
                         <canvas id="paymentStatusChart"></canvas>
                         <div class="donut-center-text">
                             <div class="text-muted" style="font-size:0.5rem; font-weight:600;">Total</div>
-                            <div class="fw-bold text-dark" style="font-size:1rem; line-height:1;"><?= $paidCount + $pendingCount ?></div>
-                            <div class="text-muted" style="font-size:0.5rem;">Payments</div>
+                            <div class="fw-bold text-dark" style="font-size:1rem; line-height:1;"><?= $paidCount + $dueSoonCount + $actualOverdueCount + $pendingCount ?></div>
+                            <div class="text-muted" style="font-size:0.5rem;">Items</div>
                         </div>
                     </div>
                     
                     <div class="ps-3 pe-2 flex-grow-1">
                         <div class="d-flex justify-content-between align-items-center mb-1">
                             <span class="fw-bold text-dark" style="font-size:0.65rem;"><span class="dot bg-success"></span> Paid</span>
-                            <span class="text-muted" style="font-size:0.6rem;"><?= $paidCount ?> (72%)</span>
+                            <span class="text-muted" style="font-size:0.6rem;"><?= $paidCount ?> (<?= round($paidCount / $chartTotal * 100) ?>%)</span>
                         </div>
                         <div class="d-flex justify-content-between align-items-center mb-1">
                             <span class="fw-bold text-dark" style="font-size:0.65rem;"><span class="dot bg-warning"></span> Due Soon</span>
-                            <span class="text-muted" style="font-size:0.6rem;"><?= $dueSoonCount ?> (8%)</span>
+                            <span class="text-muted" style="font-size:0.6rem;"><?= $dueSoonCount ?> (<?= round($dueSoonCount / $chartTotal * 100) ?>%)</span>
                         </div>
                         <div class="d-flex justify-content-between align-items-center mb-1">
                             <span class="fw-bold text-dark" style="font-size:0.65rem;"><span class="dot bg-danger"></span> Overdue</span>
-                            <span class="text-muted" style="font-size:0.6rem;"><?= $actualOverdueCount ?> (11%)</span>
+                            <span class="text-muted" style="font-size:0.6rem;"><?= $actualOverdueCount ?> (<?= round($actualOverdueCount / $chartTotal * 100) ?>%)</span>
                         </div>
                         <div class="d-flex justify-content-between align-items-center">
                             <span class="fw-bold text-dark" style="font-size:0.65rem;"><span class="dot bg-secondary"></span> Pending</span>
-                            <span class="text-muted" style="font-size:0.6rem;"><?= $pendingCount ?> (9%)</span>
+                            <span class="text-muted" style="font-size:0.6rem;"><?= $pendingCount ?> (<?= round($pendingCount / $chartTotal * 100) ?>%)</span>
                         </div>
                     </div>
                 </div>
@@ -495,7 +519,7 @@ document.addEventListener("DOMContentLoaded", function() {
         data: {
             labels: ['Paid', 'Due Soon', 'Overdue', 'Pending'],
             datasets: [{
-                data: [<?= $paidCount ?: 48 ?>, <?= $dueSoonCount ?: 5 ?>, <?= $actualOverdueCount ?: 7 ?>, <?= $pendingCount ?: 7 ?>],
+                data: [<?= $paidCount ?>, <?= $dueSoonCount ?>, <?= $actualOverdueCount ?>, <?= $pendingCount ?>],
                 backgroundColor: ['#22c55e', '#f59e0b', '#ef4444', '#64748b'],
                 borderWidth: 0,
                 cutout: '80%'

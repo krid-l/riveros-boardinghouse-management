@@ -1,16 +1,17 @@
 <?php
 require_once '../includes/db.php';
 require_once '../includes/auth.php';
+require_once '../includes/billing.php';
 requireAdmin();
 
 // --- DATA FETCHING ---
 // Totals
-$totalTenants = $pdo->query("SELECT COUNT(*) FROM tenants")->fetchColumn() ?: 0;
+$totalTenants = $pdo->query("SELECT COUNT(*) FROM tenants WHERE status = 'active'")->fetchColumn() ?: 0;
 $totalRooms = $pdo->query("SELECT COUNT(*) FROM rooms")->fetchColumn() ?: 0;
 
 $roomsData = $pdo->query("
     SELECT r.id, r.room_number, r.capacity, 
-           (SELECT COUNT(*) FROM tenants t WHERE t.room_id = r.id) as tenant_count
+           (SELECT COUNT(*) FROM tenants t WHERE t.room_id = r.id AND t.status = 'active') as tenant_count
     FROM rooms r
     ORDER BY r.room_number ASC
 ")->fetchAll();
@@ -30,9 +31,10 @@ foreach($roomsData as $r) {
 $occupancyRate = $totalRooms > 0 ? ($occupiedRooms / $totalRooms) * 100 : 0;
 $bedOccupancyRate = $totalCapacity > 0 ? ($totalOccupied / $totalCapacity) * 100 : 0;
 
-$totalRevenue = $pdo->query("SELECT SUM(amount) FROM payments WHERE status = 'verified'")->fetchColumn() ?: 0;
+// Revenue excludes "covered by roommate" rows: that money is already in the room payment itself.
+$totalRevenue = $pdo->query("SELECT SUM(amount) FROM payments WHERE " . REVENUE_FILTER_SQL)->fetchColumn() ?: 0;
 $outstandingBalance = $pdo->query("SELECT SUM(CASE WHEN balance > 0 THEN balance ELSE 0 END) FROM tenants")->fetchColumn() ?: 0;
-$totalTransactions = $pdo->query("SELECT COUNT(*) FROM payments WHERE status = 'verified'")->fetchColumn() ?: 0;
+$totalTransactions = $pdo->query("SELECT COUNT(*) FROM payments WHERE " . REVENUE_FILTER_SQL)->fetchColumn() ?: 0;
 
 // Transactions (Overview)
 $recentTransactions = $pdo->query("
@@ -66,24 +68,25 @@ $topTenants = $pdo->query("
     FROM tenants t
     JOIN payments p ON t.id = p.tenant_id
     LEFT JOIN rooms r ON t.room_id = r.id
-    WHERE p.status = 'verified'
+    WHERE p.status = 'verified' AND p.covered_by_payment_id IS NULL
     GROUP BY t.id, r.room_number
     ORDER BY total_paid DESC
     LIMIT 3
 ")->fetchAll();
 
 // Monthly Revenue Data for Charts
-$monthlyRevData = $pdo->query("
+// Latest 6 months of revenue, shown oldest to newest
+$monthlyRevData = array_reverse($pdo->query("
     SELECT TO_CHAR(payment_date, 'Mon') as month_name,
            EXTRACT(MONTH FROM payment_date) as month_num,
            EXTRACT(YEAR FROM payment_date) as year_num,
            SUM(amount) as total
     FROM payments
-    WHERE status = 'verified'
+    WHERE " . REVENUE_FILTER_SQL . "
     GROUP BY year_num, month_num, month_name
-    ORDER BY year_num ASC, month_num ASC
+    ORDER BY year_num DESC, month_num DESC
     LIMIT 6
-")->fetchAll();
+")->fetchAll());
 
 $monthNames = [];
 $monthTotals = [];
@@ -171,7 +174,7 @@ require_once 'header.php';
     
     <div class="d-flex gap-2 align-items-center flex-shrink-0">
         <div class="input-group input-group-sm rounded-2 border bg-white" style="width:180px;">
-            <input type="text" class="form-control border-0 shadow-none px-2 fw-semibold text-dark" value="Aug 1 - Aug 31, 2025" style="font-size:0.65rem;" readonly>
+            <input type="text" class="form-control border-0 shadow-none px-2 fw-semibold text-dark" value="All time" style="font-size:0.65rem;" readonly>
             <span class="input-group-text bg-transparent border-0 pe-2"><i class="fa-regular fa-calendar text-muted" style="font-size:0.65rem;"></i></span>
         </div>
         <button class="btn btn-primary fw-semibold btn-sm px-3 py-1 rounded-2 shadow-sm text-nowrap" style="font-size:0.7rem;"><i class="fa-solid fa-download me-1"></i> Export Report</button>
@@ -184,11 +187,11 @@ require_once 'header.php';
 <div id="tab-overview" class="tab-pane">
     <!-- Top KPIs -->
     <div class="row row-cols-2 row-cols-md-3 row-cols-xl-5 g-2 mb-3">
-        <div class="col"><div class="metric-card h-100 p-2 d-flex align-items-center shadow-sm"><div class="icon-box-lg bg-primary bg-opacity-10 text-primary me-2 flex-shrink-0"><i class="fa-solid fa-user-group"></i></div><div><div class="card-title-sm">Total Tenants</div><h5 class="fw-bold mb-0 text-dark"><?= $totalTenants ?></h5><div class="trend-text text-success mt-1">↑ 2 from last month</div></div></div></div>
+        <div class="col"><div class="metric-card h-100 p-2 d-flex align-items-center shadow-sm"><div class="icon-box-lg bg-primary bg-opacity-10 text-primary me-2 flex-shrink-0"><i class="fa-solid fa-user-group"></i></div><div><div class="card-title-sm">Total Tenants</div><h5 class="fw-bold mb-0 text-dark"><?= $totalTenants ?></h5><div class="trend-text text-muted mt-1">Currently staying</div></div></div></div>
         <div class="col"><div class="metric-card h-100 p-2 d-flex align-items-center shadow-sm"><div class="icon-box-lg bg-info bg-opacity-10 text-info me-2 flex-shrink-0"><i class="fa-solid fa-door-open"></i></div><div><div class="card-title-sm">Total Rooms</div><h5 class="fw-bold mb-0 text-dark"><?= $totalRooms ?></h5><div class="trend-text text-muted mt-1">No change</div></div></div></div>
-        <div class="col"><div class="metric-card h-100 p-2 d-flex align-items-center shadow-sm"><div class="icon-box-lg bg-success bg-opacity-10 text-success me-2 flex-shrink-0"><i class="fa-solid fa-bed"></i></div><div><div class="card-title-sm">Bed Occupancy Rate</div><h5 class="fw-bold mb-0 text-dark"><?= number_format($bedOccupancyRate, 1) ?>%</h5><div class="trend-text text-success mt-1">↑ 3.4% from last month</div></div></div></div>
-        <div class="col"><div class="metric-card h-100 p-2 d-flex align-items-center shadow-sm"><div class="icon-box-lg bg-primary bg-opacity-10 text-primary me-2 flex-shrink-0"><i class="fa-solid fa-wallet"></i></div><div><div class="card-title-sm">Total Revenue</div><h5 class="fw-bold mb-0 text-dark">₱<?= number_format($totalRevenue, 2) ?></h5><div class="trend-text text-success mt-1">↑ 12.5% from last month</div></div></div></div>
-        <div class="col"><div class="metric-card h-100 p-2 d-flex align-items-center shadow-sm"><div class="icon-box-lg bg-warning bg-opacity-10 text-warning me-2 flex-shrink-0"><i class="fa-solid fa-chart-pie"></i></div><div><div class="card-title-sm">Total Unpaid Rent</div><h5 class="fw-bold mb-0 text-danger">₱<?= number_format($outstandingBalance, 2) ?></h5><div class="trend-text text-danger mt-1">↑ 5.2% from last month</div></div></div></div>
+        <div class="col"><div class="metric-card h-100 p-2 d-flex align-items-center shadow-sm"><div class="icon-box-lg bg-success bg-opacity-10 text-success me-2 flex-shrink-0"><i class="fa-solid fa-bed"></i></div><div><div class="card-title-sm">Bed Occupancy Rate</div><h5 class="fw-bold mb-0 text-dark"><?= number_format($bedOccupancyRate, 1) ?>%</h5><div class="trend-text text-muted mt-1"><?= $totalOccupied ?> of <?= $totalCapacity ?> beds</div></div></div></div>
+        <div class="col"><div class="metric-card h-100 p-2 d-flex align-items-center shadow-sm"><div class="icon-box-lg bg-primary bg-opacity-10 text-primary me-2 flex-shrink-0"><i class="fa-solid fa-wallet"></i></div><div><div class="card-title-sm">Total Revenue</div><h5 class="fw-bold mb-0 text-dark">₱<?= number_format($totalRevenue, 2) ?></h5><div class="trend-text text-muted mt-1">All time</div></div></div></div>
+        <div class="col"><div class="metric-card h-100 p-2 d-flex align-items-center shadow-sm"><div class="icon-box-lg bg-warning bg-opacity-10 text-warning me-2 flex-shrink-0"><i class="fa-solid fa-chart-pie"></i></div><div><div class="card-title-sm">Total Unpaid Rent</div><h5 class="fw-bold mb-0 text-danger">₱<?= number_format($outstandingBalance, 2) ?></h5><div class="trend-text text-muted mt-1">Incl. moved-out tenants</div></div></div></div>
     </div>
 
     <!-- Middle Row 1: Charts Overview -->
@@ -435,7 +438,7 @@ require_once 'header.php';
                     <?php if(empty($allPayments)): ?>
                         <tr><td colspan="4" class="text-center py-4 text-muted">No financial records found.</td></tr>
                     <?php else: ?>
-                        <?php foreach($allPayments as $p): if($p['status']!='verified') continue; ?>
+                        <?php foreach($allPayments as $p): if($p['status']!='verified' || !empty($p['covered_by_payment_id'])) continue; ?>
                         <tr>
                             <td class="ps-3 text-dark fw-semibold" style="font-size:0.65rem;"><?= date('M d, Y', strtotime($p['payment_date'])) ?></td>
                             <td class="text-muted" style="font-size:0.65rem;"><?= htmlspecialchars($p['reference_number'] ?: 'MANUAL-'.str_pad($p['id'], 5, '0', STR_PAD_LEFT)) ?></td>
@@ -494,7 +497,7 @@ require_once 'header.php';
     <div class="card border-0 shadow-sm rounded-3">
         <div class="card-header bg-white border-0 p-3 pb-0 d-flex justify-content-between">
             <h6 class="fw-bold text-dark mb-0" style="font-size:0.75rem;">Tenant Directory & Status Report</h6>
-            <span class="badge bg-primary rounded-pill px-3"><?= count($allTenants) ?> Active Tenants</span>
+            <span class="badge bg-primary rounded-pill px-3"><?= $totalTenants ?> Active Tenants</span>
         </div>
         <div class="card-body p-0 mt-2">
             <table class="table table-compact mb-0">
@@ -502,9 +505,11 @@ require_once 'header.php';
                     <tr><th class="ps-3 border-0">Tenant Name</th><th class="border-0">Contact Number</th><th class="border-0">Assigned Room</th><th class="border-0 text-center">Standing</th><th class="border-0 text-end pe-3">Unpaid Rent</th></tr>
                 </thead>
                 <tbody>
-                    <?php foreach($allTenants as $t): 
-                        $hasBalance = ($t['balance'] ?? 0) > 0;
-                        $statBadge = $hasBalance ? '<span class="badge bg-warning-subtle text-warning">Delinquent</span>' : '<span class="badge bg-success-subtle text-success">Good Standing</span>';
+                    <?php $reportNotYetDue = chargesNotYetDue($pdo);
+                    foreach($allTenants as $t):
+                        $bs = tenantBillingStatus($t, $reportNotYetDue);
+                        $hasBalance = $bs['balance'] > 0;
+                        $statBadge = '<span class="badge bg-' . $bs['color'] . '-subtle text-' . $bs['color'] . '">' . ($bs['key'] === 'paid' ? 'Good Standing' : $bs['label']) . '</span>';
                     ?>
                     <tr>
                         <td class="ps-3 fw-bold text-dark" style="font-size:0.65rem;"><?= htmlspecialchars($t['first_name'].' '.$t['last_name']) ?></td>

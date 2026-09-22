@@ -10,19 +10,21 @@ if (isLoggedIn()) {
     exit;
 }
 
-$error = '';
+$error = isset($_GET['deactivated']) ? "This tenant account has been deactivated. Please contact the admin." : '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $username = trim($_POST['username'] ?? '');
     $password = $_POST['password'] ?? '';
 
-    $stmt = $pdo->prepare("SELECT * FROM users WHERE username = ?");
+    $stmt = $pdo->prepare("SELECT u.*, t.status AS tenant_status FROM users u LEFT JOIN tenants t ON t.user_id = u.id WHERE u.username = ?");
     $stmt->execute([$username]);
     $user = $stmt->fetch();
 
     if ($user && password_verify($password, $user['password_hash'])) {
         $loginType = $_POST['login_type'] ?? 'tenant';
-        
-        if ($user['role'] !== $loginType) {
+
+        if ($user['role'] === 'tenant' && $user['tenant_status'] === 'deactivated') {
+            $error = "This tenant account has been deactivated. Please contact the admin.";
+        } elseif ($user['role'] !== $loginType) {
             if ($user['role'] === 'admin') {
                 $error = "You are an Admin. Please click 'Login as Admin' below.";
             } else {

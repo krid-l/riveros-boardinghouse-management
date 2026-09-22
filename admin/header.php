@@ -2,7 +2,6 @@
 require_once '../includes/db.php';
 require_once '../includes/auth.php';
 requireAdmin();
-require_once '../includes/auto_biller.php';
 $current_page = basename($_SERVER['PHP_SELF']);
 ?>
 <!DOCTYPE html>
