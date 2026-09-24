@@ -157,7 +157,7 @@ $balance = $currentTenant['balance'] ?? 0;
     <div class="position-relative z-2 mb-3">
         <h1 class="fw-bolder text-white mb-1" style="font-size: 2rem;">Room <?= htmlspecialchars($room['room_number']) ?></h1>
         <div class="text-white-50 fw-semibold" style="font-size: 0.85rem;">
-            <i class="fa-solid fa-money-bill-wave me-1"></i> PHP <?= number_format($room['price_per_month'], 2) ?> / month
+            <i class="fa-solid fa-money-bill-wave me-1"></i> PHP <?= number_format($room['price_per_month'], 2) ?> / month <span class="text-white-50">(your share)</span>
         </div>
     </div>
 

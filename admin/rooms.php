@@ -1,23 +1,43 @@
 <?php
 require_once '../includes/db.php';
 require_once '../includes/auth.php';
+require_once '../includes/billing.php';
+require_once '../includes/tenant_actions.php';
 requireAdmin();
+
+$error = '';
+$success = '';
+$selectedRoom = isset($_GET['room']) ? (int)$_GET['room'] : 0;
 
 // Handle Form Submissions
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
-    if ($_POST['action'] === 'add') {
-        $stmt = $pdo->prepare("INSERT INTO rooms (room_number, capacity, price_per_month, status) VALUES (?, ?, ?, ?)");
-        $stmt->execute([$_POST['room_number'], $_POST['capacity'], $_POST['price_per_month'], 'vacant']);
-    } elseif ($_POST['action'] === 'edit') {
-        $stmt = $pdo->prepare("UPDATE rooms SET room_number = ?, capacity = ?, price_per_month = ?, status = ? WHERE id = ?");
-        $stmt->execute([$_POST['room_number'], $_POST['capacity'], $_POST['price_per_month'], $_POST['status'], $_POST['room_id']]);
-    } elseif ($_POST['action'] === 'delete') {
-        $pdo->prepare("UPDATE tenants SET room_id = NULL WHERE room_id = ?")->execute([$_POST['room_id']]);
-        $pdo->prepare("DELETE FROM rooms WHERE id = ?")->execute([$_POST['room_id']]);
+    $action = $_POST['action'];
+    $roomActions = ['add', 'edit', 'delete'];
+    $isRoomAction = in_array($action, $roomActions, true) && !isset($_POST['tenant_id']) && !isset($_POST['first_name']);
+
+    if ($isRoomAction) {
+        if ($action === 'add') {
+            $stmt = $pdo->prepare("INSERT INTO rooms (room_number, capacity, price_per_month, status) VALUES (?, ?, ?, ?)");
+            $stmt->execute([$_POST['room_number'], $_POST['capacity'], $_POST['price_per_month'], 'vacant']);
+        } elseif ($action === 'edit') {
+            $stmt = $pdo->prepare("UPDATE rooms SET room_number = ?, capacity = ?, price_per_month = ?, status = ? WHERE id = ?");
+            $stmt->execute([$_POST['room_number'], $_POST['capacity'], $_POST['price_per_month'], $_POST['status'], $_POST['room_id']]);
+        } elseif ($action === 'delete') {
+            $pdo->prepare("UPDATE tenants SET room_id = NULL WHERE room_id = ?")->execute([$_POST['room_id']]);
+            $pdo->prepare("DELETE FROM rooms WHERE id = ?")->execute([$_POST['room_id']]);
+        }
+        header("Location: rooms.php");
+        exit;
     }
-    header("Location: rooms.php");
+
+    // Tenant actions (change room / remove), shared with the Tenants tab
+    ['success' => $success, 'error' => $error] = handleTenantAction($pdo);
+    $back = 'rooms.php?room=' . (int)($_POST['return_room'] ?? 0);
+    header("Location: $back&" . ($error ? 'err=' . urlencode($error) : 'msg=' . urlencode(strip_tags($success))));
     exit;
 }
+if (!empty($_GET['msg'])) $success = htmlspecialchars($_GET['msg']);
+if (!empty($_GET['err'])) $error = htmlspecialchars($_GET['err']);
 
 // Fetch all rooms
 $roomsStmt = $pdo->query("SELECT * FROM rooms ORDER BY room_number ASC");
@@ -25,20 +45,28 @@ $rooms = $roomsStmt->fetchAll();
 
 // Fetch all assigned tenants
 $tenantsByRoom = [];
-$tenantsStmt = $pdo->query("SELECT t.id, t.first_name, t.last_name, t.room_id, COALESCE(t.move_in_date, u.created_at::date) AS created_at FROM tenants t JOIN users u ON t.user_id = u.id WHERE t.room_id IS NOT NULL AND t.status = 'active'");
+$tenantsStmt = $pdo->query("SELECT t.id, t.first_name, t.last_name, t.room_id, t.balance, t.move_in_date,
+    COALESCE(t.move_in_date, u.created_at::date) AS created_at
+    FROM tenants t JOIN users u ON t.user_id = u.id
+    WHERE t.room_id IS NOT NULL AND t.status = 'active'
+    ORDER BY t.first_name");
 foreach ($tenantsStmt->fetchAll() as $t) {
     $tenantsByRoom[$t['room_id']][] = $t;
 }
 
 // Calculate Stats
+// rooms.price_per_month is the rent per tenant: each tenant in a room is billed that amount.
+// A full room therefore earns price_per_month x capacity per month.
 $totalRooms = count($rooms);
 $totalCapacity = 0;
-$totalValue = 0;
+$potentialValue = 0;   // if every bed were filled
+$currentValue = 0;     // from the tenants living there now
 $occupiedRooms = 0;
 
 foreach ($rooms as $r) {
     $totalCapacity += $r['capacity'];
-    $totalValue += $r['price_per_month'];
+    $potentialValue += $r['price_per_month'] * $r['capacity'];
+    $currentValue += $r['price_per_month'] * (isset($tenantsByRoom[$r['id']]) ? count($tenantsByRoom[$r['id']]) : 0);
     $occCount = isset($tenantsByRoom[$r['id']]) ? count($tenantsByRoom[$r['id']]) : 0;
     if ($occCount >= $r['capacity'] && $r['capacity'] > 0) {
         $occupiedRooms++;
@@ -86,6 +114,19 @@ require_once 'header.php';
     <!-- ==================== LEFT / MIDDLE CONTENT (Grid) ==================== -->
     <div class="flex-grow-1 p-4 overflow-auto h-100">
         
+        <?php if ($success): ?>
+            <div class="alert alert-success alert-dismissible fade show border-0 shadow-sm" role="alert" style="font-size: 0.85rem;">
+                <i class="fa-solid fa-circle-check me-2"></i><?= $success ?>
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            </div>
+        <?php endif; ?>
+        <?php if ($error): ?>
+            <div class="alert alert-danger alert-dismissible fade show border-0 shadow-sm" role="alert" style="font-size: 0.85rem;">
+                <i class="fa-solid fa-triangle-exclamation me-2"></i><?= $error ?>
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            </div>
+        <?php endif; ?>
+
         <!-- Header -->
         <div class="d-flex justify-content-between align-items-end mb-4">
             <div>
@@ -133,9 +174,10 @@ require_once 'header.php';
                         <div class="bg-warning bg-opacity-10 text-warning rounded p-3 me-3 d-flex justify-content-center align-items-center" style="width:45px; height:45px;">
                             <i class="fa-solid fa-peso-sign fa-lg"></i>
                         </div>
-                        <div>
-                            <h4 class="fw-bold mb-0 text-dark fs-5">₱<?= number_format($totalValue, 2) ?></h4>
-                            <small class="text-muted fw-semibold" style="font-size:0.75rem;">Total Monthly Value</small>
+                        <div class="flex-grow-1" style="min-width:0;">
+                            <h4 class="fw-bold mb-0 text-dark fs-6 text-nowrap">₱<?= number_format($currentValue, 2) ?></h4>
+                            <small class="text-muted fw-semibold d-block" style="font-size:0.72rem;">Monthly Income Now</small>
+                            <div class="text-muted text-nowrap" style="font-size:0.62rem;">₱<?= number_format($potentialValue) ?> if full</div>
                         </div>
                     </div>
                 </div>
@@ -198,7 +240,7 @@ require_once 'header.php';
                     }
                 ?>
                 <div class="col-md-6 col-xxl-4 room-grid-item" data-status="<?= htmlspecialchars($r['status']) ?>" data-search="<?= strtolower($r['room_number']) ?>">
-                    <div class="card h-100 shadow-sm room-card <?= $index === 0 ? 'active' : '' ?>" id="card-<?= $r['id'] ?>" onclick="selectRoom(<?= $r['id'] ?>)">
+                    <div class="card h-100 shadow-sm room-card <?= ($selectedRoom ? $selectedRoom === (int)$r['id'] : $index === 0) ? 'active' : '' ?>" id="card-<?= $r['id'] ?>" onclick="selectRoom(<?= $r['id'] ?>)">
                         <div class="card-body p-3 d-flex flex-column">
                             <div class="d-flex justify-content-between align-items-start mb-3">
                                 <div class="d-flex align-items-center">
@@ -211,7 +253,7 @@ require_once 'header.php';
                             </div>
                             
                             <p class="text-muted mb-1" style="font-size: 0.8rem;">Capacity: <?= htmlspecialchars($r['capacity']) ?></p>
-                            <p class="fw-bold text-dark mb-4" style="font-size: 0.85rem;">₱<?= number_format($r['price_per_month'], 2) ?> / month</p>
+                            <p class="fw-bold text-dark mb-4" style="font-size: 0.85rem;">₱<?= number_format($r['price_per_month'] * $r['capacity'], 2) ?> / month <span class="text-muted fw-normal">when full</span></p>
                             
                             <div class="mt-auto">
                                 <div class="d-flex justify-content-between align-items-center mb-1" style="font-size: 0.75rem;">
@@ -259,7 +301,8 @@ require_once 'header.php';
                     $badgeText = 'Available';
                 }
             ?>
-            <div class="room-details-panel d-flex flex-column h-100 p-3 <?= $index === 0 ? '' : 'd-none' ?>" id="panel-<?= $r['id'] ?>">
+            <?php $isOpenPanel = $selectedRoom ? $selectedRoom === (int)$r['id'] : $index === 0; ?>
+            <div class="room-details-panel d-flex flex-column h-100 p-3 <?= $isOpenPanel ? '' : 'd-none' ?>" id="panel-<?= $r['id'] ?>">
                 
                 <!-- Panel Header -->
                 <div class="d-flex justify-content-between align-items-start mb-3">
@@ -282,8 +325,16 @@ require_once 'header.php';
                         <span class="fw-bold text-dark" style="font-size: 0.8rem;"> <?= $r['capacity'] ?> Persons</span>
                     </div>
                     <div class="d-flex justify-content-between align-items-center py-2 border-bottom border-light">
-                        <span class="text-muted fw-semibold" style="font-size: 0.75rem;"><i class="fa-solid fa-peso-sign me-2"></i> Price / Month</span>
-                        <span class="fw-bold text-dark" style="font-size: 0.8rem;">₱<?= number_format($r['price_per_month'], 2) ?></span>
+                        <span class="text-muted fw-semibold" style="font-size: 0.75rem;"><i class="fa-solid fa-user me-2"></i> Price / Tenant</span>
+                        <span class="fw-bold text-dark" style="font-size: 0.8rem;">₱<?= number_format($r['price_per_month'], 2) ?> <span class="text-muted fw-normal">/ month</span></span>
+                    </div>
+                    <div class="d-flex justify-content-between align-items-center py-2 border-bottom border-light">
+                        <span class="text-muted fw-semibold" style="font-size: 0.75rem;"><i class="fa-solid fa-peso-sign me-2"></i> Room Total / Month</span>
+                        <span class="fw-bold text-dark" style="font-size: 0.8rem;">₱<?= number_format($r['price_per_month'] * $r['capacity'], 2) ?> <span class="text-muted fw-normal">when full</span></span>
+                    </div>
+                    <div class="d-flex justify-content-between align-items-center py-2 border-bottom border-light">
+                        <span class="text-muted fw-semibold" style="font-size: 0.75rem;"><i class="fa-solid fa-sack-dollar me-2"></i> Earning Now</span>
+                        <span class="fw-bold <?= $occCount ? 'text-success' : 'text-muted' ?>" style="font-size: 0.8rem;">₱<?= number_format($r['price_per_month'] * $occCount, 2) ?> <span class="text-muted fw-normal">/ month</span></span>
                     </div>
                     <div class="d-flex justify-content-between align-items-center py-2 border-bottom border-light">
                         <span class="text-muted fw-semibold" style="font-size: 0.75rem;"><i class="fa-solid fa-lock me-2"></i> Status</span>
@@ -317,8 +368,17 @@ require_once 'header.php';
                         <div class="text-center py-3 text-muted bg-light rounded-3" style="font-size: 0.75rem;">No tenants assigned yet.</div>
                     <?php endif; ?>
                     
-                    <?php foreach ($roomTenants as $t): ?>
-                        <div class="d-flex align-items-center justify-content-between p-1 mb-1 tenant-item rounded">
+                    <?php foreach ($roomTenants as $t):
+                        $tData = htmlspecialchars(json_encode([
+                            'id' => (int)$t['id'],
+                            'name' => $t['first_name'] . ' ' . $t['last_name'],
+                            'room_id' => (int)$t['room_id'],
+                            'room_number' => $r['room_number'],
+                            'balance' => round((float)$t['balance'], 2),
+                            'return_room' => (int)$r['id'],
+                        ]), ENT_QUOTES);
+                    ?>
+                        <div class="d-flex align-items-center justify-content-between p-1 mb-1 tenant-item rounded" data-tenant="<?= $tData ?>">
                             <div class="d-flex align-items-center">
                                 <img src="https://ui-avatars.com/api/?name=<?= urlencode($t['first_name'].' '.$t['last_name']) ?>&background=random&color=fff" class="rounded-circle me-2 shadow-sm" width="30" height="30" alt="Tenant">
                                 <div>
@@ -326,7 +386,17 @@ require_once 'header.php';
                                     <small class="text-muted" style="font-size: 0.65rem;">Since <?= date('M j, Y', strtotime($t['created_at'])) ?></small>
                                 </div>
                             </div>
-                            <button class="btn btn-link text-muted p-0"><i class="fa-solid fa-ellipsis-vertical" style="font-size:0.8rem;"></i></button>
+                            <div class="dropdown">
+                                <button class="btn btn-link text-muted p-0 px-2" type="button" data-bs-toggle="dropdown" data-bs-strategy="fixed" aria-expanded="false" title="Tenant actions">
+                                    <i class="fa-solid fa-ellipsis-vertical" style="font-size:0.8rem;"></i>
+                                </button>
+                                <ul class="dropdown-menu dropdown-menu-end shadow-sm border-0" style="font-size: 0.75rem;">
+                                    <li><a class="dropdown-item" href="tenant_details.php?id=<?= $t['id'] ?>"><i class="fa-regular fa-eye me-2 text-muted"></i>View details</a></li>
+                                    <li><button type="button" class="dropdown-item" onclick="openRoomModal(this)"><i class="fa-solid fa-right-left me-2 text-info"></i>Change room</button></li>
+                                    <li><hr class="dropdown-divider"></li>
+                                    <li><button type="button" class="dropdown-item text-danger" onclick="openDeactivateModal(this)"><i class="fa-solid fa-user-xmark me-2"></i>Remove tenant</button></li>
+                                </ul>
+                            </div>
                         </div>
                     <?php endforeach; ?>
                 </div>
@@ -355,6 +425,89 @@ require_once 'header.php';
 
 
 
+<!-- Change Room Modal (tenant) -->
+<div class="modal fade" id="roomChangeModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow">
+            <form method="POST">
+                <input type="hidden" name="action" value="change_room">
+                <input type="hidden" name="tenant_id" id="rc_tenant_id">
+                <input type="hidden" name="return_room" id="rc_return_room">
+                <div class="modal-header bg-light border-0">
+                    <h6 class="modal-title fw-bold">Change Room</h6>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <div class="mb-3" style="font-size:0.8rem;">
+                        <span class="text-muted">Tenant:</span> <strong id="rc_name"></strong><br>
+                        <span class="text-muted">Current room:</span> <strong id="rc_current"></strong>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label text-muted fw-semibold" style="font-size:0.8rem;">New Room</label>
+                        <select class="form-select" name="room_id" id="rc_room" required>
+                            <option value="">Select a room</option>
+                            <?php foreach ($rooms as $opt):
+                                $optOcc = isset($tenantsByRoom[$opt['id']]) ? count($tenantsByRoom[$opt['id']]) : 0;
+                                $optFull = $optOcc >= $opt['capacity'];
+                            ?>
+                                <option value="<?= $opt['id'] ?>" data-full="<?= $optFull ? 1 : 0 ?>" <?= $optFull ? 'disabled' : '' ?>>
+                                    Room <?= htmlspecialchars($opt['room_number']) ?><?= $optFull ? ' - FULL' : ' (Avail: ' . ($opt['capacity'] - $optOcc) . ' | ₱' . number_format($opt['price_per_month']) . '/tenant)' ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label text-muted fw-semibold" style="font-size:0.8rem;">Date of Transfer</label>
+                        <input type="date" class="form-control" name="effective_date" value="<?= date('Y-m-d') ?>" required>
+                    </div>
+                    <div class="alert alert-info border-0 py-2 mb-0" style="font-size:0.72rem;">
+                        This month's rent stays as billed. The new room's rate applies from next month's bill.
+                    </div>
+                </div>
+                <div class="modal-footer border-0 bg-light">
+                    <button type="button" class="btn btn-light border" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary px-4">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Remove Tenant Modal -->
+<div class="modal fade" id="tenantRemoveModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow">
+            <form method="POST">
+                <input type="hidden" name="action" value="deactivate">
+                <input type="hidden" name="tenant_id" id="tr_tenant_id">
+                <input type="hidden" name="return_room" id="tr_return_room">
+                <div class="modal-header bg-light border-0">
+                    <h6 class="modal-title fw-bold text-danger"><i class="fa-solid fa-user-xmark me-2"></i>Remove Tenant</h6>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <p style="font-size:0.85rem;" class="mb-2">Remove <strong id="tr_name"></strong> from <strong id="tr_room"></strong>?</p>
+                    <ul class="text-muted ps-3 mb-3" style="font-size:0.75rem;">
+                        <li>Their bed becomes available.</li>
+                        <li>Their account is deactivated and they can no longer log in.</li>
+                        <li>No more monthly rent will be charged.</li>
+                        <li>Payments, receipts and complaints are kept on record.</li>
+                    </ul>
+                    <div class="alert alert-warning border-0 py-2 mb-3 d-none" style="font-size:0.75rem;" id="tr_balance"></div>
+                    <div>
+                        <label class="form-label text-muted fw-semibold" style="font-size:0.8rem;">Move-out Date</label>
+                        <input type="date" class="form-control" name="deactivated_at" value="<?= date('Y-m-d') ?>" required>
+                    </div>
+                </div>
+                <div class="modal-footer border-0 bg-light">
+                    <button type="button" class="btn btn-light border" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-danger px-4">Remove &amp; Deactivate</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
 <!-- Modals -->
 <div class="modal fade" id="addRoomModal" tabindex="-1">
     <div class="modal-dialog modal-dialog-centered">
@@ -376,8 +529,9 @@ require_once 'header.php';
                             <input type="number" class="form-control" name="capacity" min="1" required placeholder="e.g. 4">
                         </div>
                         <div class="col-md-6">
-                            <label class="form-label text-muted fw-semibold">Price per Month (PHP)</label>
+                            <label class="form-label text-muted fw-semibold">Price per Tenant / Month (PHP)</label>
                             <input type="number" step="0.01" class="form-control" name="price_per_month" required placeholder="2500.00">
+                            <small class="text-muted" style="font-size:0.7rem;">Each tenant in this room is billed this amount.</small>
                         </div>
                     </div>
                 </div>
@@ -411,8 +565,9 @@ require_once 'header.php';
                             <input type="number" class="form-control" name="capacity" id="edit_capacity" min="1" required>
                         </div>
                         <div class="col-md-6">
-                            <label class="form-label text-muted fw-semibold">Price per Month (PHP)</label>
+                            <label class="form-label text-muted fw-semibold">Price per Tenant / Month (PHP)</label>
                             <input type="number" step="0.01" class="form-control" name="price_per_month" id="edit_price" required>
+                            <small class="text-muted" style="font-size:0.7rem;">Each tenant in this room is billed this amount.</small>
                         </div>
                     </div>
                     <div class="mb-3">
@@ -480,6 +635,43 @@ function filterRooms(query) {
         const text = item.getAttribute('data-search');
         item.style.display = text.includes(query) ? '' : 'none';
     });
+}
+
+function tenantData(el) {
+    return JSON.parse(el.closest('[data-tenant]').dataset.tenant);
+}
+
+function openRoomModal(el) {
+    const t = tenantData(el);
+    document.getElementById('rc_tenant_id').value = t.id;
+    document.getElementById('rc_return_room').value = t.return_room;
+    document.getElementById('rc_name').textContent = t.name;
+    document.getElementById('rc_current').textContent = 'Room ' + t.room_number;
+    const select = document.getElementById('rc_room');
+    select.value = '';
+    for (const opt of select.options) {
+        if (!opt.value) continue;
+        opt.disabled = opt.dataset.full === '1' || Number(opt.value) === t.room_id;
+    }
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('roomChangeModal')).show();
+}
+
+function openDeactivateModal(el) {
+    const t = tenantData(el);
+    document.getElementById('tr_tenant_id').value = t.id;
+    document.getElementById('tr_return_room').value = t.return_room;
+    document.getElementById('tr_name').textContent = t.name;
+    document.getElementById('tr_room').textContent = 'Room ' + t.room_number;
+    const bal = document.getElementById('tr_balance');
+    if (t.balance > 0) {
+        bal.innerHTML = '<i class="fa-solid fa-triangle-exclamation me-1"></i>This tenant still owes <strong>₱'
+            + Number(t.balance).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+            + '</strong>. The balance stays on their record after removal.';
+        bal.classList.remove('d-none');
+    } else {
+        bal.classList.add('d-none');
+    }
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('tenantRemoveModal')).show();
 }
 
 function filterStatus(status) {
