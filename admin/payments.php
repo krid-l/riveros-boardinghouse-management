@@ -5,6 +5,7 @@ requireAdmin();
 require_once '../includes/pdf_generator.php';
 require_once '../includes/sms.php';
 require_once '../includes/billing.php';
+require_once '../includes/pagination.php';
 
 // --- ACTION HANDLING ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
@@ -160,14 +161,48 @@ foreach ($tenantsWithBal as $t) {
 }
 $chartTotal = max(1, $paidCount + $dueSoonCount + $actualOverdueCount + $pendingCount);
 
-// Fetch payments list
-$paymentsStmt = $pdo->query("
-    SELECT p.*, t.first_name, t.last_name, t.contact_number, r.room_number 
+// --- PAYMENTS LIST ---
+// Filtering and paging happen in SQL. The page used to send every payment row and let
+// JavaScript hide all but five, which meant megabytes of HTML for a five-row table.
+$filterSearch = queryParam('q');
+$filterStatus = queryParam('status', 'all') ?: 'all';
+$filterDate = queryParam('date');
+
+$where = [];
+$params = [];
+
+if ($filterSearch !== '') {
+    $where[] = "(LOWER(t.first_name) LIKE ? OR LOWER(t.last_name) LIKE ?
+                 OR LOWER(CONCAT(t.first_name, ' ', t.last_name)) LIKE ? OR LOWER(p.reference_number) LIKE ?)";
+    $like = '%' . strtolower($filterSearch) . '%';
+    array_push($params, $like, $like, $like, $like);
+}
+if ($filterStatus === 'verified' || $filterStatus === 'pending' || $filterStatus === 'rejected') {
+    $where[] = "p.status = ?";
+    $params[] = $filterStatus;
+} elseif ($filterStatus === 'unpaid') {
+    // The table shows anything not yet verified as "Unpaid".
+    $where[] = "p.status <> 'verified'";
+}
+if ($filterDate !== '' && DateTime::createFromFormat('Y-m-d', $filterDate)) {
+    $where[] = "p.payment_date = ?";
+    $params[] = $filterDate;
+}
+$whereSql = $where ? 'WHERE ' . implode(' AND ', $where) : '';
+
+$countStmt = $pdo->prepare("SELECT COUNT(*) FROM payments p JOIN tenants t ON p.tenant_id = t.id $whereSql");
+$countStmt->execute($params);
+$pager = paginate((int)$countStmt->fetchColumn(), 10);
+
+$paymentsStmt = $pdo->prepare("
+    SELECT p.*, t.first_name, t.last_name, t.contact_number, r.room_number
     FROM payments p
     JOIN tenants t ON p.tenant_id = t.id
     LEFT JOIN rooms r ON t.room_id = r.id
-    ORDER BY p.payment_date DESC
+    $whereSql
+    ORDER BY p.payment_date DESC, p.id DESC" . paginationLimitSql($pager) . "
 ");
+$paymentsStmt->execute($params);
 $payments = $paymentsStmt->fetchAll();
 
 require_once 'header.php';
@@ -327,22 +362,23 @@ require_once 'header.php';
     <!-- Left Column: Table -->
     <div class="col-lg-8">
                 <!-- Filter Bar -->
-        <div class="d-flex flex-wrap gap-2 mb-2 align-items-center bg-white p-2 rounded-3 shadow-sm border-0">
+        <form method="GET" id="filterForm" class="d-flex flex-wrap gap-2 mb-2 align-items-center bg-white p-2 rounded-3 shadow-sm border-0">
             <div class="input-group input-group-sm rounded-2 border flex-grow-1 bg-white" style="max-width:300px;">
                 <span class="input-group-text bg-transparent border-0 pe-1"><i class="fa-solid fa-magnifying-glass text-muted" style="font-size:0.65rem;"></i></span>
-                <input type="text" id="searchInput" class="form-control border-0 shadow-none px-1" placeholder="Search tenant name or reference..." style="font-size:0.7rem;">
+                <input type="text" name="q" id="searchInput" value="<?= htmlspecialchars($filterSearch) ?>" class="form-control border-0 shadow-none px-1" placeholder="Search tenant name or reference..." style="font-size:0.7rem;">
             </div>
-            <select id="statusFilter" class="form-select form-select-sm border rounded-2 shadow-none text-muted" style="width:110px; font-size:0.7rem;">
-                <option value="all">All Status</option>
-                <option value="pending">Pending</option>
-                <option value="verified">Verified</option>
-                <option value="unpaid">Unpaid</option>
+            <select name="status" class="form-select form-select-sm border rounded-2 shadow-none text-muted" style="width:110px; font-size:0.7rem;" onchange="this.form.submit()">
+                <option value="all" <?= $filterStatus === 'all' ? 'selected' : '' ?>>All Status</option>
+                <option value="pending" <?= $filterStatus === 'pending' ? 'selected' : '' ?>>Pending</option>
+                <option value="verified" <?= $filterStatus === 'verified' ? 'selected' : '' ?>>Verified</option>
+                <option value="unpaid" <?= $filterStatus === 'unpaid' ? 'selected' : '' ?>>Unpaid</option>
             </select>
             <div class="input-group input-group-sm rounded-2 border bg-white" style="width:140px;">
-                <input type="date" id="dateFilter" class="form-control border-0 shadow-none px-2 text-muted" style="font-size:0.7rem;">
+                <input type="date" name="date" value="<?= htmlspecialchars($filterDate) ?>" class="form-control border-0 shadow-none px-2 text-muted" style="font-size:0.7rem;" onchange="this.form.submit()">
             </div>
-            <button class="btn btn-link btn-sm text-primary text-decoration-none fw-semibold ms-auto" style="font-size:0.65rem;" onclick="document.getElementById('searchInput').value=''; document.getElementById('statusFilter').value='all'; document.getElementById('dateFilter').value=''; filterTable();"><i class="fa-solid fa-rotate-right me-1"></i> Clear Filters</button>
-        </div>
+            <button type="submit" class="btn btn-sm btn-primary rounded-2 px-2 py-1" style="font-size:0.65rem;"><i class="fa-solid fa-magnifying-glass me-1"></i> Search</button>
+            <a href="payments.php" class="btn btn-link btn-sm text-primary text-decoration-none fw-semibold ms-auto" style="font-size:0.65rem;"><i class="fa-solid fa-rotate-right me-1"></i> Clear Filters</a>
+        </form>
         
         <div class="card border-0 shadow-sm rounded-3">
             <div class="card-header bg-white border-0 p-3 pb-0">
@@ -384,7 +420,7 @@ require_once 'header.php';
                             </td>
                             <td>
                                 <div class="d-flex align-items-center">
-                                    <img src="https://ui-avatars.com/api/?name=<?= urlencode($p['first_name'].' '.$p['last_name']) ?>&background=random&color=fff" class="rounded-circle me-2 shadow-sm" width="22" height="22">
+                                    <?= avatarHtml($p['first_name'] . ' ' . $p['last_name'], 22, 'me-2 shadow-sm') ?>
                                     <div>
                                         <div class="fw-bold text-dark" style="font-size:0.65rem; line-height:1.1;"><?= htmlspecialchars($p['first_name'].' '.$p['last_name']) ?></div>
                                         <div class="text-muted" style="font-size:0.55rem;"><?= htmlspecialchars($p['contact_number']) ?></div>
@@ -442,12 +478,10 @@ require_once 'header.php';
                     </tbody>
                 </table>
             </div>
-            <div class="card-footer bg-white border-top p-2 d-flex justify-content-between align-items-center">
-                <span id="paginationInfo" class="text-muted" style="font-size:0.65rem;">Showing 1 to <?= min(5, count($payments)) ?> of <?= count($payments) ?> payments</span>
+            <div class="card-footer bg-white border-top p-2 d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <span class="text-muted" style="font-size:0.65rem;"><?= paginationSummary($pager, 'payments') ?></span>
                 <nav>
-                    <ul id="paginationControls" class="pagination pagination-sm mb-0 shadow-sm" style="font-size:0.65rem;">
-                        <!-- JS generated -->
-                    </ul>
+                    <ul class="pagination pagination-sm mb-0 shadow-sm" style="font-size:0.65rem;"><?= paginationControls($pager) ?></ul>
                 </nav>
             </div>
         </div>
@@ -540,95 +574,17 @@ document.addEventListener("DOMContentLoaded", function() {
 </script>
 
 <script>
-document.addEventListener('DOMContentLoaded', function() {
-    const searchInput = document.getElementById('searchInput');
-    const statusFilter = document.getElementById('statusFilter');
-    const dateFilter = document.getElementById('dateFilter');
-    const tableRows = Array.from(document.querySelectorAll('#paymentsTable tbody tr.payment-row'));
-    const paginationControls = document.getElementById('paginationControls');
-    const paginationInfo = document.getElementById('paginationInfo');
-    
-    let currentPage = 1;
-    const itemsPerPage = 5;
-    let filteredRows = [];
-
-    function filterTable() {
-        const query = searchInput.value.toLowerCase();
-        const status = statusFilter.value.toLowerCase();
-        const dateVal = dateFilter.value;
-
-        filteredRows = tableRows.filter(row => {
-            const textContent = row.textContent.toLowerCase();
-            let show = textContent.includes(query);
-            
-            if (status !== 'all') {
-                if (!textContent.includes(status)) show = false;
-            }
-            
-            if (dateVal) {
-                if (row.getAttribute('data-date') !== dateVal) show = false;
-            }
-            return show;
-        });
-        
-        currentPage = 1;
-        renderPagination();
-    }
-
-    function renderPagination() {
-        // Hide all rows first
-        tableRows.forEach(row => row.style.display = 'none');
-        
-        // Show only current page rows
-        const start = (currentPage - 1) * itemsPerPage;
-        const end = start + itemsPerPage;
-        const pageRows = filteredRows.slice(start, end);
-        pageRows.forEach(row => row.style.display = '');
-
-        // Update Info
-        const total = filteredRows.length;
-        if(total === 0) {
-            paginationInfo.textContent = 'No payments found';
-        } else {
-            paginationInfo.textContent = `Showing ${start + 1} to ${Math.min(end, total)} of ${total} payments`;
-        }
-
-        // Update Controls
-        const totalPages = Math.ceil(total / itemsPerPage) || 1;
-        let html = '';
-        
-        html += `<li class="page-item ${currentPage === 1 ? 'disabled' : ''}"><a class="page-link text-muted border-light px-2 py-1" href="#" data-page="prev">Prev</a></li>`;
-        for (let i = 1; i <= totalPages; i++) {
-            html += `<li class="page-item ${currentPage === i ? 'active' : ''}"><a class="page-link ${currentPage === i ? 'border-primary' : 'text-muted border-light'} px-2 py-1" href="#" data-page="${i}">${i}</a></li>`;
-        }
-        html += `<li class="page-item ${currentPage === totalPages ? 'disabled' : ''}"><a class="page-link text-muted border-light px-2 py-1" href="#" data-page="next">Next</a></li>`;
-        
-        paginationControls.innerHTML = html;
-
-        // Attach events
-        paginationControls.querySelectorAll('a.page-link').forEach(link => {
-            link.addEventListener('click', function(e) {
-                e.preventDefault();
-                const p = this.getAttribute('data-page');
-                if (p === 'prev' && currentPage > 1) currentPage--;
-                else if (p === 'next' && currentPage < totalPages) currentPage++;
-                else if (!isNaN(p)) currentPage = parseInt(p);
-                renderPagination();
-            });
-        });
-    }
-
-    // Expose filterTable globally for the Clear button
-    window.filterTable = filterTable;
-
-    if (searchInput) searchInput.addEventListener('input', filterTable);
-    if (statusFilter) statusFilter.addEventListener('change', filterTable);
-    if (dateFilter) dateFilter.addEventListener('change', filterTable);
-    
-    // Initial Render
-    if(tableRows.length > 0) {
-        filterTable();
-    }
+// Typing in the search box submits the form after a short pause, so the server can filter.
+document.addEventListener('DOMContentLoaded', function () {
+    const form = document.getElementById('filterForm');
+    const search = document.getElementById('searchInput');
+    if (!form || !search) return;
+    let timer;
+    search.addEventListener('input', function () {
+        clearTimeout(timer);
+        timer = setTimeout(() => form.submit(), 400);
+    });
 });
 </script>
+
 <?php require_once 'footer.php'; ?>

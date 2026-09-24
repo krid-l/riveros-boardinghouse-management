@@ -79,6 +79,12 @@ function tenantCreditedSql(string $tenantAlias): string {
 // Revenue = money actually received. Rows that only record a roommate's covered share are excluded.
 const REVENUE_FILTER_SQL = "status = 'verified' AND covered_by_payment_id IS NULL";
 
+// The same rule with the payments table named explicitly, for queries that join a table which
+// also has a status column (tenants does), where the bare column name would be ambiguous.
+function revenueFilterSql(string $alias): string {
+    return "$alias.status = 'verified' AND $alias.covered_by_payment_id IS NULL";
+}
+
 /**
  * Post any rent charges that are due to be posted up to the current month.
  * Safe to call on every page load: each tenant row is locked while it's billed and

@@ -2,6 +2,7 @@
 require_once '../includes/db.php';
 require_once '../includes/auth.php';
 require_once '../includes/billing.php';
+require_once '../includes/pagination.php';
 requireAdmin();
 
 // --- DATA FETCHING ---
@@ -45,21 +46,41 @@ $recentTransactions = $pdo->query("
     ORDER BY p.payment_date DESC LIMIT 5
 ")->fetchAll();
 
-// All Payments (For Payment Reports)
-$allPayments = $pdo->query("
-    SELECT p.*, t.first_name, t.last_name, r.room_number 
+// The three long report tables are paged in SQL. Each tab keeps its own page number, and
+// the active tab travels in the URL so a page link doesn't bounce you back to Overview.
+$activeTab = preg_match('/^[a-z]+$/', queryParam('tab')) ? queryParam('tab') : 'overview';
+
+// Income & Ledger: money actually received.
+$ledgerPager = paginate(
+    (int)$pdo->query("SELECT COUNT(*) FROM payments p WHERE " . revenueFilterSql('p'))->fetchColumn(),
+    15, 'page_ledger', ['tab' => 'financial']
+);
+$ledgerRows = $pdo->query("
+    SELECT p.*, t.first_name, t.last_name, r.room_number
     FROM payments p
     JOIN tenants t ON p.tenant_id = t.id
     LEFT JOIN rooms r ON t.room_id = r.id
-    ORDER BY p.payment_date DESC
+    WHERE " . revenueFilterSql('p') . "
+    ORDER BY p.payment_date DESC, p.id DESC" . paginationLimitSql($ledgerPager) . "
 ")->fetchAll();
 
-// All Tenants (For Tenant Reports)
+// Comprehensive payment log: every payment row, verified or not.
+$payLogPager = paginate((int)$pdo->query("SELECT COUNT(*) FROM payments")->fetchColumn(), 15, 'page_paylog', ['tab' => 'payment']);
+$allPayments = $pdo->query("
+    SELECT p.*, t.first_name, t.last_name, r.room_number
+    FROM payments p
+    JOIN tenants t ON p.tenant_id = t.id
+    LEFT JOIN rooms r ON t.room_id = r.id
+    ORDER BY p.payment_date DESC, p.id DESC" . paginationLimitSql($payLogPager) . "
+")->fetchAll();
+
+// Tenant report.
+$tenantPager = paginate((int)$pdo->query("SELECT COUNT(*) FROM tenants")->fetchColumn(), 15, 'page_tenants', ['tab' => 'tenant']);
 $allTenants = $pdo->query("
-    SELECT t.*, r.room_number 
+    SELECT t.*, r.room_number
     FROM tenants t
     LEFT JOIN rooms r ON t.room_id = r.id
-    ORDER BY t.first_name ASC
+    ORDER BY t.first_name ASC, t.id ASC" . paginationLimitSql($tenantPager) . "
 ")->fetchAll();
 
 // Top Paying Tenants
@@ -164,12 +185,12 @@ require_once 'header.php';
 <!-- Tabs & Actions -->
 <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center mb-3 gap-2">
     <div class="nav-tabs-custom px-2 overflow-auto w-100" id="reportTabs">
-        <div class="tab-item active" data-target="tab-overview">Overview</div>
-        <div class="tab-item text-nowrap" data-target="tab-financial">Financial Reports</div>
-        <div class="tab-item text-nowrap" data-target="tab-occupancy">Occupancy Reports</div>
-        <div class="tab-item text-nowrap" data-target="tab-tenant">Tenant Reports</div>
-        <div class="tab-item text-nowrap" data-target="tab-payment">Payment Reports</div>
-        <div class="tab-item text-nowrap" data-target="tab-exported">Exported Reports</div>
+        <div class="tab-item <?= $activeTab === 'overview' ? 'active' : '' ?>" data-target="tab-overview">Overview</div>
+        <div class="tab-item text-nowrap <?= $activeTab === 'financial' ? 'active' : '' ?>" data-target="tab-financial">Financial Reports</div>
+        <div class="tab-item text-nowrap <?= $activeTab === 'occupancy' ? 'active' : '' ?>" data-target="tab-occupancy">Occupancy Reports</div>
+        <div class="tab-item text-nowrap <?= $activeTab === 'tenant' ? 'active' : '' ?>" data-target="tab-tenant">Tenant Reports</div>
+        <div class="tab-item text-nowrap <?= $activeTab === 'payment' ? 'active' : '' ?>" data-target="tab-payment">Payment Reports</div>
+        <div class="tab-item text-nowrap <?= $activeTab === 'exported' ? 'active' : '' ?>" data-target="tab-exported">Exported Reports</div>
     </div>
     
     <div class="d-flex gap-2 align-items-center flex-shrink-0">
@@ -184,7 +205,7 @@ require_once 'header.php';
 <!-- ============================================== -->
 <!-- TAB: OVERVIEW (Default) -->
 <!-- ============================================== -->
-<div id="tab-overview" class="tab-pane">
+<div id="tab-overview" class="tab-pane <?= $activeTab === 'overview' ? '' : 'd-none' ?>">
     <!-- Top KPIs -->
     <div class="row row-cols-2 row-cols-md-3 row-cols-xl-5 g-2 mb-3">
         <div class="col"><div class="metric-card h-100 p-2 d-flex align-items-center shadow-sm"><div class="icon-box-lg bg-primary bg-opacity-10 text-primary me-2 flex-shrink-0"><i class="fa-solid fa-user-group"></i></div><div><div class="card-title-sm">Total Tenants</div><h5 class="fw-bold mb-0 text-dark"><?= $totalTenants ?></h5><div class="trend-text text-muted mt-1">Currently staying</div></div></div></div>
@@ -420,7 +441,7 @@ require_once 'header.php';
 <!-- ============================================== -->
 <!-- TAB: FINANCIAL REPORTS -->
 <!-- ============================================== -->
-<div id="tab-financial" class="tab-pane d-none">
+<div id="tab-financial" class="tab-pane <?= $activeTab === 'financial' ? '' : 'd-none' ?>">
     <div class="row g-2 mb-3">
         <div class="col-md-4"><div class="metric-card p-3 shadow-sm text-center"><div class="card-title-sm">Total Collected</div><h4 class="fw-bold text-success mb-0">₱<?= number_format($totalRevenue, 2) ?></h4></div></div>
         <div class="col-md-4"><div class="metric-card p-3 shadow-sm text-center"><div class="card-title-sm">Total Deficit (Unpaid)</div><h4 class="fw-bold text-danger mb-0">₱<?= number_format($outstandingBalance, 2) ?></h4></div></div>
@@ -435,10 +456,10 @@ require_once 'header.php';
                     <tr><th class="ps-3 border-0">Date</th><th class="border-0">Reference</th><th class="border-0">Description</th><th class="border-0 text-end pe-3">Credit (Amount)</th></tr>
                 </thead>
                 <tbody>
-                    <?php if(empty($allPayments)): ?>
+                    <?php if(empty($ledgerRows)): ?>
                         <tr><td colspan="4" class="text-center py-4 text-muted">No financial records found.</td></tr>
                     <?php else: ?>
-                        <?php foreach($allPayments as $p): if($p['status']!='verified' || !empty($p['covered_by_payment_id'])) continue; ?>
+                        <?php foreach($ledgerRows as $p): ?>
                         <tr>
                             <td class="ps-3 text-dark fw-semibold" style="font-size:0.65rem;"><?= date('M d, Y', strtotime($p['payment_date'])) ?></td>
                             <td class="text-muted" style="font-size:0.65rem;"><?= htmlspecialchars($p['reference_number'] ?: 'MANUAL-'.str_pad($p['id'], 5, '0', STR_PAD_LEFT)) ?></td>
@@ -450,13 +471,17 @@ require_once 'header.php';
                 </tbody>
             </table>
         </div>
+            <div class="card-footer bg-white border-top p-2 d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <span class="text-muted" style="font-size:0.65rem;"><?= paginationSummary($ledgerPager, 'entries') ?></span>
+                <nav><ul class="pagination pagination-sm mb-0 shadow-sm" style="font-size:0.65rem;"><?= paginationControls($ledgerPager) ?></ul></nav>
+            </div>
     </div>
 </div>
 
 <!-- ============================================== -->
 <!-- TAB: OCCUPANCY REPORTS -->
 <!-- ============================================== -->
-<div id="tab-occupancy" class="tab-pane d-none">
+<div id="tab-occupancy" class="tab-pane <?= $activeTab === 'occupancy' ? '' : 'd-none' ?>">
     <div class="row g-2 mb-3">
         <div class="col-md-4"><div class="metric-card p-3 shadow-sm text-center"><div class="card-title-sm">Total Bed Capacity</div><h4 class="fw-bold text-dark mb-0"><?= $totalCapacity ?></h4></div></div>
         <div class="col-md-4"><div class="metric-card p-3 shadow-sm text-center"><div class="card-title-sm">Occupied Beds</div><h4 class="fw-bold text-primary mb-0"><?= $totalOccupied ?></h4></div></div>
@@ -493,7 +518,7 @@ require_once 'header.php';
 <!-- ============================================== -->
 <!-- TAB: TENANT REPORTS -->
 <!-- ============================================== -->
-<div id="tab-tenant" class="tab-pane d-none">
+<div id="tab-tenant" class="tab-pane <?= $activeTab === 'tenant' ? '' : 'd-none' ?>">
     <div class="card border-0 shadow-sm rounded-3">
         <div class="card-header bg-white border-0 p-3 pb-0 d-flex justify-content-between">
             <h6 class="fw-bold text-dark mb-0" style="font-size:0.75rem;">Tenant Directory & Status Report</h6>
@@ -522,13 +547,17 @@ require_once 'header.php';
                 </tbody>
             </table>
         </div>
+            <div class="card-footer bg-white border-top p-2 d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <span class="text-muted" style="font-size:0.65rem;"><?= paginationSummary($tenantPager, 'tenants') ?></span>
+                <nav><ul class="pagination pagination-sm mb-0 shadow-sm" style="font-size:0.65rem;"><?= paginationControls($tenantPager) ?></ul></nav>
+            </div>
     </div>
 </div>
 
 <!-- ============================================== -->
 <!-- TAB: PAYMENT REPORTS -->
 <!-- ============================================== -->
-<div id="tab-payment" class="tab-pane d-none">
+<div id="tab-payment" class="tab-pane <?= $activeTab === 'payment' ? '' : 'd-none' ?>">
     <div class="card border-0 shadow-sm rounded-3">
         <div class="card-header bg-white border-0 p-3 pb-0">
             <h6 class="fw-bold text-dark mb-0" style="font-size:0.75rem;">Comprehensive Payment Log</h6>
@@ -555,13 +584,17 @@ require_once 'header.php';
                 </tbody>
             </table>
         </div>
+            <div class="card-footer bg-white border-top p-2 d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <span class="text-muted" style="font-size:0.65rem;"><?= paginationSummary($payLogPager, 'payments') ?></span>
+                <nav><ul class="pagination pagination-sm mb-0 shadow-sm" style="font-size:0.65rem;"><?= paginationControls($payLogPager) ?></ul></nav>
+            </div>
     </div>
 </div>
 
 <!-- ============================================== -->
 <!-- TAB: EXPORTED REPORTS -->
 <!-- ============================================== -->
-<div id="tab-exported" class="tab-pane d-none">
+<div id="tab-exported" class="tab-pane <?= $activeTab === 'exported' ? '' : 'd-none' ?>">
     <div class="card border-0 shadow-sm rounded-3">
         <div class="card-header bg-white border-0 p-3 pb-0">
             <h6 class="fw-bold text-dark mb-0" style="font-size:0.75rem;">Generated File Archives</h6>
@@ -584,29 +617,35 @@ require_once 'header.php';
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
 <script>
+// Tab switching lives in its own block, ahead of the charts: if the chart library fails to
+// load, Chart.register below throws and everything after it in that block stops running.
+// The tabs must keep working regardless. The open tab is already set server-side; this only
+// handles clicking between them.
+document.addEventListener("DOMContentLoaded", function () {
+    const tabs = document.querySelectorAll('#reportTabs .tab-item');
+    const panes = document.querySelectorAll('.tab-pane');
+
+    tabs.forEach(tab => {
+        tab.addEventListener('click', function () {
+            const targetId = this.getAttribute('data-target');
+            const target = document.getElementById(targetId);
+            if (!target) return;
+            tabs.forEach(t => t.classList.toggle('active', t === this));
+            panes.forEach(p => p.classList.add('d-none'));
+            target.classList.remove('d-none');
+            // Remember the tab in the address bar so the pagination links come back here.
+            const url = new URL(window.location);
+            url.searchParams.set('tab', targetId.replace('tab-', ''));
+            history.replaceState(null, '', url);
+        });
+    });
+});
+</script>
+
+<script>
 Chart.register(ChartDataLabels);
 
 document.addEventListener("DOMContentLoaded", function() {
-    
-    // TAB SWITCHING LOGIC
-    const tabs = document.querySelectorAll('#reportTabs .tab-item');
-    const panes = document.querySelectorAll('.tab-pane');
-    
-    tabs.forEach(tab => {
-        tab.addEventListener('click', function() {
-            // Remove active class from all tabs
-            tabs.forEach(t => t.classList.remove('active'));
-            this.classList.add('active');
-            
-            // Hide all panes
-            panes.forEach(p => p.classList.add('d-none'));
-            
-            // Show target pane
-            const targetId = this.getAttribute('data-target');
-            document.getElementById(targetId).classList.remove('d-none');
-        });
-    });
-
     // 1. Occupancy Donut Chart
     const occCtx = document.getElementById('occupancyDonut').getContext('2d');
     new Chart(occCtx, {

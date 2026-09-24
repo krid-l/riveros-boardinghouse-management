@@ -2,6 +2,7 @@
 require_once '../includes/db.php';
 require_once '../includes/auth.php';
 requireAdmin();
+require_once '../includes/avatar.php';
 $current_page = basename($_SERVER['PHP_SELF']);
 ?>
 <!DOCTYPE html>
@@ -48,7 +49,7 @@ $current_page = basename($_SERVER['PHP_SELF']);
                 </ul>
 
                 <div class="mt-auto bg-dark p-3 rounded-3 mb-2 d-flex align-items-center">
-                    <img src="https://ui-avatars.com/api/?name=Admin&background=2563eb&color=fff" class="rounded-circle me-3" width="40" height="40" alt="Admin">
+                    <?= avatarHtml('Admin', 40, 'me-3') ?>
                     <div>
                         <h6 class="mb-0 fw-bold fs-6">Administrator</h6>
                         <small class="text-muted">Master Access</small>

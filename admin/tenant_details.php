@@ -173,7 +173,7 @@ require_once 'header.php';
             <!-- Left: Avatar & Contact -->
             <div class="col-md-4 d-flex align-items-center border-end border-light">
                 <div class="avatar-wrapper me-3">
-                    <img src="https://ui-avatars.com/api/?name=<?= urlencode($tenant['first_name'].' '.$tenant['last_name']) ?>&background=random&color=fff&size=128" alt="Avatar">
+                    <?= avatarHtml($tenant['first_name'] . ' ' . $tenant['last_name'], 128, '', $tenant['profile_picture'] ?? null, '../') ?>
                     <span class="badge bg-<?= $billing['color'] ?>-subtle text-<?= $billing['color'] ?> rounded-pill status-badge-overlap"><?= $billing['label'] ?></span>
                 </div>
                 <div>

@@ -2,6 +2,7 @@
 require_once '../includes/db.php';
 require_once '../includes/auth.php';
 requireTenant();
+require_once '../includes/avatar.php';
 
 // Fetch current tenant info
 $stmt = $pdo->prepare("SELECT * FROM tenants WHERE user_id = ?");
@@ -62,11 +63,9 @@ $current_page = basename($_SERVER['PHP_SELF']);
 
                 <div class="mt-auto bg-dark p-3 rounded-3 mb-2 d-flex align-items-center">
                     <?php
-                    $hFullName = htmlspecialchars($currentTenant['first_name'] . ' ' . $currentTenant['last_name']);
-                    $hUrl = trim($currentTenant['profile_picture'] ?? '');
-                      $hAvatar = !empty($hUrl) ? (preg_match('/^https?:\/\//i', $hUrl) ? htmlspecialchars($hUrl) : '../' . htmlspecialchars($hUrl)) : 'https://ui-avatars.com/api/?name=' . urlencode($hFullName) . '&background=10b981&color=fff';
+                    $hFullName = $currentTenant['first_name'] . ' ' . $currentTenant['last_name'];
                     ?>
-                    <img src="<?= $hAvatar ?>" class="rounded-circle me-3" width="40" height="40" style="object-fit: cover;" alt="Tenant">
+                    <?= avatarHtml($hFullName, 40, 'me-3', $currentTenant['profile_picture'] ?? null, '../') ?>
                     <div>
                         <h6 class="mb-0 fw-bold fs-6 text-truncate" style="max-width: 130px;"><?= htmlspecialchars($currentTenant['first_name']) ?></h6>
                         <small class="text-muted">Tenant</small>

@@ -408,7 +408,7 @@ require_once 'header.php';
                             <tr>
                                 <td class="ps-3">
                                     <div class="d-flex align-items-center">
-                                        <img src="https://ui-avatars.com/api/?name=<?= urlencode($p['first_name'].' '.$p['last_name']) ?>&background=random&color=fff" class="rounded-circle me-2 shadow-sm" width="20" height="20">
+                                        <?= avatarHtml($p['first_name'] . ' ' . $p['last_name'], 20, 'me-2 shadow-sm') ?>
                                         <span class="fw-semibold text-dark text-truncate d-inline-block" style="max-width:70px; font-size: 0.75rem;"><?= htmlspecialchars($p['first_name'].' '.$p['last_name']) ?></span>
                                     </div>
                                 </td>

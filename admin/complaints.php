@@ -2,6 +2,7 @@
 require_once '../includes/db.php';
 require_once '../includes/auth.php';
 requireAdmin();
+require_once '../includes/pagination.php';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'update_complaint') {
     $complaintId = (int)$_POST['complaint_id'];
@@ -18,54 +19,89 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 $success_msg = isset($_GET['success']) ? "Complaint updated successfully." : "";
 
 // --- DATA FETCHING ---
-$stmt = $pdo->query("
-    SELECT c.*, t.first_name, t.last_name, r.room_number
-    FROM complaints c
-    JOIN tenants t ON c.tenant_id = t.id
-    LEFT JOIN rooms r ON t.room_id = r.id
-    ORDER BY c.created_at DESC
-");
-$complaints = $stmt->fetchAll();
+// A complaint's displayed status: resolved, or waiting on a first reply (Pending),
+// or replied to but still open (In Progress).
+const COMPLAINT_PENDING_SQL = "c.status <> 'resolved' AND (c.admin_response IS NULL OR c.admin_response = '')";
+const COMPLAINT_PROGRESS_SQL = "c.status <> 'resolved' AND c.admin_response IS NOT NULL AND c.admin_response <> ''";
 
-$totalComplaints = count($complaints);
-$openCount = 0;
-$inProgressCount = 0;
-$resolvedCount = 0;
-$closedCount = 0;
+// Totals for the stat cards and the donut. These count every complaint, not just the page
+// being shown, so they are counted in SQL rather than by walking the list.
+$counts = $pdo->query("SELECT
+        COUNT(*) AS total,
+        SUM(CASE WHEN c.status = 'resolved' THEN 1 ELSE 0 END) AS resolved,
+        SUM(CASE WHEN " . COMPLAINT_PENDING_SQL . " THEN 1 ELSE 0 END) AS pending,
+        SUM(CASE WHEN " . COMPLAINT_PROGRESS_SQL . " THEN 1 ELSE 0 END) AS in_progress
+    FROM complaints c")->fetch();
+
+$totalComplaints = (int)$counts['total'];
+$resolvedCount = (int)$counts['resolved'];
+$pendingCount = (int)$counts['pending'];
+$inProgressCount = (int)$counts['in_progress'];
+$openCount = $pendingCount;   // the "Open" card counts complaints still waiting on a reply
+$closedCount = 0;             // no separate "closed" state in the schema
 
 // Fetch Category Counts
 $catStmt = $pdo->query("SELECT category, COUNT(*) as cat_count FROM complaints GROUP BY category ORDER BY cat_count DESC LIMIT 4");
 $categoryStats = $catStmt->fetchAll();
 
-// Enrich data for UI
+// --- COMPLAINTS LIST (filtered and paged in SQL) ---
+$filterSearch = queryParam('q');
+$filterStatus = queryParam('status', 'all') ?: 'all';
+
+$where = [];
+$params = [];
+if ($filterSearch !== '') {
+    $where[] = "(LOWER(t.first_name) LIKE ? OR LOWER(t.last_name) LIKE ?
+                 OR LOWER(CONCAT(t.first_name, ' ', t.last_name)) LIKE ?
+                 OR LOWER(c.subject) LIKE ? OR LOWER(c.message) LIKE ?)";
+    $like = '%' . strtolower($filterSearch) . '%';
+    array_push($params, $like, $like, $like, $like, $like);
+}
+if ($filterStatus === 'resolved') {
+    $where[] = "c.status = 'resolved'";
+} elseif ($filterStatus === 'pending') {
+    $where[] = COMPLAINT_PENDING_SQL;
+} elseif ($filterStatus === 'in progress') {
+    $where[] = COMPLAINT_PROGRESS_SQL;
+}
+$whereSql = $where ? 'WHERE ' . implode(' AND ', $where) : '';
+
+$countStmt = $pdo->prepare("SELECT COUNT(*) FROM complaints c JOIN tenants t ON c.tenant_id = t.id $whereSql");
+$countStmt->execute($params);
+$pager = paginate((int)$countStmt->fetchColumn(), 10);
+
+$stmt = $pdo->prepare("
+    SELECT c.*, t.first_name, t.last_name, r.room_number
+    FROM complaints c
+    JOIN tenants t ON c.tenant_id = t.id
+    LEFT JOIN rooms r ON t.room_id = r.id
+    $whereSql
+    ORDER BY c.created_at DESC, c.id DESC" . paginationLimitSql($pager) . "
+");
+$stmt->execute($params);
+$complaints = $stmt->fetchAll();
+
+// Label each row the same way the counts above do.
 $enrichedComplaints = [];
 foreach ($complaints as $c) {
-    // Derive UI status
-    if ($c['status'] == 'resolved') {
-        $uiStatus = 'Resolved';
-        $resolvedCount++;
+    if ($c['status'] === 'resolved') {
+        $c['ui_status'] = 'Resolved';
     } else {
-        if (empty($c['admin_response'])) {
-            $uiStatus = 'Pending';
-            $pendingCount++;
-        } else {
-            $uiStatus = 'In Progress';
-            $inProgressCount++;
-        }
+        $c['ui_status'] = empty($c['admin_response']) ? 'Pending' : 'In Progress';
     }
-    
-    // Default priority since schema lacks priority
-    $priority = 'Medium';
-    
-    // updated_at defaults to created_at if schema lacks updated_at tracking
-    $updatedAt = $c['updated_at'] ?? $c['created_at'];
-
-    $c['ui_status'] = $uiStatus;
-    $c['priority'] = $priority;
-    $c['last_update'] = $updatedAt;
-    
+    $c['priority'] = 'Medium';                                  // the schema has no priority column
+    $c['last_update'] = $c['updated_at'] ?? $c['created_at'];   // nor an updated_at one
     $enrichedComplaints[] = $c;
 }
+
+// The "Recent" panel always shows the three newest complaints, whatever the list is filtered to.
+$recentComplaints = $pdo->query("
+    SELECT c.*, t.first_name, t.last_name, r.room_number
+    FROM complaints c
+    JOIN tenants t ON c.tenant_id = t.id
+    LEFT JOIN rooms r ON t.room_id = r.id
+    ORDER BY c.created_at DESC, c.id DESC LIMIT 3
+")->fetchAll();
 
 require_once 'header.php';
 ?>
@@ -190,23 +226,20 @@ require_once 'header.php';
     <div class="col-lg-8 col-xl-9">
         
         <!-- Filter Bar -->
-        <div class="d-flex flex-wrap gap-2 mb-2 align-items-center bg-white p-2 rounded-3 shadow-sm border-0">
+        <form method="GET" id="filterForm" class="d-flex flex-wrap gap-2 mb-2 align-items-center bg-white p-2 rounded-3 shadow-sm border-0">
             <div class="input-group input-group-sm rounded-2 border flex-grow-1 bg-white" style="max-width:250px;">
                 <span class="input-group-text bg-transparent border-0 pe-1"><i class="fa-solid fa-magnifying-glass text-muted" style="font-size:0.65rem;"></i></span>
-                <input type="text" id="searchInput" class="form-control border-0 shadow-none px-1" placeholder="Search by tenant, subject or message..." style="font-size:0.7rem;">
+                <input type="text" name="q" id="searchInput" value="<?= htmlspecialchars($filterSearch) ?>" class="form-control border-0 shadow-none px-1" placeholder="Search by tenant, subject or message..." style="font-size:0.7rem;">
             </div>
-            <select id="statusFilter" class="form-select form-select-sm border rounded-2 shadow-none text-muted" style="width:110px; font-size:0.7rem;">
-                <option value="all">All Status</option>
-                <option value="pending">Pending</option>
-                <option value="in progress">In Progress</option>
-                <option value="resolved">Resolved</option>
+            <select name="status" class="form-select form-select-sm border rounded-2 shadow-none text-muted" style="width:110px; font-size:0.7rem;" onchange="this.form.submit()">
+                <option value="all" <?= $filterStatus === 'all' ? 'selected' : '' ?>>All Status</option>
+                <option value="pending" <?= $filterStatus === 'pending' ? 'selected' : '' ?>>Pending</option>
+                <option value="in progress" <?= $filterStatus === 'in progress' ? 'selected' : '' ?>>In Progress</option>
+                <option value="resolved" <?= $filterStatus === 'resolved' ? 'selected' : '' ?>>Resolved</option>
             </select>
-            <div class="input-group input-group-sm rounded-2 border bg-white" style="width:140px;">
-                <input type="text" class="form-control border-0 shadow-none px-2" placeholder="Select Date Range" style="font-size:0.7rem;">
-                <span class="input-group-text bg-transparent border-0 pe-2"><i class="fa-regular fa-calendar text-muted" style="font-size:0.65rem;"></i></span>
-            </div>
-            <button class="btn btn-link btn-sm text-primary text-decoration-none fw-semibold ms-auto" style="font-size:0.65rem;" onclick="document.getElementById('searchInput').value=''; document.getElementById('statusFilter').value='all'; filterTable();"><i class="fa-solid fa-rotate-right me-1"></i> Clear Filters</button>
-        </div>
+            <button type="submit" class="btn btn-sm btn-primary rounded-2 px-2 py-1" style="font-size:0.65rem;"><i class="fa-solid fa-magnifying-glass me-1"></i> Search</button>
+            <a href="complaints.php" class="btn btn-link btn-sm text-primary text-decoration-none fw-semibold ms-auto" style="font-size:0.65rem;"><i class="fa-solid fa-rotate-right me-1"></i> Clear Filters</a>
+        </form>
         
         <!-- Table Card -->
         <div class="card border-0 shadow-sm rounded-3 mb-3">
@@ -251,7 +284,7 @@ require_once 'header.php';
                             </td>
                             <td>
                                 <div class="d-flex align-items-center">
-                                    <img src="https://ui-avatars.com/api/?name=<?= urlencode($c['first_name'].' '.$c['last_name']) ?>&background=random&color=fff" class="rounded-circle me-2 shadow-sm" width="22" height="22">
+                                    <?= avatarHtml($c['first_name'] . ' ' . $c['last_name'], 22, 'me-2 shadow-sm') ?>
                                     <div>
                                         <div class="fw-bold text-dark" style="font-size:0.65rem; line-height:1.1;"><?= htmlspecialchars($c['first_name'].' '.$c['last_name']) ?></div>
                                         <div class="text-muted" style="font-size:0.55rem;">Room <?= htmlspecialchars($c['room_number'] ?? 'N/A') ?></div>
@@ -292,7 +325,8 @@ require_once 'header.php';
                 </table>
             </div>
             <div class="card-footer bg-white border-top p-2 d-flex justify-content-between align-items-center">
-                <span class="text-muted" style="font-size:0.65rem;">Showing 1 to <?= min(5, count($enrichedComplaints)) ?> of <?= count($enrichedComplaints) ?> complaints</span>
+                <span class="text-muted" style="font-size:0.65rem;"><?= paginationSummary($pager, 'complaints') ?></span>
+                <nav><ul class="pagination pagination-sm mb-0 shadow-sm" style="font-size:0.65rem;"><?= paginationControls($pager) ?></ul></nav>
                 <nav>
                     <ul class="pagination pagination-sm mb-0 shadow-sm" style="font-size:0.65rem;">
                         <li class="page-item disabled"><a class="page-link text-muted border-light px-2 py-1" href="#">&lsaquo; Previous</a></li>
@@ -304,10 +338,10 @@ require_once 'header.php';
         </div>
         
         <!-- Recent Activity Cards -->
-        <?php if(!empty($enrichedComplaints)): ?>
+        <?php if(!empty($recentComplaints)): ?>
         <h6 class="fw-bold text-dark mb-2" style="font-size:0.75rem;">Recent Activity</h6>
         <div class="row g-2 mb-3">
-            <?php foreach(array_slice($enrichedComplaints, 0, 3) as $c): 
+            <?php foreach($recentComplaints as $c): 
                 if ($c['ui_status'] == 'Resolved') { $dot = 'primary'; $act = 'resolved'; $sClass = 'success'; }
                 elseif ($c['ui_status'] == 'Pending') { $dot = 'warning'; $act = 'received'; $sClass = 'warning'; }
                 else { $dot = 'primary'; $act = 'updated'; $sClass = 'primary'; }
@@ -521,31 +555,16 @@ document.addEventListener("DOMContentLoaded", function() {
 </script>
 
 <script>
-let searchInput, statusFilter, tableRows;
-document.addEventListener('DOMContentLoaded', function() {
-    searchInput = document.getElementById('searchInput');
-    statusFilter = document.getElementById('statusFilter');
-    tableRows = document.querySelectorAll('#complaintsTable tbody tr');
-
-    if (searchInput) searchInput.addEventListener('input', filterTable);
-    if (statusFilter) statusFilter.addEventListener('change', filterTable);
-});
-
-function filterTable() {
-    if(!searchInput || !tableRows) return;
-    const query = searchInput.value.toLowerCase();
-    const status = statusFilter.value.toLowerCase();
-
-    tableRows.forEach(row => {
-        const textContent = row.textContent.toLowerCase();
-        let show = textContent.includes(query);
-        
-        if (status !== 'all') {
-            if (!textContent.includes(status)) show = false;
-        }
-        
-        row.style.display = show ? '' : 'none';
+// Typing in the search box submits the form after a short pause, so the server can filter.
+document.addEventListener('DOMContentLoaded', function () {
+    const form = document.getElementById('filterForm');
+    const search = document.getElementById('searchInput');
+    if (!form || !search) return;
+    let timer;
+    search.addEventListener('input', function () {
+        clearTimeout(timer);
+        timer = setTimeout(() => form.submit(), 400);
     });
-}
+});
 </script>
 <?php require_once 'footer.php'; ?>

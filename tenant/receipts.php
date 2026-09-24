@@ -1,23 +1,28 @@
 <?php
 require_once 'header.php';
+require_once '../includes/pagination.php';
 
-// Fetch ALL payments (both verified and pending to match mockup)
-$stmt = $pdo->prepare("SELECT * FROM payments WHERE tenant_id = ? ORDER BY payment_date DESC, id DESC");
+// The totals cover every receipt this tenant has ever had, so they are counted in SQL
+// rather than by loading the whole history into the page.
+$stmt = $pdo->prepare("SELECT
+        SUM(CASE WHEN status = 'verified' THEN 1 ELSE 0 END) AS verified_count,
+        COALESCE(SUM(CASE WHEN status = 'verified' THEN amount ELSE 0 END), 0) AS total_paid,
+        SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending_count,
+        COUNT(*) AS all_count
+    FROM payments WHERE tenant_id = ?");
+$stmt->execute([$currentTenant['id']]);
+$receiptStats = $stmt->fetch();
+
+$totalReceipts = (int)$receiptStats['verified_count'];
+$totalPaid = (float)$receiptStats['total_paid'];
+$pendingReceipts = (int)$receiptStats['pending_count'];
+
+// Only the receipts on the current page are fetched and rendered.
+$pager = paginate((int)$receiptStats['all_count'], 8);
+$stmt = $pdo->prepare("SELECT * FROM payments WHERE tenant_id = ?
+                       ORDER BY payment_date DESC, id DESC" . paginationLimitSql($pager));
 $stmt->execute([$currentTenant['id']]);
 $payments = $stmt->fetchAll();
-
-$totalReceipts = 0;
-$totalPaid = 0;
-$pendingReceipts = 0;
-
-foreach ($payments as $p) {
-    if ($p['status'] === 'verified') {
-        $totalReceipts++;
-        $totalPaid += $p['amount'];
-    } elseif ($p['status'] === 'pending') {
-        $pendingReceipts++;
-    }
-}
 ?>
 
 <style>
@@ -247,6 +252,13 @@ foreach ($payments as $p) {
             </div>
         </div>
         <?php endforeach; ?>
+
+        <?php if ($pager['totalPages'] > 1): ?>
+            <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mt-3">
+                <span class="text-muted small"><?= paginationSummary($pager, 'receipts') ?></span>
+                <nav><ul class="pagination pagination-sm mb-0 shadow-sm"><?= paginationControls($pager) ?></ul></nav>
+            </div>
+        <?php endif; ?>
     </div>
 
     <!-- Footer Info Box -->

@@ -312,7 +312,11 @@ require_once 'header.php';
         <?php endif; ?>
 
         <?php foreach ($rooms as $index => $r): ?>
-            <?php 
+            <?php
+                // Only the open room's panel is built; the others are a link away (?room=id).
+                $isOpenPanel = $selectedRoom ? $selectedRoom === (int)$r['id'] : $index === 0;
+                if (!$isOpenPanel) continue;
+
                 $roomTenants = $tenantsByRoom[$r['id']] ?? []; 
                 $occCount = count($roomTenants);
                 $occPct = $r['capacity'] > 0 ? min(100, round(($occCount / $r['capacity']) * 100)) : 0;
@@ -331,8 +335,7 @@ require_once 'header.php';
                     $badgeText = 'Available';
                 }
             ?>
-            <?php $isOpenPanel = $selectedRoom ? $selectedRoom === (int)$r['id'] : $index === 0; ?>
-            <div class="room-details-panel d-flex flex-column h-100 p-3 <?= $isOpenPanel ? '' : 'd-none' ?>" id="panel-<?= $r['id'] ?>">
+            <div class="room-details-panel d-flex flex-column h-100 p-3" id="panel-<?= $r['id'] ?>">
                 
                 <!-- Panel Header -->
                 <div class="d-flex justify-content-between align-items-start mb-3">
@@ -412,7 +415,7 @@ require_once 'header.php';
                     ?>
                         <div class="d-flex align-items-center justify-content-between p-1 mb-1 tenant-item rounded" data-tenant="<?= $tData ?>">
                             <div class="d-flex align-items-center">
-                                <img src="https://ui-avatars.com/api/?name=<?= urlencode($t['first_name'].' '.$t['last_name']) ?>&background=random&color=fff" class="rounded-circle me-2 shadow-sm" width="30" height="30" alt="Tenant">
+                                <?= avatarHtml($t['first_name'] . ' ' . $t['last_name'], 30, 'me-2 shadow-sm') ?>
                                 <div>
                                     <h6 class="mb-0 fw-bold text-dark" style="font-size: 0.75rem; line-height:1.2;"><?= htmlspecialchars($t['first_name'] . ' ' . $t['last_name']) ?></h6>
                                     <small class="text-muted" style="font-size: 0.65rem;">Since <?= date('M j, Y', strtotime($t['created_at'])) ?></small>
@@ -634,22 +637,15 @@ function closeDetailsPanel() {
 }
 
 function selectRoom(id) {
-    document.querySelectorAll('.room-card').forEach(card => card.classList.remove('active'));
-    
-    const selectedCard = document.getElementById('card-' + id);
-    if (selectedCard) selectedCard.classList.add('active');
-    
-    document.querySelectorAll('.room-details-panel').forEach(panel => panel.classList.add('d-none'));
-    
-    const selectedPanel = document.getElementById('panel-' + id);
-    if (selectedPanel) selectedPanel.classList.remove('d-none');
-    
-    const container = document.getElementById('rightDetailsContainer');
-    if (container) {
-        container.classList.remove('d-none');
-        // If they select a room, we show the panel as a block regardless of screen size
-        container.classList.add('d-block');
+    // Already showing this room? Nothing to fetch.
+    if (document.getElementById('panel-' + id)) {
+        const container = document.getElementById('rightDetailsContainer');
+        if (container) { container.classList.remove('d-none'); container.classList.add('d-block'); }
+        return;
     }
+    // Otherwise ask the server for that room's panel. Only one panel is ever built, which
+    // keeps this page small no matter how many rooms and tenants there are.
+    window.location = 'rooms.php?room=' + encodeURIComponent(id);
 }
 
 function openEditModal(id, number, capacity, price, status) {

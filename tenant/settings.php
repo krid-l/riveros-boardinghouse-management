@@ -80,12 +80,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 // Generate Avatar URL
 $fullName = htmlspecialchars($currentTenant['first_name'] . ' ' . $currentTenant['last_name']);
-$picSrc = uploadSrc($currentTenant['profile_picture'] ?? '', '../');
-if ($picSrc) {
-    $avatarUrl = htmlspecialchars($picSrc);
-} else {
-    $avatarUrl = "https://ui-avatars.com/api/?name=" . urlencode($fullName) . "&background=10b981&color=fff&size=128";
-}
+// The uploaded photo when there is one, otherwise initials drawn in the page.
 ?>
 
 <div class="d-flex justify-content-between align-items-end mb-4">
@@ -98,7 +93,7 @@ if ($picSrc) {
 <div class="row g-4">
     <div class="col-lg-4">
         <div class="card border-0 shadow-sm text-center pt-5 pb-4 px-4 h-100">
-            <img src="<?= $avatarUrl ?>" class="rounded-circle mx-auto mb-3 shadow-sm" width="100" height="100" alt="Avatar">
+            <div class="mx-auto mb-3"><?= avatarHtml($currentTenant['first_name'] . ' ' . $currentTenant['last_name'], 100, 'shadow-sm', $currentTenant['profile_picture'] ?? null, '../') ?></div>
             <h5 class="fw-bold text-dark mb-1"><?= $fullName ?></h5>
             <p class="text-muted small mb-3">Tenant Account</p>
             <hr class="text-muted my-4">
