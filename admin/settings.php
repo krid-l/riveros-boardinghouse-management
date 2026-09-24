@@ -2,43 +2,77 @@
 require_once '../includes/db.php';
 require_once '../includes/auth.php';
 requireAdmin();
+require_once '../includes/uploads.php';
 
 $success = '';
 $error = '';
 
-// Helper function to update setting
+// Write a setting, creating the row when this is the first time it is saved.
 function updateSetting($pdo, $key, $value) {
-    $stmt = $pdo->prepare("UPDATE settings SET setting_value = ? WHERE setting_key = ?");
-    $stmt->execute([$value, $key]);
+    $stmt = $pdo->prepare("INSERT INTO settings (setting_key, setting_value) VALUES (?, ?)
+                           " . sqlUpsert(['setting_key'], ['setting_value']));
+    $stmt->execute([$key, $value]);
+}
+
+function readSetting($pdo, $key) {
+    $stmt = $pdo->prepare("SELECT setting_value FROM settings WHERE setting_key = ?");
+    $stmt->execute([$key]);
+    $value = $stmt->fetchColumn();
+    return $value === false ? '' : (string)$value;
 }
 
 // Handle form submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
     if ($action === 'update_profile') {
+        $currentPass = (string)($_POST['current_password'] ?? '');
         $newPass = trim($_POST['new_password'] ?? '');
         $confPass = trim($_POST['confirm_password'] ?? '');
-        
-        if (!empty($newPass)) {
-            if ($newPass !== $confPass) {
-                $error = 'Passwords do not match.';
-            } else {
-                $hashed = password_hash($newPass, PASSWORD_DEFAULT);
-                $stmt = $pdo->prepare("UPDATE users SET password_hash = ? WHERE id = ?");
-                if ($stmt->execute([$hashed, $_SESSION['user_id']])) {
-                    $success = 'Profile and password updated successfully.';
-                } else {
-                    $error = 'Failed to update profile.';
-                }
-            }
+
+        $stmt = $pdo->prepare("SELECT password_hash FROM users WHERE id = ?");
+        $stmt->execute([$_SESSION['user_id']]);
+        $currentHash = $stmt->fetchColumn();
+
+        if ($newPass === '') {
+            $error = 'Enter a new password.';
+        } elseif (!$currentHash || !password_verify($currentPass, $currentHash)) {
+            $error = 'Your current password is incorrect.';
+        } elseif (strlen($newPass) < 6) {
+            $error = 'The new password must be at least 6 characters.';
+        } elseif ($newPass !== $confPass) {
+            $error = 'Passwords do not match.';
+        } elseif ($newPass === $currentPass) {
+            $error = 'The new password must be different from your current one.';
         } else {
-            $success = 'Profile updated successfully.';
+            $hashed = password_hash($newPass, PASSWORD_DEFAULT);
+            $pdo->prepare("UPDATE users SET password_hash = ? WHERE id = ?")
+                ->execute([$hashed, $_SESSION['user_id']]);
+            $success = 'Password updated successfully.';
         }
     } elseif ($action === 'update_payment') {
         updateSetting($pdo, 'gcash_name', $_POST['gcash_name'] ?? '');
         updateSetting($pdo, 'gcash_number', $_POST['gcash_number'] ?? '');
         updateSetting($pdo, 'gcash_instructions', $_POST['gcash_instructions'] ?? '');
         $success = 'Payment settings saved successfully.';
+
+        // GCash QR code image. Tenants see it on the payment page.
+        if (isset($_FILES['gcash_qr'])) {
+            $upload = storeUploadedImage($_FILES['gcash_qr'], 'qr');
+            if ($upload['error']) {
+                $error = $upload['error'];
+                $success = '';
+            } elseif ($upload['path']) {
+                deleteLocalUpload(readSetting($pdo, 'gcash_qr_path'));
+                updateSetting($pdo, 'gcash_qr_path', $upload['path']);
+                updateSetting($pdo, 'gcash_qr_uploaded_at', date('Y-m-d H:i:s'));
+                $success = 'Payment settings and GCash QR code saved successfully.';
+            }
+        }
+    } elseif ($action === 'delete_qr') {
+        deleteLocalUpload(readSetting($pdo, 'gcash_qr_path'));
+        updateSetting($pdo, 'gcash_qr_path', '');
+        updateSetting($pdo, 'gcash_qr_uploaded_at', '');
+        $success = 'GCash QR code removed.';
     } elseif ($action === 'update_sms') {
         updateSetting($pdo, 'sms_provider', $_POST['sms_provider'] ?? '');
         updateSetting($pdo, 'sms_api_key', $_POST['sms_api_key'] ?? '');
@@ -72,6 +106,10 @@ foreach ($settingsRows as $row) {
 $s = function($key) use ($settingsMap) {
     return htmlspecialchars($settingsMap[$key] ?? '');
 };
+
+// GCash QR code: a Supabase URL when deployed, an uploads/ path when run locally.
+$qrSrc = uploadSrc($settingsMap['gcash_qr_path'] ?? '', '../');
+$qrUploadedAt = $settingsMap['gcash_qr_uploaded_at'] ?? '';
 
 require_once 'header.php';
 ?>
@@ -140,6 +178,11 @@ require_once 'header.php';
         <i class="fa-solid fa-circle-check me-2"></i><?= htmlspecialchars($success) ?>
     </div>
 <?php endif; ?>
+<?php if ($error): ?>
+    <div class="alert alert-danger py-2 px-3 border-0 rounded-3 shadow-sm mb-3" style="font-size: 0.7rem;">
+        <i class="fa-solid fa-triangle-exclamation me-2"></i><?= htmlspecialchars($error) ?>
+    </div>
+<?php endif; ?>
 
 <!-- Main Grid -->
 <div class="row g-3">
@@ -149,55 +192,56 @@ require_once 'header.php';
         
         <!-- Administrator Profile -->
         <div class="settings-card shadow-sm">
-            <div class="settings-header">
-                <div>
-                    <h6 class="card-title-lg"><i class="fa-regular fa-circle-user icon-header text-primary"></i> Administrator Profile</h6>
-                    <div class="card-subtitle-sm">Update your account information and credentials.</div>
-                </div>
-                <button class="btn btn-outline-custom"><i class="fa-solid fa-pen me-1" style="font-size:0.55rem;"></i> Edit Profile</button>
-            </div>
-            <div class="settings-body">
-                <div class="row g-4">
-                    <!-- Left Sub-column -->
-                    <div class="col-md-6 border-end border-light pe-md-4">
-                        <div class="mb-3">
-                            <label class="form-label">Full Name</label>
-                            <input type="text" class="form-control" value="Administrator">
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label">Email Address</label>
-                            <input type="email" class="form-control" value="admin@boardinghouse.com">
-                        </div>
-                        <div>
-                            <label class="form-label">Username</label>
-                            <input type="text" class="form-control" value="<?= htmlspecialchars($user['username']) ?>" disabled>
-                            <div class="form-text">Username cannot be changed.</div>
-                        </div>
-                    </div>
-                    <!-- Right Sub-column -->
-                    <div class="col-md-6 ps-md-4 d-flex flex-column">
-                        <h6 class="sub-heading">Change Password</h6>
-                        <div class="mb-3 password-input-group">
-                            <label class="form-label">New Password</label>
-                            <input type="password" class="form-control" placeholder="Enter new password">
-                            <i class="fa-regular fa-eye eye-icon"></i>
-                        </div>
-                        <div class="mb-3 password-input-group">
-                            <label class="form-label">Confirm Password</label>
-                            <input type="password" class="form-control" placeholder="Confirm new password">
-                            <i class="fa-regular fa-eye eye-icon"></i>
-                        </div>
-                        <div class="mt-auto">
-                            <button class="btn btn-primary btn-save shadow-sm w-auto"><i class="fa-solid fa-lock me-2" style="font-size:0.6rem;"></i>Update Password</button>
-                        </div>
+            <form method="POST">
+                <input type="hidden" name="action" value="update_profile">
+                <div class="settings-header">
+                    <div>
+                        <h6 class="card-title-lg"><i class="fa-regular fa-circle-user icon-header text-primary"></i> Administrator Profile</h6>
+                        <div class="card-subtitle-sm">Update your account information and credentials.</div>
                     </div>
                 </div>
-            </div>
+                <div class="settings-body">
+                    <div class="row g-4">
+                        <!-- Left Sub-column -->
+                        <div class="col-md-6 border-end border-light pe-md-4">
+                            <div class="mb-3">
+                                <label class="form-label">Role</label>
+                                <input type="text" class="form-control" value="Administrator" disabled>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Username</label>
+                                <input type="text" class="form-control" value="<?= htmlspecialchars($user['username']) ?>" disabled>
+                                <div class="form-text">Username cannot be changed.</div>
+                            </div>
+                            <div>
+                                <label class="form-label">Current Password</label>
+                                <input type="password" class="form-control" name="current_password" placeholder="Enter your current password" autocomplete="current-password">
+                                <div class="form-text">Required to confirm it is really you.</div>
+                            </div>
+                        </div>
+                        <!-- Right Sub-column -->
+                        <div class="col-md-6 ps-md-4 d-flex flex-column">
+                            <h6 class="sub-heading">Change Password</h6>
+                            <div class="mb-3 password-input-group">
+                                <label class="form-label">New Password</label>
+                                <input type="password" class="form-control" name="new_password" placeholder="Enter new password" minlength="6" autocomplete="new-password">
+                            </div>
+                            <div class="mb-3 password-input-group">
+                                <label class="form-label">Confirm Password</label>
+                                <input type="password" class="form-control" name="confirm_password" placeholder="Confirm new password" minlength="6" autocomplete="new-password">
+                            </div>
+                            <div class="mt-auto">
+                                <button type="submit" class="btn btn-primary btn-save shadow-sm w-auto"><i class="fa-solid fa-lock me-2" style="font-size:0.6rem;"></i>Update Password</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </form>
         </div>
         
         <!-- GCash Payment Information -->
         <div class="settings-card shadow-sm">
-            <form method="POST">
+            <form method="POST" enctype="multipart/form-data">
                 <input type="hidden" name="action" value="update_payment">
                 <div class="settings-header">
                     <div>
@@ -219,14 +263,27 @@ require_once 'header.php';
                             <label class="form-label">GCash QR Code (Optional)</label>
                             <div class="qr-upload-box">
                                 <div class="d-flex align-items-center">
-                                    <i class="fa-solid fa-qrcode fs-3 text-dark opacity-75 me-2"></i>
+                                    <?php if ($qrSrc): ?>
+                                        <img src="<?= htmlspecialchars($qrSrc) ?>" alt="GCash QR code" class="rounded border me-2" style="width:38px; height:38px; object-fit:cover;">
+                                    <?php else: ?>
+                                        <i class="fa-solid fa-qrcode fs-3 text-dark opacity-25 me-2"></i>
+                                    <?php endif; ?>
                                     <div>
-                                        <div class="fw-bold text-dark" style="font-size:0.65rem;">GCash QR.png</div>
-                                        <div class="text-muted" style="font-size:0.55rem;">Uploaded on Aug 1, 2025</div>
+                                        <div class="fw-bold text-dark" style="font-size:0.65rem;"><?= $qrSrc ? 'QR code uploaded' : 'No QR code yet' ?></div>
+                                        <div class="text-muted" style="font-size:0.55rem;">
+                                            <?= $qrUploadedAt ? 'Uploaded ' . htmlspecialchars(date('M j, Y', strtotime($qrUploadedAt))) : 'Choose an image below' ?>
+                                        </div>
                                     </div>
                                 </div>
-                                <i class="fa-regular fa-trash-can text-muted" style="cursor:pointer; font-size:0.7rem;"></i>
+                                <?php if ($qrSrc): ?>
+                                    <button type="submit" form="deleteQrForm" class="btn btn-link p-0 text-muted" title="Remove QR code"
+                                            onclick="return confirm('Remove the GCash QR code? Tenants will stop seeing it on the payment page.');">
+                                        <i class="fa-regular fa-trash-can" style="font-size:0.7rem;"></i>
+                                    </button>
+                                <?php endif; ?>
                             </div>
+                            <input type="file" class="form-control mt-2" name="gcash_qr" accept="image/png,image/jpeg,image/webp,image/gif">
+                            <div class="form-text">PNG or JPG, up to 5MB. Tenants see this on the payment page.</div>
                         </div>
                     </div>
                     
@@ -342,5 +399,9 @@ require_once 'header.php';
         
     </div>
 </div>
+
+<form method="POST" id="deleteQrForm" class="d-none">
+    <input type="hidden" name="action" value="delete_qr">
+</form>
 
 <?php require_once 'footer.php'; ?>

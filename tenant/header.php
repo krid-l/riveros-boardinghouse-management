@@ -14,7 +14,7 @@ if (!$currentTenant) {
 if (($currentTenant['status'] ?? 'active') !== 'active') {
     session_unset();
     session_destroy();
-    header('Location: /login.php?deactivated=1');
+    header('Location: ' . appUrl('login.php?deactivated=1'));
     exit;
 }
 $_SESSION['tenant_id'] = $currentTenant['id'];

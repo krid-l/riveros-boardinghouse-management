@@ -1,5 +1,6 @@
 <?php
 require_once 'header.php';
+require_once '../includes/uploads.php';
 
 // Fetch the username from users table for this tenant
 $stmtUser = $pdo->prepare("SELECT username FROM users WHERE id = ?");
@@ -29,6 +30,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (strlen($new) < 6) {
                 throw new Exception("New password must be at least 6 characters.");
             }
+            if ($new === $current) {
+                throw new Exception("New password must be different from your current password.");
+            }
             
             $stmt = $pdo->prepare("UPDATE users SET password_hash = ?, temp_password = NULL WHERE id = ?");
             $stmt->execute([password_hash($new, PASSWORD_DEFAULT), $_SESSION['user_id']]);
@@ -46,49 +50,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $picUpdate = '';
             $params = [$contact, $occupation, $emergency];
 
-            if (isset($_FILES['profile_picture']) && $_FILES['profile_picture']['error'] !== UPLOAD_ERR_NO_FILE) {
-                $fileTmpPath = $_FILES['profile_picture']['tmp_name'];
-                $cleanFileName = preg_replace('/[^A-Za-z0-9.\-_]/', '_', basename($_FILES['profile_picture']['name']));
-                $fileName = time() . '_' . $cleanFileName;
-                
-                $supabaseUrl = getenv('SUPABASE_URL') ?: 'https://edswwvalfxehdklaackx.supabase.co';
-                $supabaseKey = getenv('SUPABASE_SERVICE_KEY');
-                $destPath = null;
-                
-                if ($supabaseUrl && $supabaseKey) {
-                    $bucketName = 'profiles';
-                    $fileData = file_get_contents($fileTmpPath);
-                    $mimeType = mime_content_type($fileTmpPath);
-                    
-                    $ch = curl_init();
-                    curl_setopt($ch, CURLOPT_URL, "$supabaseUrl/storage/v1/object/$bucketName/$fileName");
-                    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-                    curl_setopt($ch, CURLOPT_POST, true);
-                    curl_setopt($ch, CURLOPT_POSTFIELDS, $fileData);
-                    curl_setopt($ch, CURLOPT_HTTPHEADER, [
-                        "Authorization: Bearer $supabaseKey",
-                        "Content-Type: $mimeType"
-                    ]);
-                    
-                    $response = curl_exec($ch);
-                    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-                    curl_close($ch);
-                    
-                    if ($httpCode == 200) {
-                        $destPath = "$supabaseUrl/storage/v1/object/public/$bucketName/$fileName";
-                    }
-                } else {
-                    $uploadDir = __DIR__ . '/../uploads/profiles/';
-                    if (!is_dir($uploadDir)) mkdir($uploadDir, 0777, true);
-                    
-                    if (move_uploaded_file($fileTmpPath, $uploadDir . $fileName)) {
-                        $destPath = 'uploads/profiles/' . $fileName;
-                    }
+            // Saved to Supabase Storage when deployed, to uploads/profiles/ when run locally.
+            if (isset($_FILES['profile_picture'])) {
+                $upload = storeUploadedImage($_FILES['profile_picture'], 'profiles');
+                if ($upload['error']) {
+                    throw new Exception($upload['error']);
                 }
-                
-                if ($destPath) {
+                if ($upload['path']) {
                     $picUpdate = ', profile_picture = ?';
-                    $params[] = $destPath;
+                    $params[] = $upload['path'];
                 }
             }
             $params[] = $_SESSION['tenant_id'];
@@ -110,9 +80,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 // Generate Avatar URL
 $fullName = htmlspecialchars($currentTenant['first_name'] . ' ' . $currentTenant['last_name']);
-if (!empty($currentTenant['profile_picture'])) {
-    $url = trim($currentTenant['profile_picture'] ?? '');
-    $avatarUrl = preg_match('/^https?:\/\//i', $url) ? htmlspecialchars($url) : '../' . htmlspecialchars($url);
+$picSrc = uploadSrc($currentTenant['profile_picture'] ?? '', '../');
+if ($picSrc) {
+    $avatarUrl = htmlspecialchars($picSrc);
 } else {
     $avatarUrl = "https://ui-avatars.com/api/?name=" . urlencode($fullName) . "&background=10b981&color=fff&size=128";
 }
@@ -171,10 +141,6 @@ if (!empty($currentTenant['profile_picture'])) {
                         <div class="form-text" style="font-size: 0.65rem;">Leave empty to keep current picture. Recommended size: 200x200px.</div>
                     </div>
 
-                    
-                    
-                    </div>
-
                     <div class="row g-3 mb-3">
                         <div class="col-md-6">
                             <label class="form-label text-muted fw-semibold small">First Name</label>
@@ -187,10 +153,6 @@ if (!empty($currentTenant['profile_picture'])) {
                         </div>
                     </div>
                     
-                    
-                    
-                    </div>
-
                     <div class="row g-3 mb-3">
                         <div class="col-md-12">
                             <label class="form-label text-muted fw-semibold small">Contact Number</label>
@@ -200,10 +162,6 @@ if (!empty($currentTenant['profile_picture'])) {
                             </div>
                         </div>
 
-                    </div>
-
-                    
-                    
                     </div>
 
                     <div class="row g-3 mb-3">
@@ -225,8 +183,6 @@ if (!empty($currentTenant['profile_picture'])) {
                 </form>
             </div>
         </div>
-    </div>
-</div>
 
         <div class="card border-0 shadow-sm mb-4">
             <div class="card-header bg-white py-3 border-bottom">
@@ -253,5 +209,7 @@ if (!empty($currentTenant['profile_picture'])) {
                 </form>
             </div>
         </div>
+    </div>
+</div>
 
 <?php require_once 'footer.php'; ?>

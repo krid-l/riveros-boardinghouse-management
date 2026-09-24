@@ -52,24 +52,28 @@ function handleTenantAction(PDO $pdo): array {
             $rawPassword = substr(str_shuffle('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%'), 0, 8);
             $password = password_hash($rawPassword, PASSWORD_DEFAULT);
 
-            $stmt = $pdo->prepare("INSERT INTO users (username, password_hash, temp_password, role) VALUES (?, ?, ?, 'tenant') RETURNING id");
-            $stmt->execute([$username, $password, $rawPassword]);
-            $userId = $stmt->fetchColumn();
+            $userId = insertReturningId(
+                $pdo,
+                "INSERT INTO users (username, password_hash, temp_password, role) VALUES (?, ?, ?, 'tenant')",
+                [$username, $password, $rawPassword]
+            );
 
             // Create tenant profile
-            $stmt = $pdo->prepare("INSERT INTO tenants (user_id, first_name, last_name, contact_number, room_id, occupation, emergency_contact, status, move_in_date, balance)
-                                   VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, 0) RETURNING id");
-            $stmt->execute([
-                $userId,
-                $firstName,
-                $lastName,
-                $_POST['contact_number'],
-                $roomId,
-                !empty($_POST['occupation']) ? $_POST['occupation'] : null,
-                !empty($_POST['emergency_contact']) ? $_POST['emergency_contact'] : null,
-                $moveInDate
-            ]);
-            $tenantId = (int)$stmt->fetchColumn();
+            $tenantId = insertReturningId(
+                $pdo,
+                "INSERT INTO tenants (user_id, first_name, last_name, contact_number, room_id, occupation, emergency_contact, status, move_in_date, balance)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, 0)",
+                [
+                    $userId,
+                    $firstName,
+                    $lastName,
+                    $_POST['contact_number'],
+                    $roomId,
+                    !empty($_POST['occupation']) ? $_POST['occupation'] : null,
+                    !empty($_POST['emergency_contact']) ? $_POST['emergency_contact'] : null,
+                    $moveInDate
+                ]
+            );
             if ($roomId) {
                 logRoomTransfer($pdo, $tenantId, null, $roomId, $moveInDate, 'Moved in');
                 $billTenantId = $tenantId;

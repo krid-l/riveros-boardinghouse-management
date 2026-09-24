@@ -216,7 +216,9 @@ require_once 'header.php';
                                         $label .= ' - FULL';
                                     } else {
                                         $avail = $r['capacity'] - $r['occupied'];
-                                        $label .= " (Avail: $avail | ₱" . number_format($r['price_per_month']) . "/tenant)";
+                                        // Adding this tenant makes one more person to split the room price between.
+                                        $share = $r['price_per_month'] / ($r['occupied'] + 1);
+                                        $label .= " (Avail: $avail | ₱" . number_format($r['price_per_month']) . "/room, ₱" . number_format($share, 2) . " each)";
                                     }
                                 ?>
                                 <option value="<?= $r['id'] ?>" <?= $isFull ? 'disabled' : '' ?>><?= $label ?></option>
@@ -370,7 +372,10 @@ function roomOptions(array $rooms): string {
     foreach ($rooms as $r) {
         $isFull = $r['occupied'] >= $r['capacity'];
         $avail = max(0, $r['capacity'] - $r['occupied']);
-        $label = 'Room ' . htmlspecialchars($r['room_number']) . ($isFull ? ' - FULL' : " (Avail: $avail | ₱" . number_format($r['price_per_month']) . "/tenant)");
+        // Adding this tenant makes one more person to split the room price between.
+        $share = $r['price_per_month'] / ($r['occupied'] + 1);
+        $label = 'Room ' . htmlspecialchars($r['room_number'])
+               . ($isFull ? ' - FULL' : " (Avail: $avail | ₱" . number_format($r['price_per_month']) . "/room, ₱" . number_format($share, 2) . " each)");
         $html .= '<option value="' . (int)$r['id'] . '" data-full="' . ($isFull ? 1 : 0) . '"' . ($isFull ? ' disabled' : '') . '>' . $label . '</option>';
     }
     return $html;

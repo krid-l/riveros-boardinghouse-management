@@ -87,7 +87,7 @@ $recentPayments = $pdo->query("
 // Monthly Revenue Data for Charts (PostgreSQL)
 // Latest 6 months of revenue, shown oldest to newest
 $monthlyRevData = array_reverse($pdo->query("
-    SELECT TO_CHAR(payment_date, 'Mon') as month_name,
+    SELECT " . sqlMonthName('payment_date') . " as month_name,
            EXTRACT(MONTH FROM payment_date) as month_num,
            EXTRACT(YEAR FROM payment_date) as year_num,
            SUM(amount) as total

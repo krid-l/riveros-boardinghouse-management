@@ -61,16 +61,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $subtract->execute([$payerShare, $payment['tenant_id']]);
 
             $payMethodStr = 'Covered by ' . $payment['first_name'];
-            $ins = $pdo->prepare("INSERT INTO payments (tenant_id, amount, payment_date, reference_number, screenshot_path, payment_method, status, pay_for_room, covered_by_payment_id)
-                                  VALUES (?, ?, ?, ?, ?, ?, 'verified', false, ?) RETURNING id");
+            $insCoveredSql = "INSERT INTO payments (tenant_id, amount, payment_date, reference_number, screenshot_path, payment_method, status, pay_for_room, covered_by_payment_id)
+                              VALUES (?, ?, ?, ?, ?, ?, 'verified', ?, ?)";
             foreach ($boardmateShares as $s) {
                 $bm = $s['bm'];
                 $subtract->execute([$s['share'], $bm['id']]);
 
                 // Record of the covered share for the boardmate's portal. Linked to the real payment,
                 // so it isn't counted as extra revenue.
-                $ins->execute([$bm['id'], $s['share'], $payment['payment_date'], $payment['reference_number'], $payment['screenshot_path'], $payMethodStr, $paymentId]);
-                $newPaymentId = $ins->fetchColumn();
+                $newPaymentId = insertReturningId($pdo, $insCoveredSql, [
+                    $bm['id'], $s['share'], $payment['payment_date'], $payment['reference_number'],
+                    $payment['screenshot_path'], $payMethodStr, dbBool(false), $paymentId
+                ]);
 
                 $bmFullName = $bm['first_name'] . ' ' . $bm['last_name'];
                 $proxyReceiptPath = generateReceipt($newPaymentId, $bmFullName, $s['share'], $payment['payment_date'], $payment['reference_number'], $payMethodStr);

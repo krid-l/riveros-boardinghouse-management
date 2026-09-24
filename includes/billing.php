@@ -7,9 +7,16 @@
 //    It is due on the 30th of the move-in month (or the move-in day itself if they move in on the 31st).
 //  - Every month after that is full rent, charged on the 1st and due on the 30th.
 //  - A room change takes effect on the next month's charge.
+//  - rooms.price_per_month is the price of the WHOLE room. The tenants living in that room
+//    split it equally, so each one is charged price_per_month / (active tenants in the room).
+//    A room at PHP 8,000 with 4 tenants bills PHP 2,000 each; with 2 tenants, PHP 4,000 each.
+//    The split is worked out when the month's rent is posted, so a roommate moving in or out
+//    changes everyone's share from the following month onwards, not retroactively.
 //
 // tenants.balance is the running total (charges minus payments). Every rent charge is also
 // recorded in the charges table, so the ledger can always be rebuilt and checked against it.
+
+require_once __DIR__ . '/sql_compat.php';
 
 const BILLING_DUE_DAY = 30;
 const HALF_MONTH_CUTOFF_DAY = 15;
@@ -29,6 +36,19 @@ function isHalfMonthMoveIn(string $moveInDate): bool {
 
 function firstMonthRent(float $rent, string $moveInDate): float {
     return isHalfMonthMoveIn($moveInDate) ? round($rent / 2, 2) : $rent;
+}
+
+// How many active tenants share a room right now.
+function roomOccupantCount(PDO $pdo, int $roomId): int {
+    $stmt = $pdo->prepare("SELECT COUNT(*) FROM tenants WHERE room_id = ? AND status = 'active'");
+    $stmt->execute([$roomId]);
+    return (int)$stmt->fetchColumn();
+}
+
+// One tenant's share of a room's monthly price. An empty room falls back to the full price,
+// so the first tenant to move in is never charged a division by zero.
+function rentShare(float $roomPrice, int $occupants): float {
+    return round($roomPrice / max(1, $occupants), 2);
 }
 
 function firstMonthDueDate(string $moveInDate): string {
@@ -98,7 +118,7 @@ function billTenant(PDO $pdo, int $tenantId, string $today, string $currentMonth
         SELECT t.status, t.room_id, t.move_in_date, t.last_billed_month, r.price_per_month
         FROM tenants t LEFT JOIN rooms r ON r.id = t.room_id
         WHERE t.id = ?
-        FOR UPDATE OF t
+        " . sqlForUpdateOf('t') . "
     ");
     $stmt->execute([$tenantId]);
     $t = $stmt->fetch();
@@ -119,11 +139,16 @@ function billTenant(PDO $pdo, int $tenantId, string $today, string $currentMonth
     $insCharge = $pdo->prepare("
         INSERT INTO charges (tenant_id, room_id, kind, billing_month, description, amount, due_date)
         VALUES (?, ?, 'rent', ?, ?, ?, ?)
-        ON CONFLICT (tenant_id, billing_month, kind) DO NOTHING
+        " . sqlInsertIgnore(['tenant_id', 'billing_month', 'kind'], 'tenant_id') . "
     ");
     $addBalance = $pdo->prepare("UPDATE tenants SET balance = balance + ? WHERE id = ?");
 
-    $rent = (float)($t['price_per_month'] ?? 0);
+    // The room price covers the whole room; this tenant owes their equal share of it.
+    $roomPrice = (float)($t['price_per_month'] ?? 0);
+    $occupants = empty($t['room_id']) ? 0 : roomOccupantCount($pdo, (int)$t['room_id']);
+    $rent = empty($t['room_id']) ? 0.0 : rentShare($roomPrice, $occupants);
+    $shareNote = $occupants > 1 ? " (share of PHP " . number_format($roomPrice, 2) . " room, split $occupants ways)" : '';
+
     for (; $month <= $currentMonth; $month = nextBillingMonth($month)) {
         if (empty($t['room_id']) || $rent <= 0) {
             continue; // no room that month: nothing to charge
@@ -133,11 +158,11 @@ function billTenant(PDO $pdo, int $tenantId, string $today, string $currentMonth
             $amount = firstMonthRent($rent, $t['move_in_date']);
             $due = firstMonthDueDate($t['move_in_date']);
             $desc = "First month rent, $monthName (" . (isHalfMonthMoveIn($t['move_in_date']) ? 'half' : 'full')
-                  . ', moved in ' . date('M j', strtotime($t['move_in_date'])) . ')';
+                  . ', moved in ' . date('M j', strtotime($t['move_in_date'])) . ')' . $shareNote;
         } else {
             $amount = $rent;
             $due = billingDueDate($month);
-            $desc = "Monthly rent, $monthName";
+            $desc = "Monthly rent, $monthName" . $shareNote;
         }
 
         $insCharge->execute([$tenantId, $t['room_id'], $month, $desc, $amount, $due]);

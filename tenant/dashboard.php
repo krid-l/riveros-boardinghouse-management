@@ -1,5 +1,6 @@
 <?php
 require_once 'header.php';
+require_once '../includes/billing.php';
 
 // Fetch specific room info for the tenant
 $room = null;
@@ -11,8 +12,10 @@ if (!empty($currentTenant['room_id'])) {
     ");
     $stmt->execute([$currentTenant['room_id']]);
     $room = $stmt->fetch();
-    $roomOccupants = $room ? $room['occupant_count'] : 0;
+    $roomOccupants = $room ? (int)$room['occupant_count'] : 0;
 }
+// The room price covers the whole room; this tenant pays an equal share of it.
+$myRentShare = $room ? rentShare((float)$room['price_per_month'], $roomOccupants) : 0.0;
 
 // Fetch recent payment history
 $payStmt = $pdo->prepare("SELECT * FROM payments WHERE tenant_id = ? ORDER BY payment_date DESC LIMIT 4");
@@ -25,7 +28,6 @@ $gcashNumber = $settings['gcash_number'] ?? '0917 123 4567';
 $gcashName = $settings['gcash_name'] ?? 'Boarding House';
 
 // Rent is due every 30th (see includes/billing.php)
-require_once '../includes/billing.php';
 $nextDue = nextDueDate($currentTenant);
 $nextDueDate = $nextDue ? date('M d, Y', strtotime($nextDue)) : 'No room assigned';
 $billing = tenantBillingStatus($currentTenant, chargesNotYetDue($pdo, (int)$currentTenant['id']));
@@ -157,7 +159,7 @@ $balance = $currentTenant['balance'] ?? 0;
     <div class="position-relative z-2 mb-3">
         <h1 class="fw-bolder text-white mb-1" style="font-size: 2rem;">Room <?= htmlspecialchars($room['room_number']) ?></h1>
         <div class="text-white-50 fw-semibold" style="font-size: 0.85rem;">
-            <i class="fa-solid fa-money-bill-wave me-1"></i> PHP <?= number_format($room['price_per_month'], 2) ?> / month <span class="text-white-50">(your share)</span>
+            <i class="fa-solid fa-money-bill-wave me-1"></i> PHP <?= number_format($myRentShare, 2) ?> / month <span class="text-white-50">(your share of the PHP <?= number_format($room['price_per_month'], 2) ?> room<?= $roomOccupants > 1 ? ', split ' . $roomOccupants . ' ways' : '' ?>)</span>
         </div>
     </div>
 

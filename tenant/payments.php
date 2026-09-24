@@ -1,11 +1,14 @@
 <?php
 require_once 'header.php';
 require_once '../includes/billing.php';
+require_once '../includes/uploads.php';
 
 // Fetch settings (for GCash)
 $settings = $pdo->query("SELECT setting_key, setting_value FROM settings")->fetchAll(PDO::FETCH_KEY_PAIR);
 $gcashNumber = $settings['gcash_number'] ?? '0917 123 4567';
 $gcashName = $settings['gcash_name'] ?? 'Boarding House';
+// QR code the admin uploaded in Settings -> GCash Payment Information (may not be set).
+$gcashQr = uploadSrc($settings['gcash_qr_path'] ?? '', '../');
 
 $myBalance = round((float)($currentTenant['balance'] ?? 0), 2);
 $myExpected = max($myBalance, 0);
@@ -71,57 +74,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $destPath = null;
     $hasFile = isset($_FILES['screenshot']) && $_FILES['screenshot']['error'] !== UPLOAD_ERR_NO_FILE;
 
+    // Saved to Supabase Storage when the app is deployed, to uploads/payments/ when it is
+    // run locally. The helper also rejects anything that isn't really an image.
     if (empty($error) && $hasFile) {
-        $fileTmpPath = $_FILES['screenshot']['tmp_name'];
-        $mimeType = $_FILES['screenshot']['error'] === UPLOAD_ERR_OK ? mime_content_type($fileTmpPath) : '';
-        $allowed = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/webp' => 'webp', 'image/gif' => 'gif'];
-
-        if (!isset($allowed[$mimeType])) {
-            $error = "The screenshot must be an image (JPG, PNG, WEBP or GIF).";
-        } elseif ($_FILES['screenshot']['size'] > 5 * 1024 * 1024) {
-            $error = "The screenshot must be 5MB or smaller.";
+        $upload = storeUploadedImage($_FILES['screenshot'], 'payments');
+        if ($upload['error']) {
+            $error = $upload['error'];
         } else {
-            // Name the file ourselves (never trust the uploaded name/extension)
-            $fileName = time() . '_' . bin2hex(random_bytes(4)) . '.' . $allowed[$mimeType];
-
-            // Use env variable if available, otherwise fallback to the known project URL
-            $supabaseUrl = getenv('SUPABASE_URL') ?: 'https://edswwvalfxehdklaackx.supabase.co';
-            $supabaseKey = getenv('SUPABASE_SERVICE_KEY');
-
-            if ($supabaseUrl && $supabaseKey) {
-                // Upload to Supabase Storage
-                $bucketName = 'payments';
-                $fileData = file_get_contents($fileTmpPath);
-
-                $ch = curl_init();
-                curl_setopt($ch, CURLOPT_URL, "$supabaseUrl/storage/v1/object/$bucketName/$fileName");
-                curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-                curl_setopt($ch, CURLOPT_POST, true);
-                curl_setopt($ch, CURLOPT_POSTFIELDS, $fileData);
-                curl_setopt($ch, CURLOPT_HTTPHEADER, [
-                    "Authorization: Bearer $supabaseKey",
-                    "Content-Type: $mimeType"
-                ]);
-
-                $response = curl_exec($ch);
-                $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-                curl_close($ch);
-
-                if ($httpCode == 200) {
-                    // If the bucket is public, the URL will be accessible directly
-                    $destPath = "$supabaseUrl/storage/v1/object/public/$bucketName/$fileName";
-                } else {
-                    $error = "Failed to upload image to Supabase. Please try again.";
-                }
-            } else {
-                // Fallback to local storage if Supabase is not configured
-                $uploadDir = __DIR__ . '/../uploads/payments/';
-                if (!is_dir($uploadDir)) mkdir($uploadDir, 0755, true);
-
-                if (move_uploaded_file($fileTmpPath, $uploadDir . $fileName)) {
-                    $destPath = 'uploads/payments/' . $fileName;
-                }
-            }
+            $destPath = $upload['path'];
         }
     }
 
@@ -130,7 +90,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $error = "Please upload a GCash screenshot.";
         } else {
             $stmt = $pdo->prepare("INSERT INTO payments (tenant_id, amount, payment_date, reference_number, screenshot_path, payment_method, pay_for_room) VALUES (?, ?, ?, ?, ?, ?, ?)");
-            $stmt->execute([$currentTenant['id'], $amount, $payment_date, $reference_number, $destPath, $payment_method, $payForRoom ? 'true' : 'false']);
+            $stmt->execute([$currentTenant['id'], $amount, $payment_date, $reference_number, $destPath, $payment_method, dbBool($payForRoom)]);
             $success = "Payment submitted successfully. Awaiting Admin verification.";
             $hasPending = true;
         }
@@ -146,7 +106,11 @@ $payments = $stmt->fetchAll();
 <style>
 /* Custom Styles for Payment Screen */
 .payment-container { max-width: 550px; margin: 0 auto; padding-bottom: 3rem; }
-.gcash-card { background: #f0f7ff; border-radius: 16px; padding: 1.25rem; display: flex; justify-content: space-between; align-items: stretch; margin-bottom: 0.5rem; }
+.gcash-card { background: #f0f7ff; border-radius: 16px; padding: 1.25rem; display: flex; justify-content: space-between; align-items: stretch; gap: 1rem; margin-bottom: 0.5rem; }
+@media (max-width: 575.98px) {
+    .gcash-card { flex-direction: column; align-items: flex-start; }
+    .gcash-qr-col { align-self: center; }
+}
 .qr-box { background: #fff; padding: 6px; border-radius: 8px; border: 1px solid #e2e8f0; display:flex; align-items:center; justify-content:center; }
 .info-text { color: #475569; font-size: 0.75rem; text-align: center; margin-bottom: 1.5rem; display: flex; align-items: center; justify-content: center; gap: 8px; }
 
@@ -240,12 +204,19 @@ $payments = $stmt->fetchAll();
                             <div class="text-muted" style="font-size: 0.7rem;">Account Name</div>
                         </div>
                     </div>
-                    <div class="text-center d-none d-sm-block">
+                    <div class="text-center gcash-qr-col">
                         <div class="fw-bold text-dark mb-1" style="font-size: 0.7rem;">Scan to Pay</div>
                         <div class="qr-box shadow-sm">
-                            <div class="bg-dark rounded d-flex align-items-center justify-content-center" style="width: 70px; height: 70px;">
-                                <i class="fa-solid fa-qrcode text-white fa-2x"></i>
-                            </div>
+                            <?php if ($gcashQr): ?>
+                                <a href="<?= htmlspecialchars($gcashQr) ?>" target="_blank" rel="noopener" title="Open the QR code full size">
+                                    <img src="<?= htmlspecialchars($gcashQr) ?>" alt="GCash QR code for <?= htmlspecialchars($gcashName) ?>" class="rounded" style="width: 70px; height: 70px; object-fit: contain;">
+                                </a>
+                            <?php else: ?>
+                                <div class="bg-light border rounded d-flex flex-column align-items-center justify-content-center text-muted" style="width: 70px; height: 70px;">
+                                    <i class="fa-solid fa-qrcode fa-lg opacity-50"></i>
+                                    <span style="font-size: 0.5rem; line-height: 1.1;" class="mt-1 text-center">No QR yet</span>
+                                </div>
+                            <?php endif; ?>
                         </div>
                     </div>
                 </div>

@@ -52,7 +52,13 @@ $totalCharges = array_sum(array_map(fn($c) => (float)$c['amount'], $charges));
 $totalPayments = array_sum(array_map(fn($c) => (float)$c['credited'], $credits));
 
 // Calculated fields for UI
-$monthlyRent = $tenant['price_per_month'] ?? 0;
+// rooms.price_per_month is the price of the whole room; this tenant pays an equal share of it.
+$roomPrice = (float)($tenant['price_per_month'] ?? 0);
+$roomOccupants = $tenant['room_id'] ? roomOccupantCount($pdo, (int)$tenant['room_id']) : 0;
+$monthlyRent = $tenant['room_id'] ? rentShare($roomPrice, $roomOccupants) : 0.0;
+$rentSplitNote = $roomOccupants > 1
+    ? 'Share of the ₱' . number_format($roomPrice, 2) . ' room, split ' . $roomOccupants . ' ways'
+    : '';
 $currentBalance = round((float)($tenant['balance'] ?? 0), 2);
 $ledgerBalance = round($totalCharges - $totalPayments, 2);
 $ledgerMismatch = abs($ledgerBalance - $currentBalance) >= 0.01;
@@ -199,7 +205,9 @@ require_once 'header.php';
                     <?php endif; ?>
                     <div class="d-flex justify-content-between">
                         <span class="text-muted">Monthly Rent</span>
-                        <span class="fw-bold text-dark">₱<?= number_format($monthlyRent, 2) ?></span>
+                        <span class="fw-bold text-dark text-end">₱<?= number_format($monthlyRent, 2) ?>
+                            <?php if ($rentSplitNote): ?><br><span class="text-muted fw-normal" style="font-size:0.7rem;"><?= $rentSplitNote ?></span><?php endif; ?>
+                        </span>
                     </div>
                 </div>
             </div>
@@ -298,7 +306,7 @@ require_once 'header.php';
             <div class="info-grid">
                 <span class="info-label">Room Number</span><span class="info-value"><?= $tenant['room_number'] ? 'Room ' . htmlspecialchars($tenant['room_number']) : 'N/A' ?></span>
                 <span class="info-label">Room Type</span><span class="info-value">Standard</span>
-                <span class="info-label">Monthly Rent</span><span class="info-value">₱<?= number_format($monthlyRent, 2) ?></span>
+                <span class="info-label">Monthly Rent</span><span class="info-value">₱<?= number_format($monthlyRent, 2) ?><?= $rentSplitNote ? ' <span class="text-muted fw-normal" style="font-size:0.7rem;">(' . $rentSplitNote . ')</span>' : '' ?></span>
                 <span class="info-label">Rent Due</span><span class="info-value">Every 30th of the month</span>
                 <span class="info-label">Status</span>
                 <span class="info-value">
