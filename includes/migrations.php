@@ -8,7 +8,7 @@
 require_once __DIR__ . '/billing.php';
 require_once __DIR__ . '/sql_compat.php';
 
-const SCHEMA_VERSION = '2';
+const SCHEMA_VERSION = '3';
 
 function runMigrations(PDO $pdo): void {
     try {
@@ -34,6 +34,7 @@ function runMigrations(PDO $pdo): void {
 
         migrateBaseSchema($pdo);
         migrateToV2($pdo);
+        migrateToV3($pdo);
 
         $pdo->prepare("INSERT INTO settings (setting_key, setting_value) VALUES ('schema_version', ?)
                        " . sqlUpsert(['setting_key'], ['setting_value']))
@@ -71,6 +72,34 @@ function migrateBaseSchema(PDO $pdo): void {
         message TEXT NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )");
+}
+
+// v3: repair rent shares that were posted before rooms were split equally.
+//
+// A room's price is shared by everyone living in it, but the share used to be worked out from
+// the occupant count at the moment each tenant was billed, and posted charges were never
+// revisited. A tenant billed while alone in the room was charged for the whole room and stayed
+// that way after someone moved in beside them, so two tenants of the same room could owe
+// different amounts for the same month.
+//
+// The fix corrects shares whenever occupancy changes, but that only helps from the next change
+// onwards; rows already posted stay wrong until something touches them. This pass repairs them
+// once, so the correction reaches databases that were already running.
+function migrateToV3(PDO $pdo): void {
+    // Per room, redo the months from the most recent arrival onwards - that is the first month
+    // their arrival affected. Earlier months were split correctly for who lived there at the
+    // time, and rewriting them would cut bills that have been owed since before this change.
+    $rooms = $pdo->query("
+        SELECT room_id, MAX(move_in_date) AS last_move_in
+        FROM tenants
+        WHERE status = 'active' AND room_id IS NOT NULL AND move_in_date IS NOT NULL
+        GROUP BY room_id
+        HAVING COUNT(*) > 1
+    ")->fetchAll();
+
+    foreach ($rooms as $r) {
+        resplitRoomRent($pdo, (int)$r['room_id'], date('Y-m', strtotime($r['last_move_in'])));
+    }
 }
 
 // v2: tenant status / move-in date, rent charges ledger, room transfer history,

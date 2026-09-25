@@ -97,6 +97,18 @@ open <http://localhost/riveros-boardinghouse-management/info.php>. Delete it aft
 * **SMS stays off locally** unless you put a real API key in Settings → SMS API Integration.
   Without one, notifications are skipped and the rest of the flow carries on working.
 
+## Clearing out test data
+
+Once you have been clicking around, `database/reset_data.sql` empties the tenants, rooms,
+payments, charges and complaints while leaving the tables, the admin account and everything on
+the Settings page alone:
+
+* phpMyAdmin: pick the `boardinghouse` database, open the **SQL** tab, paste the file, press Go.
+* Command line: `mysql -u root boardinghouse < database/reset_data.sql`
+
+To wipe everything instead, including the admin account and settings, drop the database and
+import `database/schema_mysql.sql` again.
+
 ## Connecting to the live Supabase database instead
 
 Set `db_driver` to `pgsql` in `config.php` and fill in the Supabase host, port, database,
