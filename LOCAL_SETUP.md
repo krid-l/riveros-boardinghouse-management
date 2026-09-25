@@ -64,6 +64,17 @@ saved into the project's `uploads/` folder instead of cloud storage.
 
 ## 4. Open it
 
+Double-click **`start-local.bat`** in the project folder. It starts WampServer if it isn't
+already running and opens the site in your browser, working out the address from the folder
+name. You can also run it from a terminal:
+
+```
+.\start-local.bat
+```
+
+Or do it by hand: left-click the WampServer tray icon, pick **Your Projects**, and click the
+project. Or go straight to the address:
+
 <http://localhost/riveros-boardinghouse-management/>
 
 Log in with the default administrator account:
