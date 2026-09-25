@@ -10,8 +10,9 @@
 //  - rooms.price_per_month is the price of the WHOLE room. The tenants living in that room
 //    split it equally, so each one is charged price_per_month / (active tenants in the room).
 //    A room at PHP 8,000 with 4 tenants bills PHP 2,000 each; with 2 tenants, PHP 4,000 each.
-//    The split is worked out when the month's rent is posted, so a roommate moving in or out
-//    changes everyone's share from the following month onwards, not retroactively.
+//    When someone moves in or out, the current month's shares are recomputed for everyone
+//    still in that room, so two tenants of the same room are never charged different amounts
+//    for the same month. Months whose bills already came due are left as they were.
 //
 // tenants.balance is the running total (charges minus payments). Every rent charge is also
 // recorded in the charges table, so the ledger can always be rebuilt and checked against it.
@@ -105,11 +106,18 @@ function runBilling(PDO $pdo, ?int $onlyTenantId = null): void {
     $stmt = $pdo->prepare($sql);
     $stmt->execute($params);
 
+    $billedRooms = [];
     foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $tenantId) {
         $ownTransaction = !$pdo->inTransaction();
         try {
             if ($ownTransaction) $pdo->beginTransaction();
-            billTenant($pdo, (int)$tenantId, $today, $currentMonth);
+            $billed = billTenant($pdo, (int)$tenantId, $today, $currentMonth);
+            if ($billed) {
+                $roomId = $billed['room_id'];
+                $billedRooms[$roomId] = isset($billedRooms[$roomId])
+                    ? min($billedRooms[$roomId], $billed['from_month'])
+                    : $billed['from_month'];
+            }
             if ($ownTransaction) $pdo->commit();
         } catch (Exception $e) {
             if ($ownTransaction && $pdo->inTransaction()) $pdo->rollBack();
@@ -117,9 +125,23 @@ function runBilling(PDO $pdo, ?int $onlyTenantId = null): void {
             if (!$ownTransaction) throw $e;
         }
     }
+
+    // A tenant billed just now changes what their roommates owe for the same month.
+    foreach ($billedRooms as $roomId => $fromMonth) {
+        $ownTransaction = !$pdo->inTransaction();
+        try {
+            if ($ownTransaction) $pdo->beginTransaction();
+            resplitRoomRent($pdo, (int)$roomId, $fromMonth);
+            if ($ownTransaction) $pdo->commit();
+        } catch (Exception $e) {
+            if ($ownTransaction && $pdo->inTransaction()) $pdo->rollBack();
+            error_log("Rent re-split error for room $roomId: " . $e->getMessage());
+            if (!$ownTransaction) throw $e;
+        }
+    }
 }
 
-function billTenant(PDO $pdo, int $tenantId, string $today, string $currentMonth): void {
+function billTenant(PDO $pdo, int $tenantId, string $today, string $currentMonth): ?array {
     $stmt = $pdo->prepare("
         SELECT t.status, t.room_id, t.move_in_date, t.last_billed_month, r.price_per_month
         FROM tenants t LEFT JOIN rooms r ON r.id = t.room_id
@@ -129,10 +151,10 @@ function billTenant(PDO $pdo, int $tenantId, string $today, string $currentMonth
     $stmt->execute([$tenantId]);
     $t = $stmt->fetch();
     if (!$t || $t['status'] !== 'active' || !$t['move_in_date'] || $t['move_in_date'] > $today) {
-        return;
+        return null;
     }
     if ($t['last_billed_month'] !== null && $t['last_billed_month'] >= $currentMonth) {
-        return; // another request billed this tenant while we waited for the lock
+        return null; // another request billed this tenant while we waited for the lock
     }
 
     $moveInMonth = date('Y-m', strtotime($t['move_in_date']));
@@ -153,6 +175,7 @@ function billTenant(PDO $pdo, int $tenantId, string $today, string $currentMonth
     $roomPrice = (float)($t['price_per_month'] ?? 0);
     $occupants = empty($t['room_id']) ? 0 : roomOccupantCount($pdo, (int)$t['room_id']);
     $rent = empty($t['room_id']) ? 0.0 : rentShare($roomPrice, $occupants);
+    $firstMonthPosted = null;
     $shareNote = $occupants > 1 ? " (share of PHP " . number_format($roomPrice, 2) . " room, split $occupants ways)" : '';
 
     for (; $month <= $currentMonth; $month = nextBillingMonth($month)) {
@@ -174,10 +197,85 @@ function billTenant(PDO $pdo, int $tenantId, string $today, string $currentMonth
         $insCharge->execute([$tenantId, $t['room_id'], $month, $desc, $amount, $due]);
         if ($insCharge->rowCount() === 1) {
             $addBalance->execute([$amount, $tenantId]);
+            $firstMonthPosted = $firstMonthPosted ?? $month;
         }
     }
 
     $pdo->prepare("UPDATE tenants SET last_billed_month = ? WHERE id = ?")->execute([$currentMonth, $tenantId]);
+
+    if (empty($t['room_id']) || $firstMonthPosted === null) {
+        return null;
+    }
+    return ['room_id' => (int)$t['room_id'], 'from_month' => $firstMonthPosted];
+}
+
+/**
+ * Re-split a room's rent across everyone living in it now, for the months a change affects.
+ *
+ * price_per_month is the price of the whole room, so what a tenant owes depends on how many
+ * people share it. A charge posted while the room held one tenant is stale the moment a second
+ * moves in: the first was billed for the whole room. This recomputes the posted rent charges
+ * and moves the balances by the difference, so two tenants of the same room are never charged
+ * different amounts for the same month.
+ *
+ * $fromMonth bounds how far back to go and must be the first month the change affects - the
+ * arriving tenant's move-in month, or the current month for a departure. Going back further
+ * would rewrite months that were correctly split at the time, cutting the bills of tenants who
+ * have owed that money since before this change.
+ */
+function resplitRoomRent(PDO $pdo, ?int $roomId, ?string $fromMonth = null): void {
+    if (!$roomId) return;
+
+    $currentMonth = date('Y-m');
+    $month = $fromMonth ?: $currentMonth;
+    if ($month > $currentMonth) return;
+
+    $stmt = $pdo->prepare("SELECT price_per_month FROM rooms WHERE id = ?");
+    $stmt->execute([$roomId]);
+    $roomPrice = $stmt->fetchColumn();
+    if ($roomPrice === false) return;
+
+    $stmt = $pdo->prepare("SELECT id, move_in_date FROM tenants WHERE room_id = ? AND status = 'active' ORDER BY id");
+    $stmt->execute([$roomId]);
+    $occupants = $stmt->fetchAll();
+    if (!$occupants) return;
+
+    $share = rentShare((float)$roomPrice, count($occupants));
+    $shareNote = count($occupants) > 1
+        ? ' (share of PHP ' . number_format((float)$roomPrice, 2) . ' room, split ' . count($occupants) . ' ways)'
+        : '';
+
+    $findCharge = $pdo->prepare("SELECT id, amount FROM charges WHERE tenant_id = ? AND billing_month = ? AND kind = 'rent'");
+    $updCharge = $pdo->prepare("UPDATE charges SET room_id = ?, amount = ?, description = ? WHERE id = ?");
+    $addBalance = $pdo->prepare("UPDATE tenants SET balance = balance + ? WHERE id = ?");
+
+    for (; $month <= $currentMonth; $month = nextBillingMonth($month)) {
+        $monthName = date('F Y', strtotime($month . '-01'));
+
+        foreach ($occupants as $o) {
+            $findCharge->execute([$o['id'], $month]);
+            $charge = $findCharge->fetch();
+            if (!$charge) continue;   // nothing posted for this tenant that month
+
+            // Someone who moved in during the month keeps their full/half first-month
+            // treatment, applied to the new share.
+            $movedInThisMonth = $o['move_in_date'] && date('Y-m', strtotime($o['move_in_date'])) === $month;
+            if ($movedInThisMonth) {
+                $amount = firstMonthRent($share, $o['move_in_date']);
+                $desc = "First month rent, $monthName (" . (isHalfMonthMoveIn($o['move_in_date']) ? 'half' : 'full')
+                      . ', moved in ' . date('M j', strtotime($o['move_in_date'])) . ')' . $shareNote;
+            } else {
+                $amount = $share;
+                $desc = "Monthly rent, $monthName" . $shareNote;
+            }
+
+            $delta = round($amount - (float)$charge['amount'], 2);
+            $updCharge->execute([$roomId, $amount, $desc, $charge['id']]);
+            if (abs($delta) >= 0.01) {
+                $addBalance->execute([$delta, $o['id']]);
+            }
+        }
+    }
 }
 
 /**

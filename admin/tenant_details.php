@@ -109,8 +109,11 @@ require_once 'header.php';
     
     /* Top Profile Card */
     .profile-card { border-radius: 12px; border: 1px solid #f1f5f9; }
-    .avatar-wrapper { position: relative; width: 80px; height: 80px; }
-    .avatar-wrapper img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
+    .avatar-wrapper { position: relative; width: 80px; height: 80px; flex: 0 0 80px; }
+    /* Fits either an uploaded photo or the initials placeholder to the wrapper. */
+    .avatar-wrapper img, .avatar-wrapper .avatar-initials {
+        width: 100% !important; height: 100% !important; object-fit: cover; border-radius: 50%;
+    }
     .status-badge-overlap {
         position: absolute; bottom: -8px; left: 50%; transform: translateX(-50%);
         font-size: 0.6rem; padding: 2px 10px; border: 2px solid white;
@@ -173,14 +176,13 @@ require_once 'header.php';
             <!-- Left: Avatar & Contact -->
             <div class="col-md-4 d-flex align-items-center border-end border-light">
                 <div class="avatar-wrapper me-3">
-                    <?= avatarHtml($tenant['first_name'] . ' ' . $tenant['last_name'], 128, '', $tenant['profile_picture'] ?? null, '../') ?>
+                    <?= avatarHtml($tenant['first_name'] . ' ' . $tenant['last_name'], 80, '', $tenant['profile_picture'] ?? null, '../') ?>
                     <span class="badge bg-<?= $billing['color'] ?>-subtle text-<?= $billing['color'] ?> rounded-pill status-badge-overlap"><?= $billing['label'] ?></span>
                 </div>
                 <div>
                     <h5 class="fw-bold mb-2 text-dark"><?= htmlspecialchars($tenant['first_name'] . ' ' . $tenant['last_name']) ?></h5>
                     <div class="d-flex flex-column gap-1 text-muted" style="font-size: 0.7rem;">
                         <span><i class="fa-solid fa-phone me-2"></i><?= htmlspecialchars($tenant['contact_number'] ?: 'N/A') ?></span>
-                        <span><i class="fa-solid fa-envelope me-2"></i><?= htmlspecialchars($tenant['username']) ?>@system.local</span>
                         <span><i class="fa-solid fa-user me-2"></i><?= htmlspecialchars($tenant['username']) ?></span>
                     </div>
                 </div>
@@ -291,7 +293,7 @@ require_once 'header.php';
             <div class="info-grid">
                 <span class="info-label">Full Name</span><span class="info-value"><?= htmlspecialchars($tenant['first_name'] . ' ' . $tenant['last_name']) ?></span>
                 <span class="info-label">Contact Number</span><span class="info-value"><?= htmlspecialchars($tenant['contact_number']) ?></span>
-                <span class="info-label">Email</span><span class="info-value text-primary"><?= htmlspecialchars($tenant['username']) ?>@system.local</span>
+                <span class="info-label">Username</span><span class="info-value"><?= htmlspecialchars($tenant['username']) ?></span>
                   <span class="info-label">Temporary Password</span><span class="info-value"><?= !empty($tenant['temp_password']) ? '<span class="badge bg-warning text-dark fw-bold" style="font-family: monospace; font-size:0.7rem;">' . htmlspecialchars($tenant['temp_password']) . '</span>' : '<span class="text-success fst-italic fw-semibold" style="font-size:0.7rem;"><i class="fa-solid fa-check"></i> Changed by tenant</span>' ?></span>
                 <span class="info-label">Occupation</span><span class="info-value"><?= !empty($tenant['occupation']) ? htmlspecialchars($tenant['occupation']) : '<span class="text-black-50 fst-italic">Not provided</span>' ?></span>
                 <span class="info-label">Emergency Contact</span><span class="info-value"><?= !empty($tenant['emergency_contact']) ? htmlspecialchars($tenant['emergency_contact']) : '<span class="text-black-50 fst-italic">Not provided</span>' ?></span>
