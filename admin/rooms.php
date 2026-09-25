@@ -71,7 +71,7 @@ $rooms = $roomsStmt->fetchAll();
 
 // Fetch all assigned tenants
 $tenantsByRoom = [];
-$tenantsStmt = $pdo->query("SELECT t.id, t.first_name, t.last_name, t.room_id, t.balance, t.move_in_date,
+$tenantsStmt = $pdo->query("SELECT t.id, t.first_name, t.last_name, t.room_id, t.balance, t.move_in_date, t.profile_picture,
     COALESCE(t.move_in_date, " . sqlToDate('u.created_at') . ") AS created_at
     FROM tenants t JOIN users u ON t.user_id = u.id
     WHERE t.room_id IS NOT NULL AND t.status = 'active'
@@ -415,7 +415,7 @@ require_once 'header.php';
                     ?>
                         <div class="d-flex align-items-center justify-content-between p-1 mb-1 tenant-item rounded" data-tenant="<?= $tData ?>">
                             <div class="d-flex align-items-center">
-                                <?= avatarHtml($t['first_name'] . ' ' . $t['last_name'], 30, 'me-2 shadow-sm') ?>
+                                <?= avatarHtml($t['first_name'] . ' ' . $t['last_name'], 30, 'me-2 shadow-sm', $t['profile_picture'] ?? null, '../') ?>
                                 <div>
                                     <h6 class="mb-0 fw-bold text-dark" style="font-size: 0.75rem; line-height:1.2;"><?= htmlspecialchars($t['first_name'] . ' ' . $t['last_name']) ?></h6>
                                     <small class="text-muted" style="font-size: 0.65rem;">Since <?= date('M j, Y', strtotime($t['created_at'])) ?></small>

@@ -195,7 +195,7 @@ $countStmt->execute($params);
 $pager = paginate((int)$countStmt->fetchColumn(), 10);
 
 $paymentsStmt = $pdo->prepare("
-    SELECT p.*, t.first_name, t.last_name, t.contact_number, r.room_number
+    SELECT p.*, t.first_name, t.last_name, t.contact_number, t.profile_picture, r.room_number
     FROM payments p
     JOIN tenants t ON p.tenant_id = t.id
     LEFT JOIN rooms r ON t.room_id = r.id
@@ -420,7 +420,7 @@ require_once 'header.php';
                             </td>
                             <td>
                                 <div class="d-flex align-items-center">
-                                    <?= avatarHtml($p['first_name'] . ' ' . $p['last_name'], 22, 'me-2 shadow-sm') ?>
+                                    <?= avatarHtml($p['first_name'] . ' ' . $p['last_name'], 22, 'me-2 shadow-sm', $p['profile_picture'] ?? null, '../') ?>
                                     <div>
                                         <div class="fw-bold text-dark" style="font-size:0.65rem; line-height:1.1;"><?= htmlspecialchars($p['first_name'].' '.$p['last_name']) ?></div>
                                         <div class="text-muted" style="font-size:0.55rem;"><?= htmlspecialchars($p['contact_number']) ?></div>

@@ -71,7 +71,7 @@ $countStmt->execute($params);
 $pager = paginate((int)$countStmt->fetchColumn(), 10);
 
 $stmt = $pdo->prepare("
-    SELECT c.*, t.first_name, t.last_name, r.room_number
+    SELECT c.*, t.first_name, t.last_name, t.profile_picture, r.room_number
     FROM complaints c
     JOIN tenants t ON c.tenant_id = t.id
     LEFT JOIN rooms r ON t.room_id = r.id
@@ -96,7 +96,7 @@ foreach ($complaints as $c) {
 
 // The "Recent" panel always shows the three newest complaints, whatever the list is filtered to.
 $recentComplaints = $pdo->query("
-    SELECT c.*, t.first_name, t.last_name, r.room_number
+    SELECT c.*, t.first_name, t.last_name, t.profile_picture, r.room_number
     FROM complaints c
     JOIN tenants t ON c.tenant_id = t.id
     LEFT JOIN rooms r ON t.room_id = r.id
@@ -284,7 +284,7 @@ require_once 'header.php';
                             </td>
                             <td>
                                 <div class="d-flex align-items-center">
-                                    <?= avatarHtml($c['first_name'] . ' ' . $c['last_name'], 22, 'me-2 shadow-sm') ?>
+                                    <?= avatarHtml($c['first_name'] . ' ' . $c['last_name'], 22, 'me-2 shadow-sm', $c['profile_picture'] ?? null, '../') ?>
                                     <div>
                                         <div class="fw-bold text-dark" style="font-size:0.65rem; line-height:1.1;"><?= htmlspecialchars($c['first_name'].' '.$c['last_name']) ?></div>
                                         <div class="text-muted" style="font-size:0.55rem;">Room <?= htmlspecialchars($c['room_number'] ?? 'N/A') ?></div>

@@ -395,7 +395,7 @@ require_once 'header.php';
                         <tr class="tenant-row <?= $isDeactivated ? 'opacity-75' : '' ?>" data-status="<?= $bs['key'] ?>" data-search="<?= htmlspecialchars(strtolower($t['first_name'].' '.$t['last_name'].' '.$t['username'])) ?>">
                             <td class="ps-4">
                                 <div class="d-flex align-items-center">
-                                    <?= avatarHtml($t['first_name'] . ' ' . $t['last_name'], 28, 'me-2') ?>
+                                    <?= avatarHtml($t['first_name'] . ' ' . $t['last_name'], 28, 'me-2', $t['profile_picture'] ?? null, '../') ?>
                                     <span class="fw-bold text-dark text-truncate" style="max-width:130px;"><?= htmlspecialchars($t['first_name'].' '.$t['last_name']) ?></span>
                                 </div>
                             </td>

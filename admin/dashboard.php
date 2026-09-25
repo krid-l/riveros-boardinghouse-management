@@ -76,7 +76,7 @@ $roomsWithSpaceCount = $availableRooms + $partialRooms;
 
 // Fetch recent payments (verified or not)
 $recentPayments = $pdo->query("
-    SELECT p.*, t.first_name, t.last_name, r.room_number
+    SELECT p.*, t.first_name, t.last_name, t.profile_picture, r.room_number
     FROM payments p
     JOIN tenants t ON p.tenant_id = t.id
     LEFT JOIN rooms r ON t.room_id = r.id
@@ -408,7 +408,7 @@ require_once 'header.php';
                             <tr>
                                 <td class="ps-3">
                                     <div class="d-flex align-items-center">
-                                        <?= avatarHtml($p['first_name'] . ' ' . $p['last_name'], 20, 'me-2 shadow-sm') ?>
+                                        <?= avatarHtml($p['first_name'] . ' ' . $p['last_name'], 20, 'me-2 shadow-sm', $p['profile_picture'] ?? null, '../') ?>
                                         <span class="fw-semibold text-dark text-truncate d-inline-block" style="max-width:70px; font-size: 0.75rem;"><?= htmlspecialchars($p['first_name'].' '.$p['last_name']) ?></span>
                                     </div>
                                 </td>
