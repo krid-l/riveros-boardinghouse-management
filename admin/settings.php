@@ -210,7 +210,7 @@ require_once 'header.php';
                             </div>
                             <div class="mb-3">
                                 <label class="form-label">Username</label>
-                                <input type="text" class="form-control" value="<?= htmlspecialchars($user['username']) ?>" disabled>
+                                <input type="text" class="form-control" value="<?= htmlspecialchars($user['username'] ?? '') ?>" disabled>
                                 <div class="form-text">Username cannot be changed.</div>
                             </div>
                             <div>

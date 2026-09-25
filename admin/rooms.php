@@ -62,8 +62,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     header("Location: $back&" . ($error ? 'err=' . urlencode($error) : 'msg=' . urlencode(strip_tags($success))));
     exit;
 }
-if (!empty($_GET['msg'])) $success = htmlspecialchars($_GET['msg']);
-if (!empty($_GET['err'])) $error = htmlspecialchars($_GET['err']);
+if (!empty($_GET['msg'])) $success = htmlspecialchars($_GET['msg'] ?? '');
+if (!empty($_GET['err'])) $error = htmlspecialchars($_GET['err'] ?? '');
 
 // Fetch all rooms
 $roomsStmt = $pdo->query("SELECT * FROM rooms ORDER BY room_number ASC");
@@ -266,7 +266,7 @@ require_once 'header.php';
                         $badgeText = 'Available';
                     }
                 ?>
-                <div class="col-md-6 col-xxl-4 room-grid-item" data-status="<?= htmlspecialchars($r['status']) ?>" data-search="<?= strtolower($r['room_number']) ?>">
+                <div class="col-md-6 col-xxl-4 room-grid-item" data-status="<?= htmlspecialchars($r['status'] ?? '') ?>" data-search="<?= strtolower($r['room_number']) ?>">
                     <div class="card h-100 shadow-sm room-card <?= ($selectedRoom ? $selectedRoom === (int)$r['id'] : $index === 0) ? 'active' : '' ?>" id="card-<?= $r['id'] ?>" onclick="selectRoom(<?= $r['id'] ?>)">
                         <div class="card-body p-3 d-flex flex-column">
                             <div class="d-flex justify-content-between align-items-start mb-3">
@@ -274,12 +274,12 @@ require_once 'header.php';
                                     <div class="bg-primary bg-opacity-10 text-primary rounded d-flex justify-content-center align-items-center me-2" style="width: 32px; height: 32px;">
                                         <i class="fa-solid fa-door-open"></i>
                                     </div>
-                                    <h6 class="fw-bold mb-0 text-dark">Room <?= htmlspecialchars($r['room_number']) ?></h6>
+                                    <h6 class="fw-bold mb-0 text-dark">Room <?= htmlspecialchars($r['room_number'] ?? '') ?></h6>
                                 </div>
                                 <span class="badge <?= $badgeClass ?>" style="font-size: 0.65rem;"><?= $badgeText ?></span>
                             </div>
                             
-                            <p class="text-muted mb-1" style="font-size: 0.8rem;">Capacity: <?= htmlspecialchars($r['capacity']) ?></p>
+                            <p class="text-muted mb-1" style="font-size: 0.8rem;">Capacity: <?= htmlspecialchars($r['capacity'] ?? '') ?></p>
                             <p class="fw-bold text-dark mb-1" style="font-size: 0.85rem;">₱<?= number_format($r['price_per_month'], 2) ?> / month <span class="text-muted fw-normal">per room</span></p>
                             <p class="text-muted mb-4" style="font-size: 0.75rem;"><?= $occCount > 0
                                 ? '₱' . number_format($r['price_per_month'] / $occCount, 2) . ' each, split between ' . $occCount . ' tenant' . ($occCount === 1 ? '' : 's')
@@ -344,7 +344,7 @@ require_once 'header.php';
                             <i class="fa-solid fa-building"></i>
                         </div>
                         <div class="d-flex align-items-center">
-                            <h5 class="fw-bold mb-0 text-dark me-2">Room <?= htmlspecialchars($r['room_number']) ?></h5>
+                            <h5 class="fw-bold mb-0 text-dark me-2">Room <?= htmlspecialchars($r['room_number'] ?? '') ?></h5>
                             <span class="badge <?= $badgeClass ?> ms-1" style="font-size: 0.65rem;"><?= $badgeText ?></span>
                         </div>
                     </div>
@@ -438,7 +438,7 @@ require_once 'header.php';
 
                 <!-- Action Buttons -->
                 <div class="mt-auto pt-2">
-                    <button class="btn btn-light border w-100 fw-bold text-dark mb-1 py-1" style="font-size: 0.8rem;" onclick="openEditModal(<?= $r['id'] ?>, '<?= htmlspecialchars(addslashes($r['room_number'])) ?>', <?= $r['capacity'] ?>, <?= $r['price_per_month'] ?>, '<?= htmlspecialchars($r['status']) ?>')">
+                    <button class="btn btn-light border w-100 fw-bold text-dark mb-1 py-1" style="font-size: 0.8rem;" onclick="openEditModal(<?= $r['id'] ?>, '<?= htmlspecialchars(addslashes($r['room_number'])) ?>', <?= $r['capacity'] ?>, <?= $r['price_per_month'] ?>, '<?= htmlspecialchars($r['status'] ?? '') ?>')">
                         <i class="fa-solid fa-pen me-1 text-muted"></i> Edit Room
                     </button>
                     
@@ -486,7 +486,7 @@ require_once 'header.php';
                                 $optFull = $optOcc >= $opt['capacity'];
                             ?>
                                 <option value="<?= $opt['id'] ?>" data-full="<?= $optFull ? 1 : 0 ?>" <?= $optFull ? 'disabled' : '' ?>>
-                                    Room <?= htmlspecialchars($opt['room_number']) ?><?= $optFull ? ' - FULL' : ' (Avail: ' . ($opt['capacity'] - $optOcc) . ' | ₱' . number_format($opt['price_per_month']) . '/room, ₱' . number_format($opt['price_per_month'] / ($optOcc + 1), 2) . ' each)' ?>
+                                    Room <?= htmlspecialchars($opt['room_number'] ?? '') ?><?= $optFull ? ' - FULL' : ' (Avail: ' . ($opt['capacity'] - $optOcc) . ' | ₱' . number_format($opt['price_per_month']) . '/room, ₱' . number_format($opt['price_per_month'] / ($optOcc + 1), 2) . ' each)' ?>
                                 </option>
                             <?php endforeach; ?>
                         </select>

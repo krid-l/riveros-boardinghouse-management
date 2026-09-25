@@ -67,7 +67,7 @@ $current_page = basename($_SERVER['PHP_SELF']);
                     ?>
                     <?= avatarHtml($hFullName, 40, 'me-3', $currentTenant['profile_picture'] ?? null, '../') ?>
                     <div>
-                        <h6 class="mb-0 fw-bold fs-6 text-truncate" style="max-width: 130px;"><?= htmlspecialchars($currentTenant['first_name']) ?></h6>
+                        <h6 class="mb-0 fw-bold fs-6 text-truncate" style="max-width: 130px;"><?= htmlspecialchars($currentTenant['first_name'] ?? '') ?></h6>
                         <small class="text-muted">Tenant</small>
                     </div>
                 </div>
@@ -91,7 +91,7 @@ $current_page = basename($_SERVER['PHP_SELF']);
                     </button>
                     <div class="dropdown">
                         <button class="btn btn-light dropdown-toggle border-0 fw-semibold text-dark" type="button" data-bs-toggle="dropdown">
-                            <?= htmlspecialchars($currentTenant['first_name']) ?>
+                            <?= htmlspecialchars($currentTenant['first_name'] ?? '') ?>
                         </button>
                         <ul class="dropdown-menu dropdown-menu-end shadow border-0 mt-2">
                             <li><a class="dropdown-item py-2" href="settings.php"><i class="fa-solid fa-user me-2 text-muted"></i> My Profile</a></li>

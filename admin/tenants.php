@@ -20,7 +20,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     }
 }
 if (empty($success) && !empty($_GET['msg'])) {
-    $success = htmlspecialchars($_GET['msg']);
+    $success = htmlspecialchars($_GET['msg'] ?? '');
 }
 
 // Fetch stats
@@ -272,7 +272,7 @@ require_once 'header.php';
                             <?php foreach($allRooms as $r): ?>
                                 <?php 
                                     $isFull = $r['occupied'] >= $r['capacity'];
-                                    $label = 'Room ' . htmlspecialchars($r['room_number']);
+                                    $label = 'Room ' . htmlspecialchars($r['room_number'] ?? '');
                                     if ($isFull) {
                                         $label .= ' - FULL';
                                     } else {
@@ -400,12 +400,12 @@ require_once 'header.php';
                                 </div>
                             </td>
                             <td class="text-muted"><?= htmlspecialchars($t['contact_number'] ?? '') ?: '<span class="text-black-50 fst-italic">None</span>' ?></td>
-                            <td class="text-primary" style="font-size: 0.7rem;"><?= htmlspecialchars($t['username']) ?></td>
+                            <td class="text-primary" style="font-size: 0.7rem;"><?= htmlspecialchars($t['username'] ?? '') ?></td>
                             <td class="text-dark fw-semibold">
                                 <?php if ($isDeactivated): ?>
                                     <span class="text-muted fw-normal">Moved out<?= $t['deactivated_at'] ? ' ' . date('M j, Y', strtotime($t['deactivated_at'])) : '' ?></span>
                                 <?php else: ?>
-                                    <?= $t['room_number'] ? 'Room ' . htmlspecialchars($t['room_number']) : '<span class="text-muted fw-normal">Unassigned</span>' ?>
+                                    <?= $t['room_number'] ? 'Room ' . htmlspecialchars($t['room_number'] ?? '') : '<span class="text-muted fw-normal">Unassigned</span>' ?>
                                 <?php endif; ?>
                             </td>
                             <td class="fw-bold <?= $balance > 0 ? 'text-danger' : 'text-success' ?>">
@@ -465,7 +465,7 @@ function roomOptions(array $rooms): string {
         $avail = max(0, $r['capacity'] - $r['occupied']);
         // Adding this tenant makes one more person to split the room price between.
         $share = $r['price_per_month'] / ($r['occupied'] + 1);
-        $label = 'Room ' . htmlspecialchars($r['room_number'])
+        $label = 'Room ' . htmlspecialchars($r['room_number'] ?? '')
                . ($isFull ? ' - FULL' : " (Avail: $avail | ₱" . number_format($r['price_per_month']) . "/room, ₱" . number_format($share, 2) . " each)");
         $html .= '<option value="' . (int)$r['id'] . '" data-full="' . ($isFull ? 1 : 0) . '"' . ($isFull ? ' disabled' : '') . '>' . $label . '</option>';
     }

@@ -2,8 +2,8 @@
 require_once 'header.php';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['subject'])) {
-    $subject = trim($_POST['subject']);
-    $message = trim($_POST['message']);
+    $subject = trim($_POST['subject'] ?? '');
+    $message = trim($_POST['message'] ?? '');
     $category = $_POST['category'] ?? 'Others';
     if ($category == 'Select a category') $category = 'Others';
     
@@ -228,8 +228,8 @@ $complaints = $stmt->fetchAll();
                     <div class="ci-meta">
                         <?= date('M d, Y', strtotime($c['created_at'])) ?> &bull; <?= date('h:i A', strtotime($c['created_at'])) ?>
                     </div>
-                    <div class="ci-subject"><?= htmlspecialchars($c['subject']) ?></div>
-                    <div class="ci-preview"><?= htmlspecialchars($c['message']) ?></div>
+                    <div class="ci-subject"><?= htmlspecialchars($c['subject'] ?? '') ?></div>
+                    <div class="ci-preview"><?= htmlspecialchars($c['message'] ?? '') ?></div>
                 </div>
 
                 <div class="ci-status-badge <?= $badgeClass ?> d-none d-md-block">

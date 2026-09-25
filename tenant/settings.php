@@ -104,7 +104,7 @@ $fullName = htmlspecialchars($currentTenant['first_name'] . ' ' . $currentTenant
                 </div>
                 <div>
                     <span class="text-muted d-block" style="font-size:0.75rem;"><i class="fa-solid fa-phone me-2"></i> Contact</span>
-                    <span class="fw-semibold text-dark"><?= !empty($currentTenant['contact_number']) ? htmlspecialchars($currentTenant['contact_number']) : '<i class="text-black-50 small">Not set</i>' ?></span>
+                    <span class="fw-semibold text-dark"><?= !empty($currentTenant['contact_number']) ? htmlspecialchars($currentTenant['contact_number'] ?? '') : '<i class="text-black-50 small">Not set</i>' ?></span>
                 </div>
             </div>
         </div>
@@ -139,12 +139,12 @@ $fullName = htmlspecialchars($currentTenant['first_name'] . ' ' . $currentTenant
                     <div class="row g-3 mb-3">
                         <div class="col-md-6">
                             <label class="form-label text-muted fw-semibold small">First Name</label>
-                            <input type="text" class="form-control bg-light" value="<?= htmlspecialchars($currentTenant['first_name']) ?>" readonly>
+                            <input type="text" class="form-control bg-light" value="<?= htmlspecialchars($currentTenant['first_name'] ?? '') ?>" readonly>
                             <div class="form-text" style="font-size: 0.65rem;">Contact admin to change name.</div>
                         </div>
                         <div class="col-md-6">
                             <label class="form-label text-muted fw-semibold small">Last Name</label>
-                            <input type="text" class="form-control bg-light" value="<?= htmlspecialchars($currentTenant['last_name']) ?>" readonly>
+                            <input type="text" class="form-control bg-light" value="<?= htmlspecialchars($currentTenant['last_name'] ?? '') ?>" readonly>
                         </div>
                     </div>
                     

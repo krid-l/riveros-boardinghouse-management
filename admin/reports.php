@@ -318,7 +318,7 @@ require_once 'header.php';
                                 $rateColor = $rate == 100 ? 'success' : ($rate >= 50 ? 'warning' : 'danger');
                             ?>
                             <tr>
-                                <td class="ps-3 fw-bold text-dark">Room <?= htmlspecialchars($r['room_number']) ?></td>
+                                <td class="ps-3 fw-bold text-dark">Room <?= htmlspecialchars($r['room_number'] ?? '') ?></td>
                                 <td class="text-center text-muted"><?= $r['capacity'] ?></td>
                                 <td class="text-center text-muted"><?= $r['tenant_count'] ?></td>
                                 <td class="text-end pe-3"><span class="badge bg-<?= $rateColor ?>-subtle text-<?= $rateColor ?> rounded-pill px-2" style="font-size:0.55rem;"><?= $rate ?>%</span></td>
@@ -502,7 +502,7 @@ require_once 'header.php';
                         $vacant = $r['capacity'] - $r['tenant_count'];
                     ?>
                     <tr>
-                        <td class="ps-3 fw-bold text-dark">Room <?= htmlspecialchars($r['room_number']) ?></td>
+                        <td class="ps-3 fw-bold text-dark">Room <?= htmlspecialchars($r['room_number'] ?? '') ?></td>
                         <td class="text-center text-muted"><?= $r['capacity'] ?> Beds</td>
                         <td class="text-center text-dark fw-semibold"><?= $r['tenant_count'] ?> Tenants</td>
                         <td class="text-center <?= $vacant > 0 ? 'text-success fw-bold' : 'text-muted' ?>"><?= $vacant ?> Available</td>
@@ -538,7 +538,7 @@ require_once 'header.php';
                     ?>
                     <tr>
                         <td class="ps-3 fw-bold text-dark" style="font-size:0.65rem;"><?= htmlspecialchars($t['first_name'].' '.$t['last_name']) ?></td>
-                        <td class="text-muted" style="font-size:0.65rem;"><?= htmlspecialchars($t['contact_number']) ?></td>
+                        <td class="text-muted" style="font-size:0.65rem;"><?= htmlspecialchars($t['contact_number'] ?? '') ?></td>
                         <td class="text-dark fw-semibold" style="font-size:0.65rem;">Room <?= htmlspecialchars($t['room_number'] ?? 'None') ?></td>
                         <td class="text-center"><?= $statBadge ?></td>
                         <td class="text-end pe-3 fw-bold <?= $hasBalance ? 'text-danger' : 'text-success' ?>" style="font-size:0.65rem;">₱<?= number_format($t['balance'] ?? 0, 2) ?></td>

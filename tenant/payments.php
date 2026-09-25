@@ -358,7 +358,7 @@ $payments = $stmt->fetchAll();
                 
                 <!-- Ref column -->
                 <div>
-                    <div class="fw-bold text-dark" style="font-size: 0.8rem;">Ref: <?= htmlspecialchars($p['reference_number']) ?></div>
+                    <div class="fw-bold text-dark" style="font-size: 0.8rem;">Ref: <?= htmlspecialchars($p['reference_number'] ?? '') ?></div>
                     <div class="text-muted" style="font-size: 0.7rem;">GCash</div>
                 </div>
                 

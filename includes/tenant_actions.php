@@ -26,8 +26,8 @@ function handleTenantAction(PDO $pdo): array {
         $pdo->beginTransaction();
 
         if ($action === 'add') {
-            $firstName = trim($_POST['first_name']);
-            $lastName = trim($_POST['last_name']);
+            $firstName = trim($_POST['first_name'] ?? '');
+            $lastName = trim($_POST['last_name'] ?? '');
             $roomId = !empty($_POST['room_id']) ? (int)$_POST['room_id'] : null;
             $moveInDate = $roomId ? postedDate('move_in_date') : null;
 
@@ -89,8 +89,8 @@ function handleTenantAction(PDO $pdo): array {
         } elseif ($action === 'edit') {
             $stmt = $pdo->prepare("UPDATE tenants SET first_name = ?, last_name = ?, contact_number = ?, occupation = ?, emergency_contact = ? WHERE id = ?");
             $stmt->execute([
-                trim($_POST['first_name']),
-                trim($_POST['last_name']),
+                trim($_POST['first_name'] ?? ''),
+                trim($_POST['last_name'] ?? ''),
                 $_POST['contact_number'],
                 !empty($_POST['occupation']) ? $_POST['occupation'] : null,
                 !empty($_POST['emergency_contact']) ? $_POST['emergency_contact'] : null,

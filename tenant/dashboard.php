@@ -137,7 +137,7 @@ $balance = $currentTenant['balance'] ?? 0;
 <div class="dashboard-header d-flex justify-content-between align-items-center">
     <div>
         <h3 class="fw-bolder mb-0 text-dark">My Space</h3>
-        <p class="text-muted mb-0" style="font-size: 0.85rem;">Welcome back, <?= htmlspecialchars($currentTenant['first_name']) ?>! 👋</p>
+        <p class="text-muted mb-0" style="font-size: 0.85rem;">Welcome back, <?= htmlspecialchars($currentTenant['first_name'] ?? '') ?>! 👋</p>
     </div>
     <a href="payments.php" class="btn btn-primary fw-bold rounded-3 shadow-sm px-3 py-2" style="font-size: 0.85rem;">
         <i class="fa-solid fa-upload me-2"></i> Submit Payment
@@ -157,7 +157,7 @@ $balance = $currentTenant['balance'] ?? 0;
     </div>
     
     <div class="position-relative z-2 mb-3">
-        <h1 class="fw-bolder text-white mb-1" style="font-size: 2rem;">Room <?= htmlspecialchars($room['room_number']) ?></h1>
+        <h1 class="fw-bolder text-white mb-1" style="font-size: 2rem;">Room <?= htmlspecialchars($room['room_number'] ?? '') ?></h1>
         <div class="text-white-50 fw-semibold" style="font-size: 0.85rem;">
             <i class="fa-solid fa-money-bill-wave me-1"></i> PHP <?= number_format($myRentShare, 2) ?> / month <span class="text-white-50">(your share of the PHP <?= number_format($room['price_per_month'], 2) ?> room<?= $roomOccupants > 1 ? ', split ' . $roomOccupants . ' ways' : '' ?>)</span>
         </div>
@@ -253,7 +253,7 @@ $balance = $currentTenant['balance'] ?? 0;
                         <div class="text-muted" style="font-size: 0.7rem;"><?= date('h:i A', strtotime($p['created_at'] ?? $p['payment_date'])) ?></div>
                     </td>
                     <td>
-                        <div class="fw-bold text-dark font-monospace"><?= htmlspecialchars($p['reference_number']) ?></div>
+                        <div class="fw-bold text-dark font-monospace"><?= htmlspecialchars($p['reference_number'] ?? '') ?></div>
                         <div class="text-muted" style="font-size: 0.7rem;"><?= ucfirst($p['payment_method'] ?? 'gcash') ?></div>
                     </td>
                     <td class="fw-bold text-dark">PHP <?= number_format($p['amount'], 2) ?></td>
@@ -322,8 +322,8 @@ $balance = $currentTenant['balance'] ?? 0;
         <div class="d-flex gap-2 align-items-start mb-3">
             <div class="mt-1"><span class="dot" style="width: 6px; height: 6px; background: #eab308; border-radius: 50%; display: block;"></span></div>
             <div>
-                <div class="text-dark fw-bold" style="font-size: 0.85rem;"><?= htmlspecialchars($a['title']) ?></div>
-                <div class="text-dark" style="font-size: 0.8rem;"><?= nl2br(htmlspecialchars($a['message'])) ?></div>
+                <div class="text-dark fw-bold" style="font-size: 0.85rem;"><?= htmlspecialchars($a['title'] ?? '') ?></div>
+                <div class="text-dark" style="font-size: 0.8rem;"><?= nl2br(htmlspecialchars($a['message'] ?? '')) ?></div>
                 <div class="text-muted mt-1" style="font-size: 0.7rem;"><?= date('M j, Y h:i A', strtotime($a['created_at'])) ?></div>
             </div>
         </div>

@@ -423,11 +423,11 @@ require_once 'header.php';
                                     <?= avatarHtml($p['first_name'] . ' ' . $p['last_name'], 22, 'me-2 shadow-sm', $p['profile_picture'] ?? null, '../') ?>
                                     <div>
                                         <div class="fw-bold text-dark" style="font-size:0.65rem; line-height:1.1;"><?= htmlspecialchars($p['first_name'].' '.$p['last_name']) ?></div>
-                                        <div class="text-muted" style="font-size:0.55rem;"><?= htmlspecialchars($p['contact_number']) ?></div>
+                                        <div class="text-muted" style="font-size:0.55rem;"><?= htmlspecialchars($p['contact_number'] ?? '') ?></div>
                                     </div>
                                 </div>
                             </td>
-                            <td class="text-muted fw-semibold" style="font-size:0.65rem;">Rm <?= htmlspecialchars($p['room_number']) ?></td>
+                            <td class="text-muted fw-semibold" style="font-size:0.65rem;"><?= $p['room_number'] ? 'Rm ' . htmlspecialchars($p['room_number']) : '<span class="text-black-50">No room</span>' ?></td>
                             <td class="fw-bold text-dark" style="font-size:0.65rem;">₱<?= number_format($p['amount'], 2) ?></td>
                             <td>
                                 <div class="d-flex flex-column">

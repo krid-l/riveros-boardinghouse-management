@@ -292,8 +292,8 @@ require_once 'header.php';
                                 </div>
                             </td>
                             <td style="max-width: 150px;">
-                                <div class="fw-bold text-dark text-truncate" style="font-size:0.65rem; line-height:1.1;" title="<?= htmlspecialchars($c['subject']) ?>"><?= htmlspecialchars($c['subject']) ?></div>
-                                <div class="text-muted text-truncate" style="font-size:0.55rem;" title="<?= htmlspecialchars($c['message']) ?>"><?= htmlspecialchars($c['message']) ?></div>
+                                <div class="fw-bold text-dark text-truncate" style="font-size:0.65rem; line-height:1.1;" title="<?= htmlspecialchars($c['subject'] ?? '') ?>"><?= htmlspecialchars($c['subject'] ?? '') ?></div>
+                                <div class="text-muted text-truncate" style="font-size:0.55rem;" title="<?= htmlspecialchars($c['message'] ?? '') ?>"><?= htmlspecialchars($c['message'] ?? '') ?></div>
                             </td>
                             <td class="text-center">
                                 <span class="badge bg-<?= $pBadgeClass ?>-subtle text-<?= $pBadgeClass ?> border border-<?= $pBadgeClass ?>-subtle px-2 py-0 rounded-pill" style="font-size:0.55rem;"><?= $c['priority'] ?></span>
@@ -311,10 +311,10 @@ require_once 'header.php';
                                         data-id="<?= $c['id'] ?>"
                                         data-tenant="<?= htmlspecialchars($c['first_name'].' '.$c['last_name']) ?>"
                                         data-room="<?= htmlspecialchars($c['room_number'] ?? 'N/A') ?>"
-                                        data-subject="<?= htmlspecialchars($c['subject']) ?>"
-                                        data-message="<?= htmlspecialchars($c['message']) ?>"
+                                        data-subject="<?= htmlspecialchars($c['subject'] ?? '') ?>"
+                                        data-message="<?= htmlspecialchars($c['message'] ?? '') ?>"
                                         data-admin-response="<?= htmlspecialchars($c['admin_response'] ?? '') ?>"
-                                        data-status="<?= htmlspecialchars($c['status']) ?>"
+                                        data-status="<?= htmlspecialchars($c['status'] ?? '') ?>"
                                         data-category="<?= htmlspecialchars($c['category'] ?? 'Others') ?>">
                                     <i class="fa-regular fa-eye" style="font-size:0.6rem;"></i>
                                 </button>
@@ -353,7 +353,7 @@ require_once 'header.php';
                         <div>
                             <div class="fw-bold text-dark" style="font-size:0.6rem; line-height:1.2;">Complaint #C-2025-<?= str_pad($c['id'], 3, '0', STR_PAD_LEFT) ?> <?= $act ?></div>
                             <div class="text-muted text-truncate" style="font-size:0.55rem; max-width: 140px; margin-top: 1px;">
-                                <?= htmlspecialchars($c['subject']) ?> - <?= htmlspecialchars($c['first_name']) ?> (Rm <?= htmlspecialchars($c['room_number'] ?? '?') ?>)
+                                <?= htmlspecialchars($c['subject'] ?? '') ?> - <?= htmlspecialchars($c['first_name'] ?? '') ?> (Rm <?= htmlspecialchars($c['room_number'] ?? '?') ?>)
                             </div>
                             <div class="text-muted" style="font-size:0.5rem; margin-top: 2px;"><?= date('M d, Y h:i A', strtotime($c['last_update'])) ?></div>
                         </div>

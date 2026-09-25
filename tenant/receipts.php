@@ -204,7 +204,7 @@ $payments = $stmt->fetchAll();
                 <div class="rc-val font-monospace"><?= htmlspecialchars($rcpNum) ?></div>
                 
                 <div class="rc-label">Reference No.</div>
-                <div class="rc-val font-monospace"><?= htmlspecialchars($p['reference_number']) ?></div>
+                <div class="rc-val font-monospace"><?= htmlspecialchars($p['reference_number'] ?? '') ?></div>
                 
                 <div class="rc-label">Payment Method</div>
                 <div class="rc-val d-flex align-items-center gap-2">
@@ -232,10 +232,10 @@ $payments = $stmt->fetchAll();
                 <div class="mt-auto pt-2">
                     <?php if ($isVerified && !empty($p['receipt_path'])): ?>
                         <div class="d-flex gap-2">
-                            <a href="../<?= htmlspecialchars($p['receipt_path']) ?>" target="_blank" class="btn-view-receipt flex-grow-1 justify-content-center">
+                            <a href="../<?= htmlspecialchars($p['receipt_path'] ?? '') ?>" target="_blank" class="btn-view-receipt flex-grow-1 justify-content-center">
                                 <i class="fa-regular fa-file-lines text-primary"></i> View Receipt
                             </a>
-                            <a href="../<?= htmlspecialchars($p['receipt_path']) ?>" download class="btn-download">
+                            <a href="../<?= htmlspecialchars($p['receipt_path'] ?? '') ?>" download class="btn-download">
                                 <i class="fa-solid fa-download"></i>
                             </a>
                         </div>

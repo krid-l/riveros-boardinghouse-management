@@ -52,8 +52,8 @@ require_once 'header.php';
                     <tbody>
                         <?php foreach($announcements as $a): ?>
                         <tr>
-                            <td class="fw-bold text-dark"><?= htmlspecialchars($a['title']) ?></td>
-                            <td class="text-muted" style="max-width: 300px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"><?= htmlspecialchars($a['message']) ?></td>
+                            <td class="fw-bold text-dark"><?= htmlspecialchars($a['title'] ?? '') ?></td>
+                            <td class="text-muted" style="max-width: 300px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"><?= htmlspecialchars($a['message'] ?? '') ?></td>
                             <td class="text-muted" style="font-size:0.85rem;"><?= date('M j, Y h:i A', strtotime($a['created_at'])) ?></td>
                             <td class="text-end">
                                 <form method="POST" class="d-inline" onsubmit="return confirm('Delete this announcement?');">

@@ -412,7 +412,7 @@ require_once 'header.php';
                                         <span class="fw-semibold text-dark text-truncate d-inline-block" style="max-width:70px; font-size: 0.75rem;"><?= htmlspecialchars($p['first_name'].' '.$p['last_name']) ?></span>
                                     </div>
                                 </td>
-                                <td class="text-muted fw-semibold" style="font-size: 0.75rem;">Rm <?= htmlspecialchars($p['room_number']) ?></td>
+                                <td class="text-muted fw-semibold" style="font-size: 0.75rem;"><?= $p['room_number'] ? 'Rm ' . htmlspecialchars($p['room_number']) : '<span class="text-black-50">No room</span>' ?></td>
                                 <td class="fw-bold text-dark" style="font-size: 0.75rem;">₱<?= number_format($p['amount'], 0) ?></td>
                                 <td class="pe-3"><?= $statusBadge ?></td>
                             </tr>
@@ -457,7 +457,7 @@ require_once 'header.php';
                             <i class="fa-solid fa-door-open"></i>
                         </div>
                         <div>
-                            <div class="fw-bold text-dark" style="font-size: 0.75rem;">Room <?= htmlspecialchars($r['room_number']) ?></div>
+                            <div class="fw-bold text-dark" style="font-size: 0.75rem;">Room <?= htmlspecialchars($r['room_number'] ?? '') ?></div>
                             <div class="text-muted" style="font-size: 0.65rem;"><?= $r['tenant_count'] ?> / <?= $r['capacity'] ?> tenants</div>
                         </div>
                     </div>
