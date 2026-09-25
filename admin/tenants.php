@@ -42,6 +42,11 @@ $totalPaidThisMonth = $stmt->fetchColumn() ?: 0;
 $filterSearch = queryParam('q');
 $filterStatus = queryParam('status', 'all') ?: 'all';
 
+// Deactivated tenants are hidden by default: they are former tenants and just clutter the
+// list. The "Show deactivated" button brings them back with ?deactivated=1, and picking
+// Deactivated from the status dropdown obviously has to show them too.
+$showDeactivated = queryParam('deactivated') === '1' || $filterStatus === 'deactivated';
+
 // not_yet_due is the part of a tenant's balance that isn't past its due date yet. It is what
 // tenantBillingStatus() uses to tell "Unpaid" from "Overdue", expressed here so the same
 // split can be filtered on in SQL.
@@ -73,7 +78,23 @@ switch ($filterStatus) {
     case 'due':
         $where[] = "x.status = 'active' AND x.balance > 0 AND (x.balance - x.not_yet_due) <= 0.005"; break;
 }
+if (!$showDeactivated) {
+    $where[] = "x.status <> 'deactivated'";
+}
 $whereSql = $where ? ' WHERE ' . implode(' AND ', $where) : '';
+
+// How many deactivated tenants the button would reveal, honouring the current search.
+$deactivatedCountSql = "SELECT COUNT(*) FROM tenants t WHERE t.status = 'deactivated'";
+$deactivatedParams = [];
+if ($filterSearch !== '') {
+    $deactivatedCountSql .= " AND (LOWER(t.first_name) LIKE ? OR LOWER(t.last_name) LIKE ?
+                                   OR LOWER(CONCAT(t.first_name, ' ', t.last_name)) LIKE ?)";
+    $like = '%' . strtolower($filterSearch) . '%';
+    array_push($deactivatedParams, $like, $like, $like);
+}
+$deactivatedStmt = $pdo->prepare($deactivatedCountSql);
+$deactivatedStmt->execute($deactivatedParams);
+$deactivatedCount = (int)$deactivatedStmt->fetchColumn();
 
 $countStmt = $pdo->prepare("SELECT COUNT(*) FROM ($listSql$whereSql) counted");
 $countStmt->execute($params);
@@ -292,6 +313,9 @@ require_once 'header.php';
                 </div>
                 
                 <form method="GET" id="filterForm" class="d-flex gap-2">
+                    <?php if ($showDeactivated && $filterStatus !== 'deactivated'): ?>
+                        <input type="hidden" name="deactivated" value="1">
+                    <?php endif; ?>
                     <div class="input-group input-group-sm rounded-2 border bg-white" style="width:200px;">
                         <span class="input-group-text bg-transparent border-0 pe-1"><i class="fa-solid fa-magnifying-glass text-muted" style="font-size:0.65rem;"></i></span>
                         <input type="text" name="q" id="searchInput" value="<?= htmlspecialchars($filterSearch) ?>" class="form-control border-0 shadow-none px-1" placeholder="Search tenants..." style="font-size:0.7rem;">
@@ -303,7 +327,28 @@ require_once 'header.php';
                         <option value="overdue" <?= $filterStatus === 'overdue' ? 'selected' : '' ?>>Overdue</option>
                         <option value="deactivated" <?= $filterStatus === 'deactivated' ? 'selected' : '' ?>>Deactivated</option>
                     </select>
-                    <?php if ($filterSearch !== '' || $filterStatus !== 'all'): ?>
+
+                    <?php
+                        // Keep the search and status when toggling, but go back to page 1:
+                        // the row count changes, so the current page number may not exist.
+                        $toggleUrl = pageUrl([
+                            'deactivated' => $showDeactivated ? null : '1',
+                            'page' => null,
+                        ]);
+                    ?>
+                    <?php if ($filterStatus === 'deactivated'): ?>
+                        <?php /* the dropdown is already showing only deactivated tenants */ ?>
+                    <?php elseif ($showDeactivated): ?>
+                        <a href="<?= htmlspecialchars($toggleUrl) ?>" class="btn btn-sm btn-secondary rounded-2 px-2 text-nowrap" style="font-size:0.7rem;" title="Hide deactivated tenants">
+                            <i class="fa-solid fa-eye-slash me-1"></i> Hide deactivated
+                        </a>
+                    <?php elseif ($deactivatedCount > 0): ?>
+                        <a href="<?= htmlspecialchars($toggleUrl) ?>" class="btn btn-sm btn-outline-secondary rounded-2 px-2 text-nowrap" style="font-size:0.7rem;" title="Show deactivated tenants">
+                            <i class="fa-solid fa-eye me-1"></i> Show deactivated (<?= $deactivatedCount ?>)
+                        </a>
+                    <?php endif; ?>
+
+                    <?php if ($filterSearch !== '' || $filterStatus !== 'all' || $showDeactivated): ?>
                         <a href="tenants.php" class="btn btn-sm btn-light border rounded-2 text-muted px-2" style="font-size:0.7rem;" title="Clear filters"><i class="fa-solid fa-rotate-right"></i></a>
                     <?php endif; ?>
                 </form>
