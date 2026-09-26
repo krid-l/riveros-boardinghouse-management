@@ -1,5 +1,5 @@
 # Local configuration (database credentials, API keys)
-config.php
+
 
 # Uploaded files and generated receipts
 uploads/payments/*
