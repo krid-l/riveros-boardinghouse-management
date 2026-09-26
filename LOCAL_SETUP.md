@@ -45,13 +45,8 @@ mysql -u root -p < database/schema_mysql.sql
 
 ## 3. Point the app at your database
 
-Copy `config.sample.php` to `config.php` and edit it if your MySQL login is different from
-WAMP's default (`root` with no password):
-
-```
-copy config.sample.php config.php      :: Windows
-cp   config.sample.php config.php      #  macOS / Linux
-```
+`config.php` comes with the project, already set to WAMP's defaults (`root` with no password).
+Open it only if your MySQL login is different:
 
 ```php
 return [
@@ -66,9 +61,13 @@ return [
 ];
 ```
 
-`config.php` is git-ignored, so your local settings are never committed. With the Supabase
-values left empty, uploads (payment screenshots, profile pictures, the GCash QR code) are
-saved into the project's `uploads/` folder instead of cloud storage.
+Because `config.php` is committed, keep real credentials out of it: it is for local
+development values only. The deployed server ignores it entirely, connecting from its
+`DATABASE_URL` instead, so it cannot misdirect production. (`config.sample.php` is still there
+as a reference copy.)
+
+With the Supabase values left empty, uploads (payment screenshots, profile pictures, the GCash
+QR code) are saved into the project's `uploads/` folder instead of cloud storage.
 
 ## 4. Open it
 
@@ -112,7 +111,7 @@ own:
 
 | Not in the clone | What to do |
 | --- | --- |
-| `config.php` | Copy `config.sample.php` to `config.php` (step 3). It is git-ignored so nobody's database password is committed. |
+| Nothing, for `config.php` | It ships with the repo, holding the WAMP defaults. Edit it only if your MySQL login differs. Keep real credentials out of it. |
 | The database and its contents | Import `database/schema_mysql.sql` (step 2). You get an empty system with the default admin account, not anyone else's tenants. |
 | Uploaded files | Payment screenshots, profile pictures and the GCash QR code stay on the machine they were uploaded to. |
 
@@ -132,12 +131,15 @@ To hand someone your actual data as well, export the `boardinghouse` database fr
 
 ## Clearing out test data
 
-Once you have been clicking around, `database/reset_data.sql` empties the tenants, rooms,
+Once you have been clicking around, `database/reset_data_mysql.sql` empties the tenants, rooms,
 payments, charges and complaints while leaving the tables, the admin account and everything on
 the Settings page alone:
 
 * phpMyAdmin: pick the `boardinghouse` database, open the **SQL** tab, paste the file, press Go.
-* Command line: `mysql -u root boardinghouse < database/reset_data.sql`
+
+(`database/reset_data.sql` is the same thing for the deployed PostgreSQL database; run that one
+in the Supabase SQL editor, not in phpMyAdmin.)
+* Command line: `mysql -u root boardinghouse < database/reset_data_mysql.sql`
 
 To wipe everything instead, including the admin account and settings, drop the database and
 import `database/schema_mysql.sql` again.

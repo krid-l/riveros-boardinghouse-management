@@ -1,17 +1,14 @@
 <?php
-// config.sample.php
+// config.php
 //
 // Local configuration for running the system on your own machine (WAMP / XAMPP).
-// Copy this file to config.php in the same folder and edit the values below.
+// These are the WAMP defaults; edit them if your MySQL login differs.
 //
-//   copy config.sample.php config.php      (Windows)
-//   cp   config.sample.php config.php      (macOS / Linux)
-//
-// config.php is git-ignored, so your local credentials are never committed.
-// On the deployed server this file does not exist and the values come from
-// environment variables (DB_DRIVER, DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD,
-// SUPABASE_URL, SUPABASE_SERVICE_KEY) instead. An environment variable always wins
-// over the value set here.
+// This file is committed so everyone gets a working local setup straight from a clone.
+// Keep real credentials out of it: it holds local development values only.
+// The deployed server ignores this file entirely: when DATABASE_URL is set it connects
+// from that, and individual DB_* environment variables override either source. So this
+// file cannot misdirect production.
 
 return [
     // 'mysql' for WAMP/XAMPP, 'pgsql' for the Supabase database used in production.

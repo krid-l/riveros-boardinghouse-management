@@ -1,41 +1,50 @@
--- Clear out test data, keep the setup.
+-- database/reset_data.sql
+-- Wipes tenant and money data so the system can be tested from a clean slate.
 --
--- Wipes tenants, rooms, payments, charges, complaints and announcements, and leaves the
--- tables, the admin account and the Settings page values (GCash details, SMS keys, business
--- info) exactly as they are.
+-- DELETED: tenants, their login accounts, payments, receipt records, charges,
+--          room transfer history, complaints and announcements.
+-- KEPT:    rooms (set back to vacant), the admin account(s), and settings
+--          (house name, GCash details, SMS keys, schema version).
 --
--- phpMyAdmin: select the boardinghouse database -> SQL tab -> paste this -> Go.
--- Command line: mysql -u root boardinghouse < database/reset_data.sql
+-- This is permanent. Take a backup first: Supabase dashboard > Database > Backups.
+-- Run it in the Supabase SQL editor, or:  psql "<connection string>" -f database/reset_data.sql
 --
--- To wipe absolutely everything instead, including the admin account and settings, drop the
--- database and import database/schema_mysql.sql again.
+-- Screenshots and receipt PDFs in Supabase Storage are NOT touched; delete those
+-- from the Storage section if you want them gone too.
 
-USE boardinghouse;
+BEGIN;
 
--- Foreign keys are switched off for the delete so the order of the tables doesn't matter,
--- then switched straight back on.
-SET FOREIGN_KEY_CHECKS = 0;
+DO $$
+DECLARE
+    t text;
+BEGIN
+    -- Tenant rows cascade into the rest, but clear each table explicitly so this
+    -- still works if a foreign key is missing. Tables that don't exist are skipped.
+    FOREACH t IN ARRAY ARRAY['payments', 'complaints', 'charges', 'room_transfers', 'announcements', 'tenants']
+    LOOP
+        IF to_regclass('public.' || t) IS NOT NULL THEN
+            EXECUTE format('DELETE FROM %I', t);
+            -- Start IDs back at 1 so test data reads cleanly
+            IF pg_get_serial_sequence(t, 'id') IS NOT NULL THEN
+                PERFORM setval(pg_get_serial_sequence(t, 'id'), 1, false);
+            END IF;
+        END IF;
+    END LOOP;
 
-DELETE FROM payments;
-DELETE FROM charges;
-DELETE FROM room_transfers;
-DELETE FROM complaints;
-DELETE FROM tenants;
-DELETE FROM announcements;
-DELETE FROM rooms;
+    -- Tenant logins go; admin accounts stay.
+    DELETE FROM users WHERE role = 'tenant';
 
--- Tenant logins only. The admin account stays.
-DELETE FROM users WHERE role = 'tenant';
+    -- Rooms stay, but nobody lives in them any more.
+    UPDATE rooms SET status = 'vacant' WHERE status <> 'maintenance';
+END $$;
 
-SET FOREIGN_KEY_CHECKS = 1;
+COMMIT;
 
--- Start ids from 1 again, so the next room really is Room #1.
-ALTER TABLE payments       AUTO_INCREMENT = 1;
-ALTER TABLE charges        AUTO_INCREMENT = 1;
-ALTER TABLE room_transfers AUTO_INCREMENT = 1;
-ALTER TABLE complaints     AUTO_INCREMENT = 1;
-ALTER TABLE tenants        AUTO_INCREMENT = 1;
-ALTER TABLE announcements  AUTO_INCREMENT = 1;
-ALTER TABLE rooms          AUTO_INCREMENT = 1;
-
-SELECT 'Test data cleared. The admin account and your settings are untouched.' AS result;
+-- What is left afterwards
+SELECT 'users (admins kept)' AS table_name, COUNT(*) AS row_count FROM users
+UNION ALL SELECT 'rooms', COUNT(*) FROM rooms
+UNION ALL SELECT 'settings', COUNT(*) FROM settings
+UNION ALL SELECT 'tenants', COUNT(*) FROM tenants
+UNION ALL SELECT 'payments', COUNT(*) FROM payments
+UNION ALL SELECT 'charges', COUNT(*) FROM charges
+UNION ALL SELECT 'room_transfers', COUNT(*) FROM room_transfers;
