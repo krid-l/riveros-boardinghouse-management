@@ -5,9 +5,17 @@ also runs on the MySQL that ships with WAMP and XAMPP, so you don't need to inst
 
 ---
 
-## 1. Put the project in the web root
+## 1. Get the code and put it in the web root
 
-Copy the project folder into your server's web root:
+If you don't have the project yet, clone it (you need access to the repository):
+
+```
+git clone https://github.com/krid-l/riveros-boardinghouse-management.git
+cd riveros-boardinghouse-management
+git checkout claude/trusting-davinci-isbxfh
+```
+
+Then move the project folder into your server's web root:
 
 | Server | Folder |
 | --- | --- |
@@ -96,6 +104,20 @@ Change that password straight away under **Settings → Administrator Profile**.
 
 To check, create a file `info.php` in the project folder containing `<?php phpinfo();` and
 open <http://localhost/riveros-boardinghouse-management/info.php>. Delete it afterwards.
+
+## What a clone does and doesn't bring
+
+The repository holds the code. Three things are deliberately left out, so everyone runs their
+own:
+
+| Not in the clone | What to do |
+| --- | --- |
+| `config.php` | Copy `config.sample.php` to `config.php` (step 3). It is git-ignored so nobody's database password is committed. |
+| The database and its contents | Import `database/schema_mysql.sql` (step 2). You get an empty system with the default admin account, not anyone else's tenants. |
+| Uploaded files | Payment screenshots, profile pictures and the GCash QR code stay on the machine they were uploaded to. |
+
+To hand someone your actual data as well, export the `boardinghouse` database from phpMyAdmin
+(**Export** tab, SQL format) and have them import that file instead of `schema_mysql.sql`.
 
 ## Notes
 
