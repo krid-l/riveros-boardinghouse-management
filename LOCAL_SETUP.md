@@ -96,7 +96,15 @@ Change that password straight away under **Settings → Administrator Profile**.
 
 ## Requirements
 
-* PHP 8.0 or newer (WAMP 3.3 and XAMPP 8.x both qualify)
+* **PHP 8.0 or newer.** This is not optional: the code uses `str_starts_with()` and typed
+  returns, which older PHP cannot even parse - it fails while reading the file, with a
+  confusing "syntax error, unexpected ':'" that points at a line which is perfectly fine.
+  Opening the site on an older PHP now shows a plain message saying so instead.
+
+  WampServer can switch without a reinstall: left-click the tray icon, **PHP** -> **Version**,
+  pick 8.0 or newer, and wait for the icon to go green. If nothing 8.x is listed, that copy of
+  WampServer predates PHP 8 - install the current 64-bit WampServer instead. A `C:\wamp\`
+  path rather than `C:\wamp64\` is a good sign you are on an old one.
 * The `pdo_mysql` extension — enabled by default in WAMP and XAMPP
 * The `gd` and `curl` extensions — also on by default; `curl` is only needed for SMS and
   Supabase uploads, neither of which local testing uses
@@ -156,5 +164,6 @@ user and password. Everything else works the same.
 | `Database connection failed ... Access denied` | The user or password in `config.php` doesn't match your MySQL. WAMP's default is `root` with an empty password. |
 | `Database connection failed ... Unknown database` | The import in step 2 didn't run. Import `database/schema_mysql.sql` again. |
 | `could not find driver` | `pdo_mysql` is off. In WAMP: tray icon → PHP → PHP extensions → tick `php_pdo_mysql`. |
+| `syntax error, unexpected ':'` | PHP is older than 8.0. Switch version as described under Requirements. |
 | Page is blank | Turn errors on to see why: set `display_errors = On` in WAMP's `php.ini`, then restart Apache. |
 | Uploaded images don't appear | The `uploads/` folder isn't writable. |
