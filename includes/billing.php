@@ -15,9 +15,11 @@
 //    When someone moves in or out, the current month's shares are recomputed for everyone
 //    still in that room, so two tenants of the same room are never charged different amounts
 //    for the same month. Months whose bills already came due are left as they were.
+//  - A roommate who moves in after the 15th pays half their share for that month, and the
+//    tenants who were there all month split the rest, so the room always collects its full
+//    price: an earlier tenant's advance comes down only by what the newcomer pays.
 //  - The deposit follows the share. A roommate moving in lowers everyone's share, so part of
-//    each deposit is credited back; if that happens in the same month someone paid their
-//    advance, the advance is re-split and part of it comes back too. A roommate moving out
+//    each deposit is credited back. A roommate moving out
 //    raises the share, and the deposit rises with it so it still covers a full last month.
 //    Credits sit on the balance and count toward the next payment.
 //
@@ -349,21 +351,48 @@ function resplitRoomRent(PDO $pdo, ?int $roomId, ?string $fromMonth = null): voi
     for (; $month <= $currentMonth; $month = nextBillingMonth($month)) {
         $monthName = date('F Y', strtotime($month . '-01'));
 
-        foreach ($occupants as $o) {
+        // Who lived here that month: anyone who had moved in by then. Someone arriving in a
+        // later month is no part of this month's split.
+        $members = array_values(array_filter($occupants, fn($o) =>
+            $o['move_in_date'] && date('Y-m', strtotime($o['move_in_date'])) <= $month));
+        if (!$members) continue;
+        $monthShare = rentShare((float)$roomPrice, count($members));
+
+        // A late arrival (after the 15th) pays half their share, as always. Everyone who was
+        // here for the whole month splits what is left of the room price between them, so the
+        // room still collects its full price: an earlier tenant's advance is reduced only by
+        // what the newcomer actually pays.
+        $late = array_filter($members, fn($o) =>
+            date('Y-m', strtotime($o['move_in_date'])) === $month && isHalfMonthMoveIn($o['move_in_date']));
+        $lateIds = array_map(fn($o) => (int)$o['id'], $late);
+        $fullCount = count($members) - count($late);
+        $lateAmount = round($monthShare / 2, 2);
+        $fullAmount = $fullCount > 0
+            ? round(((float)$roomPrice - count($late) * $lateAmount) / $fullCount, 2)
+            : 0.0;
+
+        $note = count($members) > 1
+            ? ($late && $fullCount > 0
+                ? ' (PHP ' . number_format((float)$roomPrice, 2) . ' room, less the half month paid by '
+                  . (count($late) === 1 ? 'a roommate' : count($late) . ' roommates') . ' who moved in after the 15th'
+                  . ($fullCount > 1 ? ", split $fullCount ways" : '') . ')'
+                : ' (share of PHP ' . number_format((float)$roomPrice, 2) . ' room, split ' . count($members) . ' ways)')
+            : '';
+
+        foreach ($members as $o) {
             $findCharge->execute([$o['id'], $month]);
             $charge = $findCharge->fetch();
             if (!$charge) continue;   // nothing posted for this tenant that month
 
-            // Someone who moved in during the month keeps their full/half first-month
-            // treatment, applied to the new share.
-            $movedInThisMonth = $o['move_in_date'] && date('Y-m', strtotime($o['move_in_date'])) === $month;
+            $isLate = in_array((int)$o['id'], $lateIds, true);
+            $amount = $isLate ? $lateAmount : $fullAmount;
+            $movedInThisMonth = date('Y-m', strtotime($o['move_in_date'])) === $month;
             if ($movedInThisMonth) {
-                $amount = firstMonthRent($share, $o['move_in_date']);
-                $desc = "First month rent, $monthName (" . (isHalfMonthMoveIn($o['move_in_date']) ? 'half' : 'full')
-                      . ', moved in ' . date('M j', strtotime($o['move_in_date'])) . ')' . $shareNote;
+                $desc = "First month rent, $monthName (" . ($isLate ? 'half' : 'full')
+                      . ', moved in ' . date('M j', strtotime($o['move_in_date'])) . ')'
+                      . ($isLate && count($members) > 1 ? ' (share of PHP ' . number_format((float)$roomPrice, 2) . ' room, split ' . count($members) . ' ways)' : ($isLate ? '' : $note));
             } else {
-                $amount = $share;
-                $desc = "Monthly rent, $monthName" . $shareNote;
+                $desc = "Monthly rent, $monthName" . $note;
             }
 
             $delta = round($amount - (float)$charge['amount'], 2);
