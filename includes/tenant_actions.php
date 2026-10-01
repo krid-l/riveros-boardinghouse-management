@@ -81,9 +81,11 @@ function handleTenantAction(PDO $pdo): array {
             }
 
             $success = "Tenant added successfully! <br><strong>Username:</strong> " . htmlspecialchars($username) . " <br><strong>Password:</strong> " . htmlspecialchars($rawPassword) . " <br><small>Please save these credentials!</small>";
-            if ($moveInDate) {
+            if ($moveInDate && $roomId) {
                 $firstRent = isHalfMonthMoveIn($moveInDate) ? 'half' : 'full';
-                $success .= "<br><small>First bill: $firstRent month's rent, due " . date('M j, Y', strtotime(firstMonthDueDate($moveInDate))) . ".</small>";
+                $success .= "<br><small>Due on moving in (" . date('M j, Y', strtotime(firstMonthDueDate($moveInDate))) . "): "
+                          . "the first month in advance ($firstRent month) plus a deposit of one month's share, "
+                          . "which pays for their last month.</small>";
             }
 
         } elseif ($action === 'edit') {
@@ -118,7 +120,8 @@ function handleTenantAction(PDO $pdo): array {
                 logRoomTransfer($pdo, $tenantId, null, $newRoomId, $date, 'Moved in');
                 $billTenantId = $tenantId;
                 $resplitRooms[] = $newRoomId;
-                $success = "Room assigned. First bill is due " . date('M j, Y', strtotime(firstMonthDueDate($date))) . ".";
+                $success = "Room assigned. The first month in advance and the deposit are due "
+                         . date('M j, Y', strtotime(firstMonthDueDate($date))) . ".";
             } else {
                 $pdo->prepare("UPDATE tenants SET room_id = ? WHERE id = ?")->execute([$newRoomId, $tenantId]);
                 logRoomTransfer($pdo, $tenantId, $t['room_id'] ? (int)$t['room_id'] : null, $newRoomId, $date, 'Room change');
@@ -137,14 +140,27 @@ function handleTenantAction(PDO $pdo): array {
             if (!$t) throw new Exception("Tenant not found.");
             if ($t['status'] === 'deactivated') throw new Exception("Tenant is already deactivated.");
 
+            // The deposit pays for the month they leave. Done before the status changes, while the
+            // stay it belongs to is still the current one.
+            $depositApplied = applyDepositToLastMonth($pdo, $tenantId, $date);
+
             // Keep the tenant's payments, receipts and any unpaid balance on record; just free the bed and block login.
             $pdo->prepare("UPDATE tenants SET status = 'deactivated', deactivated_at = ?, room_id = NULL WHERE id = ?")->execute([$date, $tenantId]);
             logRoomTransfer($pdo, $tenantId, $t['room_id'] ? (int)$t['room_id'] : null, null, $date, 'Moved out (account deactivated)');
             if ($t['room_id']) $resplitRooms[] = (int)$t['room_id'];
 
+            $balStmt = $pdo->prepare("SELECT balance FROM tenants WHERE id = ?");
+            $balStmt->execute([$tenantId]);
+            $finalBalance = round((float)$balStmt->fetchColumn(), 2);
+
             $success = "Tenant removed and account deactivated.";
-            if ((float)$t['balance'] > 0) {
-                $success .= " They still have an unpaid balance of ₱" . number_format((float)$t['balance'], 2) . ".";
+            if ($depositApplied > 0) {
+                $success .= " Their ₱" . number_format($depositApplied, 2) . " deposit was applied to the last month.";
+            }
+            if ($finalBalance > 0) {
+                $success .= " They still have an unpaid balance of ₱" . number_format($finalBalance, 2) . ".";
+            } elseif ($finalBalance < 0) {
+                $success .= " ₱" . number_format(-$finalBalance, 2) . " is owed back to them.";
             }
 
         } elseif ($action === 'reactivate') {

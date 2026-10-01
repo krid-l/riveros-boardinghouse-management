@@ -16,6 +16,8 @@ if (!empty($currentTenant['room_id'])) {
 }
 // The room price covers the whole room; this tenant pays an equal share of it.
 $myRentShare = $room ? rentShare((float)$room['price_per_month'], $roomOccupants) : 0.0;
+// Held to pay for their last month; follows the share as roommates come and go.
+$myDeposit = tenantDeposit($pdo, $currentTenant);
 
 // Fetch recent payment history
 $payStmt = $pdo->prepare("SELECT * FROM payments WHERE tenant_id = ? ORDER BY payment_date DESC LIMIT 4");
@@ -160,6 +162,9 @@ $balance = $currentTenant['balance'] ?? 0;
         <h1 class="fw-bolder text-white mb-1" style="font-size: 2rem;">Room <?= htmlspecialchars($room['room_number'] ?? '') ?></h1>
         <div class="text-white-50 fw-semibold" style="font-size: 0.85rem;">
             <i class="fa-solid fa-money-bill-wave me-1"></i> PHP <?= number_format($myRentShare, 2) ?> / month <span class="text-white-50">(your share of the PHP <?= number_format($room['price_per_month'], 2) ?> room<?= $roomOccupants > 1 ? ', split ' . $roomOccupants . ' ways' : '' ?>)</span>
+            <?php if ($myDeposit > 0): ?>
+                <br><i class="fa-solid fa-vault me-1"></i> PHP <?= number_format($myDeposit, 2) ?> deposit <span class="text-white-50">(pays for your last month)</span>
+            <?php endif; ?>
         </div>
     </div>
 
@@ -183,6 +188,9 @@ $balance = $currentTenant['balance'] ?? 0;
             <?php if ($balance <= 0): ?>
                 <div class="text-white-50 fw-semibold" style="font-size: 0.7rem; letter-spacing: 0.5px;">Balance Status</div>
                 <div class="fw-bolder" style="font-size: 1.25rem; color: #4ade80;">Fully Paid <i class="fa-solid fa-check-circle ms-1" style="font-size: 1rem;"></i></div>
+                <?php if ($balance < 0): ?>
+                    <div class="fw-semibold" style="font-size: 0.7rem; color: #bbf7d0;">PHP <?= number_format(-$balance, 2) ?> credit &middot; goes toward your next bill</div>
+                <?php endif; ?>
             <?php else: ?>
                 <div class="text-white-50 fw-semibold" style="font-size: 0.7rem; letter-spacing: 0.5px;">Outstanding Balance</div>
                 <div class="fw-bolder" style="font-size: 1.25rem; color: #ff6b6b;">PHP <?= number_format($balance, 2) ?></div>

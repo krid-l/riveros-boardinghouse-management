@@ -60,6 +60,7 @@ $rentSplitNote = $roomOccupants > 1
     ? 'Share of the ₱' . number_format($roomPrice, 2) . ' room, split ' . $roomOccupants . ' ways'
     : '';
 $currentBalance = round((float)($tenant['balance'] ?? 0), 2);
+$depositHeld = tenantDeposit($pdo, $tenant);
 $ledgerBalance = round($totalCharges - $totalPayments, 2);
 $ledgerMismatch = abs($ledgerBalance - $currentBalance) >= 0.01;
 
@@ -78,9 +79,17 @@ foreach ($charges as $c) {
     } elseif ($tenant['move_in_date'] && date('Y-m', strtotime($tenant['move_in_date'])) === $c['billing_month']) {
         $chargeDate = $tenant['move_in_date'];
     }
+    // A deposit spent on the last month is a credit, so it belongs in the credit column
+    // rather than showing as a negative charge.
+    $amount = (float)$c['amount'];
+    if ($amount < 0) {
+        $ledger[] = ['date' => $c['due_date'], 'order' => 1, 'desc' => $c['description'],
+                     'charge' => 0, 'payment' => -$amount];
+        continue;
+    }
     $ledger[] = ['date' => $chargeDate,
                  'order' => 0, 'desc' => $c['description'] . ' (due ' . date('M j, Y', strtotime($c['due_date'])) . ')',
-                 'charge' => (float)$c['amount'], 'payment' => 0];
+                 'charge' => $amount, 'payment' => 0];
 }
 foreach ($credits as $c) {
     $label = $c['covered_by_payment_id'] ? htmlspecialchars($c['payment_method'] ?? '') : 'Payment received';
@@ -211,6 +220,14 @@ require_once 'header.php';
                             <?php if ($rentSplitNote): ?><br><span class="text-muted fw-normal" style="font-size:0.7rem;"><?= $rentSplitNote ?></span><?php endif; ?>
                         </span>
                     </div>
+                    <?php if ($depositHeld > 0): ?>
+                    <div class="d-flex justify-content-between">
+                        <span class="text-muted">Deposit</span>
+                        <span class="fw-bold text-dark text-end">₱<?= number_format($depositHeld, 2) ?>
+                            <br><span class="text-muted fw-normal" style="font-size:0.7rem;">Pays for the last month of stay</span>
+                        </span>
+                    </div>
+                    <?php endif; ?>
                 </div>
             </div>
             
@@ -219,7 +236,7 @@ require_once 'header.php';
                 <div class="text-muted mb-1" style="font-size: 0.75rem;">Current Balance</div>
                 <?php if ($currentBalance <= 0): ?>
                     <h3 class="fw-bold text-success mb-1">₱<?= number_format(0, 2) ?></h3>
-                    <div class="text-success fw-bold" style="font-size: 0.7rem;"><i class="fa-solid fa-check me-1"></i>Fully Paid<?= $currentBalance < 0 ? ' · ₱' . number_format(-$currentBalance, 2) . ' credit' : '' ?></div>
+                    <div class="text-success fw-bold" style="font-size: 0.7rem;"><i class="fa-solid fa-check me-1"></i>Fully Paid<?= $currentBalance < 0 ? ' · ₱' . number_format(-$currentBalance, 2) . ($isDeactivated ? ' to refund' : ' credit') : '' ?></div>
                 <?php else: ?>
                     <h3 class="fw-bold text-danger mb-1">₱<?= number_format($currentBalance, 2) ?></h3>
                     <?php if ($billing['overdue'] > 0): ?>
@@ -309,7 +326,8 @@ require_once 'header.php';
                 <span class="info-label">Room Number</span><span class="info-value"><?= $tenant['room_number'] ? 'Room ' . htmlspecialchars($tenant['room_number'] ?? '') : 'N/A' ?></span>
                 <span class="info-label">Room Type</span><span class="info-value">Standard</span>
                 <span class="info-label">Monthly Rent</span><span class="info-value">₱<?= number_format($monthlyRent, 2) ?><?= $rentSplitNote ? ' <span class="text-muted fw-normal" style="font-size:0.7rem;">(' . $rentSplitNote . ')</span>' : '' ?></span>
-                <span class="info-label">Rent Due</span><span class="info-value">Every 30th of the month</span>
+                <span class="info-label">Deposit</span><span class="info-value"><?= $depositHeld > 0 ? '₱' . number_format($depositHeld, 2) . ' <span class="text-muted fw-normal" style="font-size:0.7rem;">(pays for the last month)</span>' : '<span class="text-muted">None on record</span>' ?></span>
+                <span class="info-label">Rent Due</span><span class="info-value">First month and deposit on moving in, then every 30th</span>
                 <span class="info-label">Status</span>
                 <span class="info-value">
                     <?php if ($isDeactivated): ?>
@@ -426,7 +444,7 @@ require_once 'header.php';
                 <hr class="my-2 border-light">
                 <div class="d-flex justify-content-between align-items-center mt-2">
                     <span class="fw-bold text-dark" style="font-size:0.75rem;">Current Balance</span>
-                    <span class="fw-bold <?= $currentBalance > 0 ? 'text-danger' : 'text-success' ?> fs-6">₱<?= number_format($currentBalance, 2) ?></span>
+                    <span class="fw-bold <?= $currentBalance > 0 ? 'text-danger' : 'text-success' ?> fs-6">₱<?= number_format(abs($currentBalance), 2) ?><?= $currentBalance < 0 ? ' <span class="fw-semibold" style="font-size:0.7rem;">' . ($isDeactivated ? 'to refund' : 'credit') . '</span>' : '' ?></span>
                 </div>
                 <?php if ($ledgerMismatch): ?>
                     <div class="alert alert-warning border-0 py-1 px-2 mt-2 mb-0" style="font-size:0.62rem;">
@@ -578,7 +596,7 @@ require_once 'header.php';
                             <td class="text-muted" style="font-size:0.7rem;"><?= $row['desc'] ?></td>
                             <td class="text-end <?= $row['charge'] ? 'fw-bold text-danger' : 'text-muted' ?>" style="font-size:0.7rem;"><?= $row['charge'] ? 'PHP ' . number_format($row['charge'], 2) : '-' ?></td>
                             <td class="text-end <?= $row['payment'] ? 'fw-bold text-success' : 'text-muted' ?>" style="font-size:0.7rem;"><?= $row['payment'] ? 'PHP ' . number_format($row['payment'], 2) : '-' ?></td>
-                            <td class="text-end fw-semibold text-dark" style="font-size:0.7rem;">PHP <?= number_format($running, 2) ?></td>
+                            <td class="text-end fw-semibold <?= $running < 0 ? 'text-success' : 'text-dark' ?>" style="font-size:0.7rem;">PHP <?= number_format(abs($running), 2) ?><?= $running < 0 ? ' CR' : '' ?></td>
                         </tr>
                         <?php endforeach; ?>
                     </tbody>
