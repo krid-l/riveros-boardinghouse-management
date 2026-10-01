@@ -237,13 +237,13 @@ require_once 'header.php';
                 <?php if ($currentBalance <= 0): ?>
                     <h3 class="fw-bold text-success mb-1">₱<?= number_format(0, 2) ?></h3>
                     <div class="text-success fw-bold" style="font-size: 0.7rem;"><i class="fa-solid fa-check me-1"></i>Fully Paid<?= $currentBalance < 0 ? ' · ₱' . number_format(-$currentBalance, 2) . ($isDeactivated ? ' to refund' : ' credit') : '' ?></div>
-                <?php else: ?>
+                <?php elseif ($billing['overdue'] > 0): ?>
                     <h3 class="fw-bold text-danger mb-1">₱<?= number_format($currentBalance, 2) ?></h3>
-                    <?php if ($billing['overdue'] > 0): ?>
-                        <div class="text-danger fw-bold" style="font-size: 0.7rem;"><i class="fa-solid fa-triangle-exclamation me-1"></i>₱<?= number_format($billing['overdue'], 2) ?> overdue<?= $overdueSince ? ' since ' . date('M j, Y', strtotime($overdueSince)) : '' ?></div>
-                    <?php elseif ($nextDue): ?>
-                        <div class="text-warning fw-semibold" style="font-size: 0.7rem;"><i class="fa-regular fa-clock me-1"></i>Due <?= date('M j, Y', strtotime($nextDue)) ?></div>
-                    <?php endif; ?>
+                    <div class="text-danger fw-bold" style="font-size: 0.7rem;"><i class="fa-solid fa-triangle-exclamation me-1"></i>₱<?= number_format($billing['overdue'], 2) ?> overdue<?= $overdueSince ? ' since ' . date('M j, Y', strtotime($overdueSince)) : '' ?></div>
+                <?php else: ?>
+                    <?php $upcomingDue = upcomingDueDate($pdo, $tenantId); ?>
+                    <h3 class="fw-bold text-warning mb-1">₱<?= number_format($currentBalance, 2) ?></h3>
+                    <div class="text-muted fw-semibold" style="font-size: 0.7rem;"><i class="fa-regular fa-clock me-1"></i>Next bill<?= $upcomingDue ? ', due ' . dueDateLabel($upcomingDue) : '' ?> &middot; nothing overdue</div>
                 <?php endif; ?>
             </div>
         </div>

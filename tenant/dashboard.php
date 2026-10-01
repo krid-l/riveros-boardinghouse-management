@@ -18,6 +18,7 @@ if (!empty($currentTenant['room_id'])) {
 $myRentShare = $room ? rentShare((float)$room['price_per_month'], $roomOccupants) : 0.0;
 // Held to pay for their last month; follows the share as roommates come and go.
 $myDeposit = tenantDeposit($pdo, $currentTenant);
+$upcomingDue = upcomingDueDate($pdo, (int)$currentTenant['id']);
 
 // Fetch recent payment history
 $payStmt = $pdo->prepare("SELECT * FROM payments WHERE tenant_id = ? ORDER BY payment_date DESC LIMIT 4");
@@ -191,12 +192,15 @@ $balance = $currentTenant['balance'] ?? 0;
                 <?php if ($balance < 0): ?>
                     <div class="fw-semibold" style="font-size: 0.7rem; color: #bbf7d0;">PHP <?= number_format(-$balance, 2) ?> credit &middot; goes toward your next bill</div>
                 <?php endif; ?>
-            <?php else: ?>
+            <?php elseif ($billing['overdue'] > 0): ?>
                 <div class="text-white-50 fw-semibold" style="font-size: 0.7rem; letter-spacing: 0.5px;">Outstanding Balance</div>
                 <div class="fw-bolder" style="font-size: 1.25rem; color: #ff6b6b;">PHP <?= number_format($balance, 2) ?></div>
-                <?php if ($billing['overdue'] > 0): ?>
-                    <div class="fw-semibold" style="font-size: 0.65rem; color: #fecaca;"><i class="fa-solid fa-triangle-exclamation me-1"></i>PHP <?= number_format($billing['overdue'], 2) ?> overdue</div>
-                <?php endif; ?>
+                <div class="fw-semibold" style="font-size: 0.65rem; color: #fecaca;"><i class="fa-solid fa-triangle-exclamation me-1"></i>PHP <?= number_format($billing['overdue'], 2) ?> overdue</div>
+            <?php else: ?>
+                <?php // Rent for the month is posted on the 1st but paid by the 30th: until then it's a bill to come, not a debt. ?>
+                <div class="text-white-50 fw-semibold" style="font-size: 0.7rem; letter-spacing: 0.5px;">Balance Status</div>
+                <div class="fw-bolder" style="font-size: 1.25rem; color: #4ade80;">Nothing overdue <i class="fa-solid fa-check-circle ms-1" style="font-size: 1rem;"></i></div>
+                <div class="fw-semibold" style="font-size: 0.7rem; color: #fde68a;"><i class="fa-regular fa-clock me-1"></i>Next bill PHP <?= number_format($balance, 2) ?><?= $upcomingDue ? ' due ' . dueDateLabel($upcomingDue) : '' ?></div>
             <?php endif; ?>
         </div>
         <a href="payments.php" class="btn bg-white text-primary fw-bold rounded-pill shadow-sm px-3 py-2" style="font-size: 0.75rem;">

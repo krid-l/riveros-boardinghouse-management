@@ -455,6 +455,22 @@ function nextDueDate(array $tenant): ?string {
     return $due;
 }
 
+// The earliest due date among charges that haven't fallen due yet: when the bill a tenant is
+// currently running up has to be paid. Null when nothing is pending.
+function upcomingDueDate(PDO $pdo, int $tenantId): ?string {
+    $stmt = $pdo->prepare("SELECT MIN(due_date) FROM charges WHERE tenant_id = ? AND due_date >= ? AND amount > 0");
+    $stmt->execute([$tenantId, date('Y-m-d')]);
+    $due = $stmt->fetchColumn();
+    return $due ?: null;
+}
+
+/** "today", "tomorrow" or "Oct 30, 2026" */
+function dueDateLabel(string $date): string {
+    if ($date === date('Y-m-d')) return 'today';
+    if ($date === date('Y-m-d', strtotime('+1 day'))) return 'tomorrow';
+    return date('M j, Y', strtotime($date));
+}
+
 // Oldest unpaid charge's due date, for "overdue since" messages. Payments settle the oldest charges first.
 function oldestUnpaidDueDate(PDO $pdo, int $tenantId, float $balance): ?string {
     if ($balance <= 0) return null;
