@@ -32,6 +32,9 @@ $announcements = $pdo->query("SELECT * FROM announcements ORDER BY created_at DE
 $settings = $pdo->query("SELECT setting_key, setting_value FROM settings")->fetchAll(PDO::FETCH_KEY_PAIR);
 $gcashNumber = $settings['gcash_number'] ?? '0917 123 4567';
 $gcashName = $settings['gcash_name'] ?? 'Boarding House';
+// QR code the admin uploaded in Settings -> GCash Payment Information (may not be set).
+require_once '../includes/uploads.php';
+$gcashQr = uploadSrc($settings['gcash_qr_path'] ?? '', '../');
 
 // Rent is due every 30th (see includes/billing.php)
 $nextDue = nextDueDate($currentTenant);
@@ -316,14 +319,48 @@ $balance = $currentTenant['balance'] ?? 0;
             <div class="text-muted text-uppercase fw-bold mb-1" style="font-size: 0.65rem; letter-spacing: 0.5px;">Account Name</div>
             <h6 class="fw-bolder text-dark mb-0"><?= htmlspecialchars($gcashName) ?></h6>
         </div>
-        <div class="border-start ps-4 d-none d-md-block text-center">
-            <div class="text-dark fw-bold mb-1" style="font-size: 0.65rem;">Scan to Pay</div>
-            <div class="bg-dark rounded" style="width: 40px; height: 40px; opacity: 0.8; display: flex; align-items:center; justify-content:center;">
-                <i class="fa-solid fa-qrcode text-white"></i>
+    </div>
+
+    <?php if ($gcashQr): ?>
+    <!-- Scan it from another phone, or save it and use "Upload QR" in the GCash app. -->
+    <div class="border-top mt-3 pt-3 d-flex flex-column flex-sm-row align-items-center gap-3">
+        <button type="button" class="btn p-0 border-0 bg-transparent" data-bs-toggle="modal" data-bs-target="#gcashQrModal" title="View the QR code full size">
+            <img src="<?= htmlspecialchars($gcashQr) ?>" alt="GCash QR code for <?= htmlspecialchars($gcashName) ?>"
+                 class="rounded border bg-white p-1 shadow-sm" style="width: 140px; height: 140px; object-fit: contain;">
+        </button>
+        <div class="text-center text-sm-start">
+            <div class="fw-bold text-dark mb-1" style="font-size: 0.85rem;"><i class="fa-solid fa-qrcode me-1 text-primary"></i> Scan to Pay</div>
+            <div class="text-muted mb-2" style="font-size: 0.72rem;">Scan with GCash, or save the image and use <strong>Upload QR</strong> in the GCash app.</div>
+            <div class="d-flex gap-2 justify-content-center justify-content-sm-start">
+                <button type="button" class="btn btn-sm btn-outline-primary fw-semibold" data-bs-toggle="modal" data-bs-target="#gcashQrModal">
+                    <i class="fa-solid fa-expand me-1"></i> View
+                </button>
+                <a href="<?= htmlspecialchars($gcashQr) ?>" download="gcash-qr" target="_blank" rel="noopener" class="btn btn-sm btn-outline-secondary fw-semibold">
+                    <i class="fa-solid fa-download me-1"></i> Save QR
+                </a>
+            </div>
+        </div>
+    </div>
+    <?php endif; ?>
+</div>
+
+<?php if ($gcashQr): ?>
+<div class="modal fade" id="gcashQrModal" tabindex="-1" aria-label="GCash QR code">
+    <div class="modal-dialog modal-dialog-centered" style="max-width: 420px;">
+        <div class="modal-content border-0 shadow">
+            <div class="modal-header border-0 pb-0">
+                <h6 class="modal-title fw-bold"><i class="fa-solid fa-qrcode text-primary me-2"></i>Scan to Pay</h6>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body text-center">
+                <img src="<?= htmlspecialchars($gcashQr) ?>" alt="GCash QR code for <?= htmlspecialchars($gcashName) ?>" class="img-fluid rounded" style="max-height: 70vh;">
+                <div class="mt-2 fw-bold text-dark"><?= htmlspecialchars($gcashName) ?></div>
+                <div class="text-primary fw-semibold"><?= htmlspecialchars($gcashNumber) ?></div>
             </div>
         </div>
     </div>
 </div>
+<?php endif; ?>
 
 <div class="announcement-card mb-4">
     <div class="d-flex justify-content-between align-items-center mb-3">

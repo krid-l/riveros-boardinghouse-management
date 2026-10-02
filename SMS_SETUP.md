@@ -89,5 +89,6 @@ Every text, sent or not, is in **Settings → Recent SMS** with the reason it fa
 | A message about balance or credits | Load more credits in PhilSMS. |
 | `HTTPS certificate check failed` | The app carries its own certificate list for WAMP (`includes/certs/cacert.pem`). Check that the file exists. If it does, PHP's `curl.cainfo` setting is pointing somewhere broken: clear it in WAMP's `php.ini` and restart WAMP. |
 | `Could not reach PhilSMS` | No internet connection, or a firewall blocking `app.philsms.com`. |
+| `PhilSMS did not answer within 30 seconds` (log: **No reply**) | The request got through but PhilSMS never replied, so the text may still arrive: check the phone before resending. Then press **Check Credits**. If that works, PhilSMS was just slow to send. If it times out too, something on the computer or network is holding the connection: try turning off the antivirus "web shield"/HTTPS scanning or a VPN, or test from another network (e.g. a phone hotspot). |
 | `Skipped: SMS is not set up yet` | No token is saved. See step 2. |
 | `Skipped: Not a valid PH mobile number` | Fix the tenant's Contact Number. |

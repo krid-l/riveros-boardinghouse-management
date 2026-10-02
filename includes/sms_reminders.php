@@ -19,7 +19,8 @@ const REMINDER_DAYS_BEFORE = 3;
 
 /** Has a message with this ref already gone out? */
 function smsAlreadySent(PDO $pdo, string $ref): bool {
-    $stmt = $pdo->prepare("SELECT 1 FROM sms_log WHERE ref = ? AND status = 'sent'");
+    // A reminder PhilSMS didn't answer for may well have arrived; better not to send it twice.
+    $stmt = $pdo->prepare("SELECT 1 FROM sms_log WHERE ref = ? AND status IN ('sent', 'unknown')");
     $stmt->execute([$ref]);
     return (bool)$stmt->fetchColumn();
 }

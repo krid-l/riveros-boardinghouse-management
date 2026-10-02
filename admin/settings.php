@@ -105,7 +105,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($r['sent'] > 0) {
                 $success = 'Test message sent to ' . formatPhMobile(normalizePhMobile($number)) . '. It should arrive within a minute.';
             } else {
-                $error = 'Test message not sent. ' . smsErrorText($r);
+                $why = smsErrorText($r);
+                $error = (str_contains($why, 'did not answer') ? 'No reply from PhilSMS for the test message. ' : 'Test message not sent. ') . $why;
             }
         }
     } elseif ($action === 'sms_balance') {
@@ -443,6 +444,8 @@ require_once 'header.php';
                                         <span class="badge badge-soft-success">Sent</span>
                                     <?php elseif ($l['status'] === 'failed'): ?>
                                         <span class="badge badge-soft-danger">Failed</span>
+                                    <?php elseif ($l['status'] === 'unknown'): ?>
+                                        <span class="badge badge-soft-warning">No reply</span>
                                     <?php else: ?>
                                         <span class="badge badge-soft-secondary">Skipped</span>
                                     <?php endif; ?>

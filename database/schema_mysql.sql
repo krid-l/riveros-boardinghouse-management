@@ -124,7 +124,7 @@ CREATE TABLE IF NOT EXISTS sms_log (
     recipient VARCHAR(30) NOT NULL,
     message TEXT NOT NULL,
     purpose VARCHAR(30) NOT NULL DEFAULT 'general',   -- payment_verified, reminder_due, announcement, test, ...
-    status VARCHAR(10) NOT NULL,                      -- 'sent' | 'failed' | 'skipped'
+    status VARCHAR(10) NOT NULL,                      -- 'sent' | 'failed' | 'skipped' | 'unknown' (no reply)
     error VARCHAR(255),
     ref VARCHAR(80),                                  -- marks a reminder as sent, so it isn't repeated
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

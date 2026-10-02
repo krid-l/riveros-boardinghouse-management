@@ -15,7 +15,9 @@
 
 const PHILSMS_API_BASE = 'https://app.philsms.com/api/v3';   // PHILSMS_API_BASE env var overrides it (testing)
 const PHILSMS_DEFAULT_SENDER = 'PhilSMS';
-const SMS_BULK_CHUNK = 100;   // recipients per request when one message goes to many numbers
+const SMS_BULK_CHUNK = 100;
+// PhilSMS answers a send only after handing the text to the network, which can take a while.
+const PHILSMS_TIMEOUT = 30;   // recipients per request when one message goes to many numbers
 
 /** Token and sender ID: the admin's settings, else PHILSMS_API_TOKEN / PHILSMS_SENDER_ID env vars. */
 function smsConfig(PDO $pdo): array {
@@ -110,6 +112,8 @@ function philsmsRequest(string $method, string $path, string $token, ?array $bod
     $response = false;
     $http = 0;
     $transportError = '';
+    $timedOut = false;
+    $userAgent = 'RiverosBoardingHouse/1.0 (PHP ' . PHP_VERSION . ')';
 
     if (function_exists('curl_init')) {
         $ch = curl_init($url);
@@ -117,8 +121,13 @@ function philsmsRequest(string $method, string $path, string $token, ?array $bod
             CURLOPT_CUSTOMREQUEST  => $method,
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_HTTPHEADER     => $headers,
-            CURLOPT_CONNECTTIMEOUT => 5,
-            CURLOPT_TIMEOUT        => 15,
+            CURLOPT_USERAGENT      => $userAgent,
+            CURLOPT_CONNECTTIMEOUT => 10,
+            CURLOPT_TIMEOUT        => PHILSMS_TIMEOUT,
+            // Plain HTTP/1.1 over IPv4: HTTP/2 negotiation and half-working IPv6 are the usual
+            // reasons a request from PHP on Windows hangs with "0 bytes received".
+            CURLOPT_HTTP_VERSION   => CURL_HTTP_VERSION_1_1,
+            CURLOPT_IPRESOLVE      => CURL_IPRESOLVE_V4,
         ]);
         if ($payload !== null) {
             curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
@@ -130,6 +139,7 @@ function philsmsRequest(string $method, string $path, string $token, ?array $bod
         $http = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
         if ($response === false) {
             $transportError = curl_error($ch);
+            $timedOut = curl_errno($ch) === 28;   // CURLE_OPERATION_TIMEDOUT
         }
         curl_close($ch);
     } else {
@@ -142,7 +152,9 @@ function philsmsRequest(string $method, string $path, string $token, ?array $bod
                 'method'        => $method,
                 'header'        => implode("\r\n", $headers),
                 'content'       => $payload ?? '',
-                'timeout'       => 15,
+                'timeout'       => PHILSMS_TIMEOUT,
+                'user_agent'    => $userAgent,
+                'protocol_version' => 1.1,
                 'ignore_errors' => true,   // still read the body of 4xx answers: it says what's wrong
             ],
             'ssl' => $ssl,
@@ -160,9 +172,22 @@ function philsmsRequest(string $method, string $path, string $token, ?array $bod
         }
         if ($response === false) {
             $transportError = error_get_last()['message'] ?? 'could not connect';
+            $timedOut = stripos($transportError, 'timed out') !== false;
         }
     }
 
+    if ($response === false && $timedOut) {
+        // Connected, sent the request, but no answer in time. For a send that doesn't mean it
+        // failed: PhilSMS may still deliver it, so say so rather than invite a duplicate.
+        $error = $method === 'POST'
+            ? 'PhilSMS did not answer within ' . PHILSMS_TIMEOUT . ' seconds, so it is unknown whether the text went out. '
+              . 'Check the phone (or Reports in your PhilSMS dashboard) before sending again. If this keeps happening, '
+              . 'press Check Credits: if that works, PhilSMS is just slow to send; if it also times out, something on '
+              . 'this computer or network (firewall, antivirus web shield, VPN) is holding up the connection.'
+            : 'PhilSMS did not answer within ' . PHILSMS_TIMEOUT . ' seconds. Something on this computer or network '
+              . '(firewall, antivirus web shield, VPN) may be holding up the connection to app.philsms.com.';
+        return ['ok' => false, 'error' => $error, 'data' => null, 'http' => 0, 'timeout' => true];
+    }
     if ($response === false) {
         $hint = stripos($transportError, 'certificate') !== false
             ? ' (HTTPS certificate check failed; see SMS_SETUP.md, Troubleshooting)'
@@ -246,7 +271,10 @@ function sendBulkSMS(PDO $pdo, array $recipients, string $message, string $purpo
             'message'   => $message,
         ]);
         foreach ($chunk as [$tenantId, $number]) {
-            logSms($pdo, $tenantId, $number, $message, $purpose, $response['ok'] ? 'sent' : 'failed', $response['error'], $ref);
+            // "unknown": PhilSMS never answered, so the text may or may not have gone out.
+            $status = $response['ok'] ? 'sent' : (!empty($response['timeout']) ? 'unknown' : 'failed');
+            $logError = $status === 'unknown' ? 'No reply from PhilSMS within ' . PHILSMS_TIMEOUT . ' s. It may still have been delivered.' : $response['error'];
+            logSms($pdo, $tenantId, $number, $message, $purpose, $status, $logError, $ref);
             $result[$response['ok'] ? 'sent' : 'failed']++;
         }
         if (!$response['ok']) {
