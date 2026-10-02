@@ -84,7 +84,7 @@ Every text, sent or not, is in **Settings → Recent SMS** with the reason it fa
 
 | Message | Fix |
 | --- | --- |
-| `The API token was not accepted` | The token was mistyped or regenerated. Copy it again from the PhilSMS Developers page and save it. |
+| `The API token was not accepted` / `Unauthenticated` | Only part of the token was copied, or it was regenerated since. PhilSMS tokens look like `123\|AbCdEf...`; double-clicking selects only one half. Select the whole token (or use its copy button), paste it, save, and compare it with the **Saved token** hint under the box (first 6 and last 4 characters, and the length). |
 | `Sender ID ... is not authorized` (or similar) | Set **Sender Name** back to `PhilSMS`, or wait for PhilSMS to approve yours. |
 | A message about balance or credits | Load more credits in PhilSMS. |
 | `HTTPS certificate check failed` | The app carries its own certificate list for WAMP (`includes/certs/cacert.pem`). Check that the file exists. If it does, PHP's `curl.cainfo` setting is pointing somewhere broken: clear it in WAMP's `php.ini` and restart WAMP. |

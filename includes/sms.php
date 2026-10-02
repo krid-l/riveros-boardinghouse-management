@@ -19,15 +19,32 @@ const SMS_BULK_CHUNK = 100;
 // PhilSMS answers a send only after handing the text to the network, which can take a while.
 const PHILSMS_TIMEOUT = 30;   // recipients per request when one message goes to many numbers
 
+/**
+ * Clean up a pasted API token: surrounding quotes, a "Bearer " prefix copied from the docs,
+ * and spaces or line breaks picked up when copying.
+ */
+function cleanSmsToken(string $token): string {
+    $token = trim($token, " \t\n\r\0\x0B\"'`");
+    $token = preg_replace('/^bearer\s+/i', '', $token);
+    return preg_replace('/\s+/', '', $token);
+}
+
+/** "12|AbCd…wXyZ (52 characters)": enough to compare with the PhilSMS dashboard, not to use it. */
+function smsTokenHint(string $token): string {
+    $len = strlen($token);
+    $shown = $len > 14 ? substr($token, 0, 6) . '…' . substr($token, -4) : str_repeat('•', $len);
+    return "$shown ($len characters)";
+}
+
 /** Token and sender ID: the admin's settings, else PHILSMS_API_TOKEN / PHILSMS_SENDER_ID env vars. */
 function smsConfig(PDO $pdo): array {
     $rows = $pdo->query("SELECT setting_key, setting_value FROM settings
                          WHERE setting_key IN ('sms_api_key', 'sms_sender_id', 'boarding_house_name')")
                 ->fetchAll(PDO::FETCH_KEY_PAIR);
 
-    $token = trim((string)($rows['sms_api_key'] ?? ''));
+    $token = cleanSmsToken((string)($rows['sms_api_key'] ?? ''));
     if ($token === '') {
-        $token = trim((string)(getenv('PHILSMS_API_TOKEN') ?: ''));
+        $token = cleanSmsToken((string)(getenv('PHILSMS_API_TOKEN') ?: ''));
     }
     $sender = trim((string)($rows['sms_sender_id'] ?? ''));
     if ($sender === '') {
@@ -204,8 +221,10 @@ function philsmsRequest(string $method, string $path, string $token, ?array $bod
         return ['ok' => true, 'error' => '', 'data' => $data, 'http' => $http];
     }
     $reason = is_string($data['message'] ?? null) ? $data['message'] : "HTTP $http";
-    if ($http === 401) {
-        $reason = 'The API token was not accepted. Copy it again from PhilSMS (Developers > API Token).';
+    // PhilSMS doesn't always use HTTP 401 for a bad token; it may only say "Unauthenticated".
+    if ($http === 401 || $http === 403 || stripos($reason, 'unauthenticated') !== false || stripos($reason, 'unauthorized') !== false) {
+        $reason = 'The API token was not accepted. Copy it again from the PhilSMS Developers page: the whole token, '
+                . 'including the number and "|" at the start (e.g. 123|AbC...). Double-clicking selects only part of it.';
     }
     return ['ok' => false, 'error' => 'PhilSMS: ' . $reason, 'data' => $data, 'http' => $http];
 }

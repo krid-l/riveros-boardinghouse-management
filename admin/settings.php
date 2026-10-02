@@ -76,7 +76,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $success = 'GCash QR code removed.';
     } elseif ($action === 'update_sms') {
         // The saved token is never sent back to the page, so a blank box means "keep it".
-        $token = trim($_POST['sms_api_key'] ?? '');
+        $token = cleanSmsToken((string)($_POST['sms_api_key'] ?? ''));
         $sender = trim($_POST['sms_sender_id'] ?? '') ?: PHILSMS_DEFAULT_SENDER;
         if (!preg_match('/^[A-Za-z0-9 .\-]{1,11}$/', $sender)) {
             $error = 'The sender name can be at most 11 letters or digits, and must be one PhilSMS has approved for your account.';
@@ -91,6 +91,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     updateSetting($pdo, 'sms_api_key', $token);
                 }
                 $success = 'SMS settings saved. Send a test message to check that they work.';
+                if ($token !== '' && !str_contains($token, '|')) {
+                    $success .= ' Note: PhilSMS tokens usually start with a number and "|" (like 123|AbC...). If the test says the token was not accepted, copy the whole token again.';
+                }
             }
         }
     } elseif ($action === 'sms_test') {
@@ -151,6 +154,7 @@ $qrSrc = uploadSrc($settingsMap['gcash_qr_path'] ?? '', '../');
 // SMS: whether a token is saved (the token itself never goes back to the browser), and the
 // latest texts, so the admin can see what went out and why anything didn't.
 $smsTokenSaved = trim($settingsMap['sms_api_key'] ?? '') !== '';
+$smsTokenHint = $smsTokenSaved ? smsTokenHint(cleanSmsToken($settingsMap['sms_api_key'])) : '';
 $smsTokenFromEnv = !$smsTokenSaved && smsConfigured($pdo);
 $smsLog = $pdo->query("SELECT l.*, t.first_name, t.last_name FROM sms_log l
                        LEFT JOIN tenants t ON t.id = l.tenant_id
@@ -382,6 +386,9 @@ require_once 'header.php';
                             <input type="password" name="sms_api_key" class="form-control" autocomplete="off"
                                    placeholder="<?= $smsTokenSaved ? 'Saved. Leave blank to keep it' : ($smsTokenFromEnv ? 'Set on the server (PHILSMS_API_TOKEN)' : 'Paste your API token') ?>">
                             <i class="fa-regular fa-eye eye-icon"></i>
+                            <?php if ($smsTokenSaved): ?>
+                            <div class="form-text" style="font-size:0.65rem;">Saved token: <code><?= htmlspecialchars($smsTokenHint) ?></code>. Compare it with the one on the PhilSMS Developers page.</div>
+                            <?php endif; ?>
                         </div>
                         <div class="col-md-5">
                             <label class="form-label">Sender Name</label>
