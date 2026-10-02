@@ -2,7 +2,7 @@
 -- Clear out test data, keep the setup. The MySQL counterpart of reset_data.sql,
 -- which does the same job on the PostgreSQL (Supabase) database.
 --
--- Wipes tenants, rooms, payments, charges, complaints and announcements, and leaves the
+-- Wipes tenants, rooms, payments, charges, complaints, announcements and the SMS log, and leaves the
 -- tables, the admin account and the Settings page values (GCash details, SMS keys, business
 -- info) exactly as they are.
 --
@@ -25,6 +25,9 @@ DELETE FROM complaints;
 DELETE FROM tenants;
 DELETE FROM announcements;
 DELETE FROM rooms;
+-- The SMS log (created the first time the app is opened after the SMS update). Cleared too,
+-- because new tenants reuse old ids and would otherwise look already reminded.
+DELETE FROM sms_log;
 
 -- Tenant logins only. The admin account stays.
 DELETE FROM users WHERE role = 'tenant';

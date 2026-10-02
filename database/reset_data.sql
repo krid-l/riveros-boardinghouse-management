@@ -2,7 +2,7 @@
 -- Wipes tenant and money data so the system can be tested from a clean slate.
 --
 -- DELETED: tenants, their login accounts, payments, receipt records, charges,
---          room transfer history, complaints and announcements.
+--          room transfer history, complaints, announcements and the SMS log.
 -- KEPT:    rooms (set back to vacant), the admin account(s), and settings
 --          (house name, GCash details, SMS keys, schema version).
 --
@@ -20,7 +20,7 @@ DECLARE
 BEGIN
     -- Tenant rows cascade into the rest, but clear each table explicitly so this
     -- still works if a foreign key is missing. Tables that don't exist are skipped.
-    FOREACH t IN ARRAY ARRAY['payments', 'complaints', 'charges', 'room_transfers', 'announcements', 'tenants']
+    FOREACH t IN ARRAY ARRAY['sms_log', 'payments', 'complaints', 'charges', 'room_transfers', 'announcements', 'tenants']
     LOOP
         IF to_regclass('public.' || t) IS NOT NULL THEN
             EXECUTE format('DELETE FROM %I', t);

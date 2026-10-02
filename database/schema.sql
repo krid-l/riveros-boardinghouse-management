@@ -99,6 +99,20 @@ CREATE TABLE IF NOT EXISTS announcements (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Every text message, sent or not (PhilSMS). Shown under Admin -> Settings -> SMS.
+CREATE TABLE IF NOT EXISTS sms_log (
+    id SERIAL PRIMARY KEY,
+    tenant_id INT REFERENCES tenants(id) ON DELETE SET NULL,
+    recipient VARCHAR(30) NOT NULL,
+    message TEXT NOT NULL,
+    purpose VARCHAR(30) NOT NULL DEFAULT 'general',   -- payment_verified, reminder_due, announcement, test, ...
+    status VARCHAR(10) NOT NULL,                      -- 'sent' | 'failed' | 'skipped' | 'unknown' (no reply)
+    error VARCHAR(255),
+    ref VARCHAR(80),                                  -- marks a reminder as sent, so it isn't repeated
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_sms_log_ref ON sms_log (ref);
+
 CREATE TABLE IF NOT EXISTS settings (
     setting_key VARCHAR(50) PRIMARY KEY,
     setting_value TEXT
@@ -117,9 +131,9 @@ INSERT INTO settings (setting_key, setting_value) VALUES
     ('gcash_name', 'Boarding House'),
     ('gcash_number', '0917 123 4567'),
     ('gcash_instructions', 'Pay via GCash and send the reference number and screenshot through the payment submission form. Thank you!'),
-    ('sms_provider', 'Local SMS Gateway'),
+    ('sms_provider', 'PhilSMS'),
     ('sms_api_key', ''),
-    ('sms_sender_id', 'BOARDINGHOUSE'),
+    ('sms_sender_id', 'PhilSMS'),
     ('rent_due_date', '30th'),
     ('currency', 'Philippine Peso (PHP)'),
     ('date_format', 'Aug 31, 2025 (MMM DD, YYYY)'),

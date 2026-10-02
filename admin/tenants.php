@@ -15,7 +15,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
     // "add" stays on the page so the admin can copy the generated login details.
     if (empty($error) && $action !== 'add') {
-        header("Location: tenants.php?msg=" . urlencode(strip_tags($success)));
+        header("Location: tenants.php?msg=" . urlencode(html_entity_decode(strip_tags($success))));
         exit;
     }
 }
@@ -54,7 +54,9 @@ $listSql = "
     SELECT * FROM (
         SELECT t.*, u.username, u.created_at AS user_created_at, r.room_number,
                COALESCE((SELECT SUM(c.amount) FROM charges c
-                         WHERE c.tenant_id = t.id AND c.due_date >= ?), 0) AS not_yet_due
+                         WHERE c.tenant_id = t.id AND c.due_date >= ?), 0) AS not_yet_due,
+               (SELECT COUNT(*) FROM payments p
+                WHERE p.tenant_id = t.id AND p.status <> 'rejected' AND p.payment_date >= t.move_in_date) AS stay_payments
         FROM tenants t
         JOIN users u ON t.user_id = u.id
         LEFT JOIN rooms r ON t.room_id = r.id
@@ -164,6 +166,8 @@ require_once 'header.php';
         font-size: 0.8rem;
         padding: 0.4rem 0.75rem;
     }
+    .movein-box { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 0.6rem 0.75rem; }
+    .movein-box .form-check-label { font-size: 0.75rem; font-weight: 600; color: #0f172a; margin-bottom: 0; }
 </style>
 
 <!-- Header Section -->
@@ -241,7 +245,7 @@ require_once 'header.php';
                     </div>
                 </div>
 
-                <form method="POST">
+                <form method="POST" data-movein-form>
                     <input type="hidden" name="action" value="add">
 
                     <div class="mb-2">
@@ -282,7 +286,7 @@ require_once 'header.php';
                                         $label .= " (Avail: $avail | ₱" . number_format($r['price_per_month']) . "/room, ₱" . number_format($share, 2) . " each)";
                                     }
                                 ?>
-                                <option value="<?= $r['id'] ?>" <?= $isFull ? 'disabled' : '' ?>><?= $label ?></option>
+                                <option value="<?= $r['id'] ?>" data-share="<?= $isFull ? '' : round($r['price_per_month'] / ($r['occupied'] + 1), 2) ?>" <?= $isFull ? 'disabled' : '' ?>><?= $label ?></option>
                             <?php endforeach; ?>
                         </select>
                     </div>
@@ -291,6 +295,7 @@ require_once 'header.php';
                         <input type="date" class="form-control" name="move_in_date" value="<?= date('Y-m-d') ?>">
                         <small class="text-muted d-block mt-1" style="font-size:0.62rem;">Used when a room is assigned. Day 1–15: full first month. Day 16+: half. Due every 30th.</small>
                     </div>
+                    <?= moveInPaymentFields('add_movein', true) ?>
                     <button type="submit" class="btn btn-primary w-100" style="font-size:0.8rem; font-weight:600;"><i class="fa-solid fa-plus me-2"></i>Create Tenant</button>
                 </form>
             </div>
@@ -378,6 +383,13 @@ require_once 'header.php';
                             $bs = tenantBillingStatus($t, $notYetDue);
                             $balance = $bs['balance'];
                             $isDeactivated = $bs['key'] === 'deactivated';
+                            // Moved in, owes money, and hasn't paid anything since: the advance and
+                            // deposit are still outstanding and can be recorded as received.
+                            $moveInDue = null;
+                            if (!$isDeactivated && $t['room_id'] && $t['move_in_date'] && $balance > 0 && (int)$t['stay_payments'] === 0) {
+                                $moveInDue = moveInAmountDue($pdo, (int)$t['id']);
+                                if ($moveInDue['amount'] <= 0) $moveInDue = null;
+                            }
                             $rowData = htmlspecialchars(json_encode([
                                 'id' => (int)$t['id'],
                                 'name' => $t['first_name'] . ' ' . $t['last_name'],
@@ -390,6 +402,7 @@ require_once 'header.php';
                                 'room_number' => $t['room_number'],
                                 'has_move_in' => !empty($t['move_in_date']),
                                 'balance' => $balance,
+                                'movein_due' => $moveInDue,
                             ]), ENT_QUOTES);
                         ?>
                         <tr class="tenant-row <?= $isDeactivated ? 'opacity-75' : '' ?>" data-status="<?= $bs['key'] ?>" data-search="<?= htmlspecialchars(strtolower($t['first_name'].' '.$t['last_name'].' '.$t['username'])) ?>">
@@ -431,6 +444,11 @@ require_once 'header.php';
                                         <i class="fa-solid fa-rotate-left" style="font-size: 0.65rem;"></i>
                                     </button>
                                 <?php else: ?>
+                                    <?php if ($moveInDue): ?>
+                                    <button type="button" onclick="openMoveInModal(this)" class="btn btn-sm btn-outline-success rounded-1 px-1 py-0 me-1" title="Record move-in payment (advance + deposit)">
+                                        <i class="fa-solid fa-money-bill-wave" style="font-size: 0.65rem;"></i>
+                                    </button>
+                                    <?php endif; ?>
                                     <button type="button" onclick="openRoomModal(this)" class="btn btn-sm btn-outline-info rounded-1 px-1 py-0 me-1" title="<?= $t['room_id'] ? 'Change room' : 'Assign room' ?>">
                                         <i class="fa-solid fa-right-left" style="font-size: 0.65rem;"></i>
                                     </button>
@@ -467,9 +485,35 @@ function roomOptions(array $rooms): string {
         $share = $r['price_per_month'] / ($r['occupied'] + 1);
         $label = 'Room ' . htmlspecialchars($r['room_number'] ?? '')
                . ($isFull ? ' - FULL' : " (Avail: $avail | ₱" . number_format($r['price_per_month']) . "/room, ₱" . number_format($share, 2) . " each)");
-        $html .= '<option value="' . (int)$r['id'] . '" data-full="' . ($isFull ? 1 : 0) . '"' . ($isFull ? ' disabled' : '') . '>' . $label . '</option>';
+        $html .= '<option value="' . (int)$r['id'] . '" data-full="' . ($isFull ? 1 : 0) . '" data-share="' . round($share, 2) . '"' . ($isFull ? ' disabled' : '') . '>' . $label . '</option>';
     }
     return $html;
+}
+
+// "Advance & deposit received" for a form that moves a tenant in. Ticked by default: tenants
+// pay the first month and the deposit when they move in.
+function moveInPaymentFields(string $id, bool $startHidden = false): string {
+    $id = htmlspecialchars($id);
+    return '
+                    <div class="movein-box mb-3' . ($startHidden ? ' d-none' : '') . '" id="' . $id . '" data-movein>
+                        <div class="form-check mb-1">
+                            <input class="form-check-input" type="checkbox" name="movein_paid" value="1" id="' . $id . '_paid" checked>
+                            <label class="form-check-label" for="' . $id . '_paid">Advance &amp; deposit received</label>
+                        </div>
+                        <div class="movein-estimate text-muted mb-2" style="font-size:0.68rem;"></div>
+                        <div class="movein-details row g-2">
+                            <div class="col-5">
+                                <select class="form-select" name="movein_method" aria-label="Payment method">
+                                    <option value="cash">Cash</option>
+                                    <option value="gcash">GCash</option>
+                                </select>
+                            </div>
+                            <div class="col-7">
+                                <input type="text" class="form-control" name="movein_reference" maxlength="100" placeholder="Ref no. (optional)">
+                            </div>
+                        </div>
+                        <small class="text-muted d-block mt-2" style="font-size:0.62rem;">Recorded as a verified payment with a receipt, so the tenant starts fully paid. Untick if they will pay later.</small>
+                    </div>';
 }
 ?>
 
@@ -520,7 +564,7 @@ function roomOptions(array $rooms): string {
 <div class="modal fade" id="roomModal" tabindex="-1">
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content border-0 shadow">
-            <form method="POST">
+            <form method="POST" data-movein-form>
                 <input type="hidden" name="action" value="change_room">
                 <input type="hidden" name="tenant_id" id="room_tenant_id">
                 <div class="modal-header bg-light border-0">
@@ -543,6 +587,7 @@ function roomOptions(array $rooms): string {
                         <label id="room_date_label">Date of Transfer</label>
                         <input type="date" class="form-control" name="effective_date" value="<?= date('Y-m-d') ?>" required>
                     </div>
+                    <?= moveInPaymentFields('room_movein', true) ?>
                     <div class="alert alert-info border-0 py-2 mb-0" style="font-size:0.7rem;" id="room_note"></div>
                 </div>
                 <div class="modal-footer border-0 bg-light">
@@ -592,7 +637,7 @@ function roomOptions(array $rooms): string {
 <div class="modal fade" id="reactivateModal" tabindex="-1">
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content border-0 shadow">
-            <form method="POST">
+            <form method="POST" data-movein-form>
                 <input type="hidden" name="action" value="reactivate">
                 <input type="hidden" name="tenant_id" id="react_tenant_id">
                 <div class="modal-header bg-light border-0">
@@ -608,14 +653,57 @@ function roomOptions(array $rooms): string {
                             <?= roomOptions($allRooms) ?>
                         </select>
                     </div>
-                    <div class="mb-1">
+                    <div class="mb-3">
                         <label>Move-in Date</label>
                         <input type="date" class="form-control" name="move_in_date" value="<?= date('Y-m-d') ?>" required>
                     </div>
+                    <?= moveInPaymentFields('react_movein') ?>
                 </div>
                 <div class="modal-footer border-0 bg-light">
                     <button type="button" class="btn btn-light border" data-bs-dismiss="modal" style="font-size:0.8rem;">Cancel</button>
                     <button type="submit" class="btn btn-success px-4" style="font-size:0.8rem;">Re-activate</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Record Move-in Payment Modal -->
+<div class="modal fade" id="moveInModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow">
+            <form method="POST">
+                <input type="hidden" name="action" value="movein_payment">
+                <input type="hidden" name="tenant_id" id="mi_tenant_id">
+                <div class="modal-header bg-light border-0">
+                    <h6 class="modal-title fw-bold text-success"><i class="fa-solid fa-money-bill-wave me-2"></i>Record Move-in Payment</h6>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body p-4 form-compact">
+                    <p style="font-size:0.8rem;" class="mb-2"><strong id="mi_name"></strong> paid their advance and deposit:</p>
+                    <table class="table table-sm mb-3" style="font-size:0.78rem;">
+                        <tr><td class="text-muted">First month (advance)</td><td class="text-end" id="mi_advance"></td></tr>
+                        <tr><td class="text-muted">Deposit (for the last month)</td><td class="text-end" id="mi_deposit"></td></tr>
+                        <tr class="fw-bold"><td>To record as paid</td><td class="text-end text-success" id="mi_amount"></td></tr>
+                    </table>
+                    <div class="row g-2">
+                        <div class="col-5">
+                            <label>Method</label>
+                            <select class="form-select" name="movein_method">
+                                <option value="cash">Cash</option>
+                                <option value="gcash">GCash</option>
+                            </select>
+                        </div>
+                        <div class="col-7">
+                            <label>Reference No. <span class="text-muted fw-normal">(optional)</span></label>
+                            <input type="text" class="form-control" name="movein_reference" maxlength="100">
+                        </div>
+                    </div>
+                    <small class="text-muted d-block mt-2" style="font-size:0.65rem;">A verified payment and receipt are created, and the tenant's balance drops by this amount.</small>
+                </div>
+                <div class="modal-footer border-0 bg-light">
+                    <button type="button" class="btn btn-light border" data-bs-dismiss="modal" style="font-size:0.8rem;">Cancel</button>
+                    <button type="submit" class="btn btn-success px-4" style="font-size:0.8rem;">Record Payment</button>
                 </div>
             </form>
         </div>
@@ -661,8 +749,55 @@ function openRoomModal(btn) {
         if (!opt.value) continue;
         opt.disabled = opt.dataset.full === '1' || Number(opt.value) === t.room_id;
     }
+    // Only a first assignment is a move-in with an advance and deposit to collect.
+    document.getElementById('room_movein').classList.toggle('d-none', !firstAssignment);
+    document.getElementById('room_movein_paid').disabled = !firstAssignment;
+    updateMoveIn(select.form);
     showModal('roomModal');
 }
+
+function openMoveInModal(btn) {
+    const t = tenantData(btn);
+    document.getElementById('mi_tenant_id').value = t.id;
+    document.getElementById('mi_name').textContent = t.name;
+    document.getElementById('mi_advance').textContent = peso(t.movein_due.advance);
+    document.getElementById('mi_deposit').textContent = peso(t.movein_due.deposit);
+    document.getElementById('mi_amount').textContent = peso(t.movein_due.amount);
+    showModal('moveInModal');
+}
+
+// The advance and deposit for the room and date picked: a full share each, or half a share
+// for the first month when moving in after the <?= HALF_MONTH_CUTOFF_DAY ?>th. The server works
+// out the exact figures when the form is saved.
+function updateMoveIn(form) {
+    const box = form.querySelector('[data-movein]');
+    if (!box) return;
+    const room = form.querySelector('select[name="room_id"]');
+    const dateInput = form.querySelector('input[name="move_in_date"], input[name="effective_date"]');
+    const opt = room && room.selectedOptions[0];
+    const share = opt && opt.value ? parseFloat(opt.dataset.share) : NaN;
+
+    // On the add form the block only matters once a room is picked.
+    if (form.querySelector('input[name="action"]').value === 'add') {
+        box.classList.toggle('d-none', !(opt && opt.value));
+    }
+    const estimate = box.querySelector('.movein-estimate');
+    if (isNaN(share)) {
+        estimate.textContent = 'Pick a room to see the amount.';
+    } else {
+        const day = dateInput && dateInput.value ? Number(dateInput.value.slice(8, 10)) : new Date().getDate();
+        const advance = day > <?= HALF_MONTH_CUTOFF_DAY ?> ? share / 2 : share;
+        estimate.textContent = 'Advance ' + peso(advance) + ' + deposit ' + peso(share) + ' = ' + peso(advance + share);
+    }
+    const paid = box.querySelector('input[name="movein_paid"]');
+    box.querySelector('.movein-details').classList.toggle('d-none', !paid.checked);
+}
+document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('form[data-movein-form]').forEach(function (form) {
+        form.addEventListener('change', () => updateMoveIn(form));
+        updateMoveIn(form);
+    });
+});
 
 function openDeactivateModal(btn) {
     const t = tenantData(btn);
@@ -684,6 +819,7 @@ function openReactivateModal(btn) {
     document.getElementById('react_tenant_id').value = t.id;
     document.getElementById('react_name').textContent = t.name;
     document.getElementById('react_room').value = '';
+    updateMoveIn(document.getElementById('react_room').form);
     showModal('reactivateModal');
 }
 

@@ -1,6 +1,7 @@
 <?php
 require_once 'header.php';
 require_once '../includes/uploads.php';
+require_once '../includes/sms.php';
 
 // Fetch the username from users table for this tenant
 $stmtUser = $pdo->prepare("SELECT username FROM users WHERE id = ?");
@@ -43,7 +44,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     } else {
         try {
-            $contact = $_POST['contact_number'] ?? '';
+            $contact = validatedMobileInput($_POST['contact_number'] ?? '');
             $occupation = $_POST['occupation'] ?? '';
             $emergency = $_POST['emergency_contact'] ?? '';
 
