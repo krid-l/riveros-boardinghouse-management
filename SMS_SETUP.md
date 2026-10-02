@@ -20,7 +20,7 @@ Messages start with the boarding house name from **Settings → Business Informa
 
 ## 1. Get your PhilSMS API token
 
-1. Sign in at <https://app.philsms.com> (or register an account there first).
+1. Sign in at <https://dashboard.philsms.com> (or register an account there first).
 2. Load credits to your account. Each text uses credits, and a message longer than 160
    characters counts as two or more.
 3. Open the **Developers** page of the PhilSMS dashboard and copy your **API token**. It's a
@@ -36,7 +36,10 @@ then; an unapproved name is rejected.
 1. Log in as admin and go to **Settings**. The **SMS Notifications (PhilSMS)** card is at the
    bottom of the left column.
 2. Paste the token into **PhilSMS API Token**, leave **Sender Name** as `PhilSMS`, and press
-   **Save SMS Settings**. The card's badge changes to **Set up**.
+   **Save SMS Settings**. The card's badge changes to **Set up**. **API URL** is already
+   `https://dashboard.philsms.com/api/v3`; change it only if the PhilSMS API documentation shows
+   a different address. A token only works on the PhilSMS site it was created on, so a token
+   from dashboard.philsms.com is refused by any other address.
 3. Type your own mobile number under **Send a test SMS to** and press **Send Test**. The text
    should arrive within a minute.
 4. **Check Credits** shows how many credits are left.
@@ -88,7 +91,7 @@ Every text, sent or not, is in **Settings → Recent SMS** with the reason it fa
 | `Sender ID ... is not authorized` (or similar) | Set **Sender Name** back to `PhilSMS`, or wait for PhilSMS to approve yours. |
 | A message about balance or credits | Load more credits in PhilSMS. |
 | `HTTPS certificate check failed` | The app carries its own certificate list for WAMP (`includes/certs/cacert.pem`). Check that the file exists. If it does, PHP's `curl.cainfo` setting is pointing somewhere broken: clear it in WAMP's `php.ini` and restart WAMP. |
-| `Could not reach PhilSMS` | No internet connection, or a firewall blocking `app.philsms.com`. |
+| `Could not reach PhilSMS` | No internet connection, or a firewall blocking `dashboard.philsms.com`. |
 | `PhilSMS did not answer within 30 seconds` (log: **No reply**) | The request got through but PhilSMS never replied, so the text may still arrive: check the phone before resending. Then press **Check Credits**. If that works, PhilSMS was just slow to send. If it times out too, something on the computer or network is holding the connection: try turning off the antivirus "web shield"/HTTPS scanning or a VPN, or test from another network (e.g. a phone hotspot). |
 | `Skipped: SMS is not set up yet` | No token is saved. See step 2. |
 | `Skipped: Not a valid PH mobile number` | Fix the tenant's Contact Number. |

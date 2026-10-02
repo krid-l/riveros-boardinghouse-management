@@ -78,9 +78,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // The saved token is never sent back to the page, so a blank box means "keep it".
         $token = cleanSmsToken((string)($_POST['sms_api_key'] ?? ''));
         $sender = trim($_POST['sms_sender_id'] ?? '') ?: PHILSMS_DEFAULT_SENDER;
+        $apiUrlInput = trim((string)($_POST['sms_api_url'] ?? ''));
+        $apiUrl = $apiUrlInput === '' ? PHILSMS_API_BASE : normalizeSmsApiBase($apiUrlInput);
         if (!preg_match('/^[A-Za-z0-9 .\-]{1,11}$/', $sender)) {
             $error = 'The sender name can be at most 11 letters or digits, and must be one PhilSMS has approved for your account.';
+        } elseif ($apiUrl === null) {
+            $error = 'The API URL must be an https:// address, like ' . PHILSMS_API_BASE . '.';
         } else {
+            updateSetting($pdo, 'sms_api_url', $apiUrl);
             updateSetting($pdo, 'sms_provider', 'PhilSMS');
             updateSetting($pdo, 'sms_sender_id', $sender);
             if (!empty($_POST['clear_token'])) {
@@ -377,7 +382,7 @@ require_once 'header.php';
                     <?php if (!$smsTokenSaved && !$smsTokenFromEnv): ?>
                     <div class="alert alert-light border small py-2 mb-3">
                         Until an API token is saved, no texts are sent; they are listed below as "skipped" instead.
-                        Get the token from your PhilSMS account: <strong>app.philsms.com &rarr; Developers &rarr; API Token</strong>.
+                        Get the token from your PhilSMS account: <strong>dashboard.philsms.com &rarr; Developers &rarr; API Token</strong>.
                     </div>
                     <?php endif; ?>
                     <div class="row g-3 mb-3">
@@ -394,6 +399,12 @@ require_once 'header.php';
                             <label class="form-label">Sender Name</label>
                             <input type="text" name="sms_sender_id" class="form-control" maxlength="11" value="<?= $s('sms_sender_id') ?: PHILSMS_DEFAULT_SENDER ?>">
                             <div class="form-text" style="font-size:0.65rem;">Shown as the sender. Use "PhilSMS" unless PhilSMS approved your own.</div>
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label">API URL</label>
+                            <input type="url" name="sms_api_url" class="form-control" placeholder="<?= PHILSMS_API_BASE ?>"
+                                   value="<?= htmlspecialchars(smsConfig($pdo)['base']) ?>">
+                            <div class="form-text" style="font-size:0.65rem;">From the PhilSMS API documentation. It must be on the same PhilSMS site you log in to: a token only works there. Leave blank for <?= PHILSMS_API_BASE ?>.</div>
                         </div>
                     </div>
                     <div class="d-flex justify-content-between align-items-center border-top pt-3 mt-1 gap-2 flex-wrap">
