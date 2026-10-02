@@ -21,12 +21,13 @@ function handleTenantAction(PDO $pdo): array {
     $success = '';
     $action = $_POST['action'];
     $billTenantId = null;
+    $resplitRooms = [];   // rooms whose occupancy changed: their rent shares need recomputing
     try {
         $pdo->beginTransaction();
 
         if ($action === 'add') {
-            $firstName = trim($_POST['first_name']);
-            $lastName = trim($_POST['last_name']);
+            $firstName = trim($_POST['first_name'] ?? '');
+            $lastName = trim($_POST['last_name'] ?? '');
             $roomId = !empty($_POST['room_id']) ? (int)$_POST['room_id'] : null;
             $moveInDate = $roomId ? postedDate('move_in_date') : null;
 
@@ -52,40 +53,46 @@ function handleTenantAction(PDO $pdo): array {
             $rawPassword = substr(str_shuffle('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%'), 0, 8);
             $password = password_hash($rawPassword, PASSWORD_DEFAULT);
 
-            $stmt = $pdo->prepare("INSERT INTO users (username, password_hash, temp_password, role) VALUES (?, ?, ?, 'tenant') RETURNING id");
-            $stmt->execute([$username, $password, $rawPassword]);
-            $userId = $stmt->fetchColumn();
+            $userId = insertReturningId(
+                $pdo,
+                "INSERT INTO users (username, password_hash, temp_password, role) VALUES (?, ?, ?, 'tenant')",
+                [$username, $password, $rawPassword]
+            );
 
             // Create tenant profile
-            $stmt = $pdo->prepare("INSERT INTO tenants (user_id, first_name, last_name, contact_number, room_id, occupation, emergency_contact, status, move_in_date, balance)
-                                   VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, 0) RETURNING id");
-            $stmt->execute([
-                $userId,
-                $firstName,
-                $lastName,
-                $_POST['contact_number'],
-                $roomId,
-                !empty($_POST['occupation']) ? $_POST['occupation'] : null,
-                !empty($_POST['emergency_contact']) ? $_POST['emergency_contact'] : null,
-                $moveInDate
-            ]);
-            $tenantId = (int)$stmt->fetchColumn();
+            $tenantId = insertReturningId(
+                $pdo,
+                "INSERT INTO tenants (user_id, first_name, last_name, contact_number, room_id, occupation, emergency_contact, status, move_in_date, balance)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, 0)",
+                [
+                    $userId,
+                    $firstName,
+                    $lastName,
+                    $_POST['contact_number'],
+                    $roomId,
+                    !empty($_POST['occupation']) ? $_POST['occupation'] : null,
+                    !empty($_POST['emergency_contact']) ? $_POST['emergency_contact'] : null,
+                    $moveInDate
+                ]
+            );
             if ($roomId) {
                 logRoomTransfer($pdo, $tenantId, null, $roomId, $moveInDate, 'Moved in');
                 $billTenantId = $tenantId;
             }
 
             $success = "Tenant added successfully! <br><strong>Username:</strong> " . htmlspecialchars($username) . " <br><strong>Password:</strong> " . htmlspecialchars($rawPassword) . " <br><small>Please save these credentials!</small>";
-            if ($moveInDate) {
+            if ($moveInDate && $roomId) {
                 $firstRent = isHalfMonthMoveIn($moveInDate) ? 'half' : 'full';
-                $success .= "<br><small>First bill: $firstRent month's rent, due " . date('M j, Y', strtotime(firstMonthDueDate($moveInDate))) . ".</small>";
+                $success .= "<br><small>Due on moving in (" . date('M j, Y', strtotime(firstMonthDueDate($moveInDate))) . "): "
+                          . "the first month in advance ($firstRent month) plus a deposit of one month's share, "
+                          . "which pays for their last month.</small>";
             }
 
         } elseif ($action === 'edit') {
             $stmt = $pdo->prepare("UPDATE tenants SET first_name = ?, last_name = ?, contact_number = ?, occupation = ?, emergency_contact = ? WHERE id = ?");
             $stmt->execute([
-                trim($_POST['first_name']),
-                trim($_POST['last_name']),
+                trim($_POST['first_name'] ?? ''),
+                trim($_POST['last_name'] ?? ''),
                 $_POST['contact_number'],
                 !empty($_POST['occupation']) ? $_POST['occupation'] : null,
                 !empty($_POST['emergency_contact']) ? $_POST['emergency_contact'] : null,
@@ -112,10 +119,14 @@ function handleTenantAction(PDO $pdo): array {
                 $pdo->prepare("UPDATE tenants SET room_id = ?, move_in_date = ? WHERE id = ?")->execute([$newRoomId, $date, $tenantId]);
                 logRoomTransfer($pdo, $tenantId, null, $newRoomId, $date, 'Moved in');
                 $billTenantId = $tenantId;
-                $success = "Room assigned. First bill is due " . date('M j, Y', strtotime(firstMonthDueDate($date))) . ".";
+                $resplitRooms[] = $newRoomId;
+                $success = "Room assigned. The first month in advance and the deposit are due "
+                         . date('M j, Y', strtotime(firstMonthDueDate($date))) . ".";
             } else {
                 $pdo->prepare("UPDATE tenants SET room_id = ? WHERE id = ?")->execute([$newRoomId, $tenantId]);
                 logRoomTransfer($pdo, $tenantId, $t['room_id'] ? (int)$t['room_id'] : null, $newRoomId, $date, 'Room change');
+                $resplitRooms[] = $newRoomId;
+                if ($t['room_id']) $resplitRooms[] = (int)$t['room_id'];
                 $success = "Room changed. The new room's rent applies from next month's bill.";
             }
 
@@ -129,13 +140,27 @@ function handleTenantAction(PDO $pdo): array {
             if (!$t) throw new Exception("Tenant not found.");
             if ($t['status'] === 'deactivated') throw new Exception("Tenant is already deactivated.");
 
+            // The deposit pays for the month they leave. Done before the status changes, while the
+            // stay it belongs to is still the current one.
+            $depositApplied = applyDepositToLastMonth($pdo, $tenantId, $date);
+
             // Keep the tenant's payments, receipts and any unpaid balance on record; just free the bed and block login.
             $pdo->prepare("UPDATE tenants SET status = 'deactivated', deactivated_at = ?, room_id = NULL WHERE id = ?")->execute([$date, $tenantId]);
             logRoomTransfer($pdo, $tenantId, $t['room_id'] ? (int)$t['room_id'] : null, null, $date, 'Moved out (account deactivated)');
+            if ($t['room_id']) $resplitRooms[] = (int)$t['room_id'];
+
+            $balStmt = $pdo->prepare("SELECT balance FROM tenants WHERE id = ?");
+            $balStmt->execute([$tenantId]);
+            $finalBalance = round((float)$balStmt->fetchColumn(), 2);
 
             $success = "Tenant removed and account deactivated.";
-            if ((float)$t['balance'] > 0) {
-                $success .= " They still have an unpaid balance of ₱" . number_format((float)$t['balance'], 2) . ".";
+            if ($depositApplied > 0) {
+                $success .= " Their ₱" . number_format($depositApplied, 2) . " deposit was applied to the last month.";
+            }
+            if ($finalBalance > 0) {
+                $success .= " They still have an unpaid balance of ₱" . number_format($finalBalance, 2) . ".";
+            } elseif ($finalBalance < 0) {
+                $success .= " ₱" . number_format(-$finalBalance, 2) . " is owed back to them.";
             }
 
         } elseif ($action === 'reactivate') {
@@ -156,6 +181,7 @@ function handleTenantAction(PDO $pdo): array {
                 ->execute([$roomId, $date, $tenantId]);
             logRoomTransfer($pdo, $tenantId, null, $roomId, $date, 'Moved in again (account re-activated)');
             $billTenantId = $tenantId;
+            $resplitRooms[] = $roomId;
             $success = "Tenant re-activated.";
 
         } elseif ($action === 'delete') {
@@ -166,7 +192,11 @@ function handleTenantAction(PDO $pdo): array {
             $t = $stmt->fetch();
             if (!$t) throw new Exception("Tenant not found.");
             if ($t['pay_count'] > 0) throw new Exception("This tenant has payment records. Deactivate the account instead of deleting it.");
+            $roomStmt = $pdo->prepare("SELECT room_id FROM tenants WHERE id = ?");
+            $roomStmt->execute([$tenantId]);
+            $freedRoom = $roomStmt->fetchColumn();
             $pdo->prepare("DELETE FROM users WHERE id = ?")->execute([$t['user_id']]);
+            if ($freedRoom) $resplitRooms[] = (int)$freedRoom;
             $success = "Tenant deleted.";
 
         } else {
@@ -183,6 +213,17 @@ function handleTenantAction(PDO $pdo): array {
     // Post the first-month charge right away instead of waiting for the next page load.
     if (!$error && $billTenantId) {
         runBilling($pdo, $billTenantId);
+    }
+
+    // Everyone sharing an affected room now owes an equal share of it for this month.
+    if (!$error) {
+        foreach (array_unique($resplitRooms) as $roomId) {
+            try {
+                resplitRoomRent($pdo, (int)$roomId);
+            } catch (Exception $e) {
+                error_log("Rent re-split error for room $roomId: " . $e->getMessage());
+            }
+        }
     }
 
     return ['action' => $action, 'success' => $success, 'error' => $error];

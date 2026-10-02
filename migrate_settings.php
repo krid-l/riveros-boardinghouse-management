@@ -25,7 +25,7 @@ try {
         'time_zone' => '(UTC+08:00) Asia/Manila'
     ];
 
-    $stmt = $pdo->prepare("INSERT INTO settings (setting_key, setting_value) VALUES (?, ?) ON CONFLICT (setting_key) DO NOTHING");
+    $stmt = $pdo->prepare("INSERT INTO settings (setting_key, setting_value) VALUES (?, ?) " . sqlInsertIgnore(['setting_key'], 'setting_key') . "");
     foreach ($defaults as $key => $val) {
         $stmt->execute([$key, $val]);
     }

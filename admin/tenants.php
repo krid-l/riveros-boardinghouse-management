@@ -3,6 +3,7 @@ require_once '../includes/db.php';
 require_once '../includes/auth.php';
 require_once '../includes/billing.php';
 require_once '../includes/tenant_actions.php';
+require_once '../includes/pagination.php';
 requireAdmin();
 
 $error = '';
@@ -19,7 +20,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     }
 }
 if (empty($success) && !empty($_GET['msg'])) {
-    $success = htmlspecialchars($_GET['msg']);
+    $success = htmlspecialchars($_GET['msg'] ?? '');
 }
 
 // Fetch stats
@@ -35,14 +36,74 @@ $stmt = $pdo->prepare("SELECT SUM(amount) FROM payments WHERE " . REVENUE_FILTER
 $stmt->execute([$monthStart, $monthEnd]);
 $totalPaidThisMonth = $stmt->fetchColumn() ?: 0;
 
-// Fetch tenants
-$tenantsStmt = $pdo->query("
-    SELECT t.*, u.username, r.room_number
-    FROM tenants t
-    JOIN users u ON t.user_id = u.id
-    LEFT JOIN rooms r ON t.room_id = r.id
-    ORDER BY (t.status = 'active') DESC, u.created_at DESC
-");
+// --- TENANTS LIST ---
+// Searching, the status filter and paging all happen in SQL, so the page only ever builds
+// the rows it shows instead of the whole tenancy.
+$filterSearch = queryParam('q');
+$filterStatus = queryParam('status', 'all') ?: 'all';
+
+// Deactivated tenants are hidden by default: they are former tenants and just clutter the
+// list. The "Show deactivated" button brings them back with ?deactivated=1, and picking
+// Deactivated from the status dropdown obviously has to show them too.
+$showDeactivated = queryParam('deactivated') === '1' || $filterStatus === 'deactivated';
+
+// not_yet_due is the part of a tenant's balance that isn't past its due date yet. It is what
+// tenantBillingStatus() uses to tell "Unpaid" from "Overdue", expressed here so the same
+// split can be filtered on in SQL.
+$listSql = "
+    SELECT * FROM (
+        SELECT t.*, u.username, u.created_at AS user_created_at, r.room_number,
+               COALESCE((SELECT SUM(c.amount) FROM charges c
+                         WHERE c.tenant_id = t.id AND c.due_date >= ?), 0) AS not_yet_due
+        FROM tenants t
+        JOIN users u ON t.user_id = u.id
+        LEFT JOIN rooms r ON t.room_id = r.id
+    ) x";
+$params = [date('Y-m-d')];
+$where = [];
+
+if ($filterSearch !== '') {
+    $where[] = "(LOWER(x.first_name) LIKE ? OR LOWER(x.last_name) LIKE ?
+                 OR LOWER(CONCAT(x.first_name, ' ', x.last_name)) LIKE ? OR LOWER(x.username) LIKE ?)";
+    $like = '%' . strtolower($filterSearch) . '%';
+    array_push($params, $like, $like, $like, $like);
+}
+switch ($filterStatus) {
+    case 'deactivated':
+        $where[] = "x.status = 'deactivated'"; break;
+    case 'paid':
+        $where[] = "x.status = 'active' AND x.balance <= 0"; break;
+    case 'overdue':
+        $where[] = "x.status = 'active' AND x.balance > 0 AND (x.balance - x.not_yet_due) > 0.005"; break;
+    case 'due':
+        $where[] = "x.status = 'active' AND x.balance > 0 AND (x.balance - x.not_yet_due) <= 0.005"; break;
+}
+if (!$showDeactivated) {
+    $where[] = "x.status <> 'deactivated'";
+}
+$whereSql = $where ? ' WHERE ' . implode(' AND ', $where) : '';
+
+// How many deactivated tenants the button would reveal, honouring the current search.
+$deactivatedCountSql = "SELECT COUNT(*) FROM tenants t WHERE t.status = 'deactivated'";
+$deactivatedParams = [];
+if ($filterSearch !== '') {
+    $deactivatedCountSql .= " AND (LOWER(t.first_name) LIKE ? OR LOWER(t.last_name) LIKE ?
+                                   OR LOWER(CONCAT(t.first_name, ' ', t.last_name)) LIKE ?)";
+    $like = '%' . strtolower($filterSearch) . '%';
+    array_push($deactivatedParams, $like, $like, $like);
+}
+$deactivatedStmt = $pdo->prepare($deactivatedCountSql);
+$deactivatedStmt->execute($deactivatedParams);
+$deactivatedCount = (int)$deactivatedStmt->fetchColumn();
+
+$countStmt = $pdo->prepare("SELECT COUNT(*) FROM ($listSql$whereSql) counted");
+$countStmt->execute($params);
+$pager = paginate((int)$countStmt->fetchColumn(), 12);
+
+$tenantsStmt = $pdo->prepare($listSql . $whereSql
+    . " ORDER BY (x.status = 'active') DESC, x.user_created_at DESC, x.id DESC"
+    . paginationLimitSql($pager));
+$tenantsStmt->execute($params);
 $tenants = $tenantsStmt->fetchAll();
 $notYetDue = chargesNotYetDue($pdo);
 
@@ -211,12 +272,14 @@ require_once 'header.php';
                             <?php foreach($allRooms as $r): ?>
                                 <?php 
                                     $isFull = $r['occupied'] >= $r['capacity'];
-                                    $label = 'Room ' . htmlspecialchars($r['room_number']);
+                                    $label = 'Room ' . htmlspecialchars($r['room_number'] ?? '');
                                     if ($isFull) {
                                         $label .= ' - FULL';
                                     } else {
                                         $avail = $r['capacity'] - $r['occupied'];
-                                        $label .= " (Avail: $avail | ₱" . number_format($r['price_per_month']) . "/tenant)";
+                                        // Adding this tenant makes one more person to split the room price between.
+                                        $share = $r['price_per_month'] / ($r['occupied'] + 1);
+                                        $label .= " (Avail: $avail | ₱" . number_format($r['price_per_month']) . "/room, ₱" . number_format($share, 2) . " each)";
                                     }
                                 ?>
                                 <option value="<?= $r['id'] ?>" <?= $isFull ? 'disabled' : '' ?>><?= $label ?></option>
@@ -249,19 +312,46 @@ require_once 'header.php';
                     </div>
                 </div>
                 
-                <div class="d-flex gap-2">
+                <form method="GET" id="filterForm" class="d-flex gap-2">
+                    <?php if ($showDeactivated && $filterStatus !== 'deactivated'): ?>
+                        <input type="hidden" name="deactivated" value="1">
+                    <?php endif; ?>
                     <div class="input-group input-group-sm rounded-2 border bg-white" style="width:200px;">
                         <span class="input-group-text bg-transparent border-0 pe-1"><i class="fa-solid fa-magnifying-glass text-muted" style="font-size:0.65rem;"></i></span>
-                        <input type="text" id="searchInput" class="form-control border-0 shadow-none px-1" placeholder="Search tenants..." style="font-size:0.7rem;">
+                        <input type="text" name="q" id="searchInput" value="<?= htmlspecialchars($filterSearch) ?>" class="form-control border-0 shadow-none px-1" placeholder="Search tenants..." style="font-size:0.7rem;">
                     </div>
-                    <select id="statusFilter" class="form-select form-select-sm border rounded-2 shadow-none text-muted" style="width:120px; font-size:0.7rem;">
-                        <option value="all">All Status</option>
-                        <option value="paid">Paid</option>
-                        <option value="due">Unpaid</option>
-                        <option value="overdue">Overdue</option>
-                        <option value="deactivated">Deactivated</option>
+                    <select name="status" class="form-select form-select-sm border rounded-2 shadow-none text-muted" style="width:120px; font-size:0.7rem;" onchange="this.form.submit()">
+                        <option value="all" <?= $filterStatus === 'all' ? 'selected' : '' ?>>All Status</option>
+                        <option value="paid" <?= $filterStatus === 'paid' ? 'selected' : '' ?>>Paid</option>
+                        <option value="due" <?= $filterStatus === 'due' ? 'selected' : '' ?>>Unpaid</option>
+                        <option value="overdue" <?= $filterStatus === 'overdue' ? 'selected' : '' ?>>Overdue</option>
+                        <option value="deactivated" <?= $filterStatus === 'deactivated' ? 'selected' : '' ?>>Deactivated</option>
                     </select>
-                </div>
+
+                    <?php
+                        // Keep the search and status when toggling, but go back to page 1:
+                        // the row count changes, so the current page number may not exist.
+                        $toggleUrl = pageUrl([
+                            'deactivated' => $showDeactivated ? null : '1',
+                            'page' => null,
+                        ]);
+                    ?>
+                    <?php if ($filterStatus === 'deactivated'): ?>
+                        <?php /* the dropdown is already showing only deactivated tenants */ ?>
+                    <?php elseif ($showDeactivated): ?>
+                        <a href="<?= htmlspecialchars($toggleUrl) ?>" class="btn btn-sm btn-secondary rounded-2 px-2 text-nowrap" style="font-size:0.7rem;" title="Hide deactivated tenants">
+                            <i class="fa-solid fa-eye-slash me-1"></i> Hide deactivated
+                        </a>
+                    <?php elseif ($deactivatedCount > 0): ?>
+                        <a href="<?= htmlspecialchars($toggleUrl) ?>" class="btn btn-sm btn-outline-secondary rounded-2 px-2 text-nowrap" style="font-size:0.7rem;" title="Show deactivated tenants">
+                            <i class="fa-solid fa-eye me-1"></i> Show deactivated (<?= $deactivatedCount ?>)
+                        </a>
+                    <?php endif; ?>
+
+                    <?php if ($filterSearch !== '' || $filterStatus !== 'all' || $showDeactivated): ?>
+                        <a href="tenants.php" class="btn btn-sm btn-light border rounded-2 text-muted px-2" style="font-size:0.7rem;" title="Clear filters"><i class="fa-solid fa-rotate-right"></i></a>
+                    <?php endif; ?>
+                </form>
             </div>
 
             <div class="card-body p-0 mt-2 overflow-auto" style="flex:1;">
@@ -305,17 +395,17 @@ require_once 'header.php';
                         <tr class="tenant-row <?= $isDeactivated ? 'opacity-75' : '' ?>" data-status="<?= $bs['key'] ?>" data-search="<?= htmlspecialchars(strtolower($t['first_name'].' '.$t['last_name'].' '.$t['username'])) ?>">
                             <td class="ps-4">
                                 <div class="d-flex align-items-center">
-                                    <img src="https://ui-avatars.com/api/?name=<?= urlencode($t['first_name'].' '.$t['last_name']) ?>&background=random&color=fff" class="rounded-circle me-2" width="28" height="28" alt="Avatar">
+                                    <?= avatarHtml($t['first_name'] . ' ' . $t['last_name'], 28, 'me-2', $t['profile_picture'] ?? null, '../') ?>
                                     <span class="fw-bold text-dark text-truncate" style="max-width:130px;"><?= htmlspecialchars($t['first_name'].' '.$t['last_name']) ?></span>
                                 </div>
                             </td>
                             <td class="text-muted"><?= htmlspecialchars($t['contact_number'] ?? '') ?: '<span class="text-black-50 fst-italic">None</span>' ?></td>
-                            <td class="text-primary" style="font-size: 0.7rem;"><?= htmlspecialchars($t['username']) ?></td>
+                            <td class="text-primary" style="font-size: 0.7rem;"><?= htmlspecialchars($t['username'] ?? '') ?></td>
                             <td class="text-dark fw-semibold">
                                 <?php if ($isDeactivated): ?>
                                     <span class="text-muted fw-normal">Moved out<?= $t['deactivated_at'] ? ' ' . date('M j, Y', strtotime($t['deactivated_at'])) : '' ?></span>
                                 <?php else: ?>
-                                    <?= $t['room_number'] ? 'Room ' . htmlspecialchars($t['room_number']) : '<span class="text-muted fw-normal">Unassigned</span>' ?>
+                                    <?= $t['room_number'] ? 'Room ' . htmlspecialchars($t['room_number'] ?? '') : '<span class="text-muted fw-normal">Unassigned</span>' ?>
                                 <?php endif; ?>
                             </td>
                             <td class="fw-bold <?= $balance > 0 ? 'text-danger' : 'text-success' ?>">
@@ -355,8 +445,11 @@ require_once 'header.php';
                 </table>
             </div>
 
-            <div class="card-footer bg-white border-top p-3 d-flex justify-content-between align-items-center">
-                <span class="text-muted" style="font-size:0.75rem;" id="tenantCount"><?= count($tenants) ?> tenants</span>
+            <div class="card-footer bg-white border-top p-3 d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <span class="text-muted" style="font-size:0.75rem;"><?= paginationSummary($pager, 'tenants') ?></span>
+                <nav>
+                    <ul class="pagination pagination-sm mb-0 shadow-sm" style="font-size:0.7rem;"><?= paginationControls($pager) ?></ul>
+                </nav>
             </div>
 
         </div>
@@ -370,7 +463,10 @@ function roomOptions(array $rooms): string {
     foreach ($rooms as $r) {
         $isFull = $r['occupied'] >= $r['capacity'];
         $avail = max(0, $r['capacity'] - $r['occupied']);
-        $label = 'Room ' . htmlspecialchars($r['room_number']) . ($isFull ? ' - FULL' : " (Avail: $avail | ₱" . number_format($r['price_per_month']) . "/tenant)");
+        // Adding this tenant makes one more person to split the room price between.
+        $share = $r['price_per_month'] / ($r['occupied'] + 1);
+        $label = 'Room ' . htmlspecialchars($r['room_number'] ?? '')
+               . ($isFull ? ' - FULL' : " (Avail: $avail | ₱" . number_format($r['price_per_month']) . "/room, ₱" . number_format($share, 2) . " each)");
         $html .= '<option value="' . (int)$r['id'] . '" data-full="' . ($isFull ? 1 : 0) . '"' . ($isFull ? ' disabled' : '') . '>' . $label . '</option>';
     }
     return $html;
@@ -591,28 +687,16 @@ function openReactivateModal(btn) {
     showModal('reactivateModal');
 }
 
-document.addEventListener('DOMContentLoaded', function() {
-    const searchInput = document.getElementById('searchInput');
-    const statusFilter = document.getElementById('statusFilter');
-    const tableRows = document.querySelectorAll('#tenantsTable tbody tr.tenant-row');
-    const countLabel = document.getElementById('tenantCount');
-
-    function filterTable() {
-        const query = searchInput.value.toLowerCase();
-        const status = statusFilter.value;
-        let shown = 0;
-
-        tableRows.forEach(row => {
-            let show = row.textContent.toLowerCase().includes(query);
-            if (status !== 'all' && row.dataset.status !== status) show = false;
-            row.style.display = show ? '' : 'none';
-            if (show) shown++;
-        });
-        countLabel.textContent = shown + ' of ' + tableRows.length + ' tenants';
-    }
-
-    if (searchInput) searchInput.addEventListener('input', filterTable);
-    if (statusFilter) statusFilter.addEventListener('change', filterTable);
+// Typing in the search box submits the form after a short pause, so the server can filter.
+document.addEventListener('DOMContentLoaded', function () {
+    const form = document.getElementById('filterForm');
+    const search = document.getElementById('searchInput');
+    if (!form || !search) return;
+    let timer;
+    search.addEventListener('input', function () {
+        clearTimeout(timer);
+        timer = setTimeout(() => form.submit(), 400);
+    });
 });
 </script>
 <?php require_once 'footer.php'; ?>

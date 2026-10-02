@@ -1,5 +1,6 @@
 <?php
 require_once 'header.php';
+require_once '../includes/billing.php';
 
 // Fetch specific room info for the tenant
 $room = null;
@@ -11,13 +12,21 @@ if (!empty($currentTenant['room_id'])) {
     ");
     $stmt->execute([$currentTenant['room_id']]);
     $room = $stmt->fetch();
-    $roomOccupants = $room ? $room['occupant_count'] : 0;
+    $roomOccupants = $room ? (int)$room['occupant_count'] : 0;
 }
+// The room price covers the whole room; this tenant pays an equal share of it.
+$myRentShare = $room ? rentShare((float)$room['price_per_month'], $roomOccupants) : 0.0;
+// Held to pay for their last month; follows the share as roommates come and go.
+$myDeposit = tenantDeposit($pdo, $currentTenant);
+$upcomingDue = upcomingDueDate($pdo, (int)$currentTenant['id']);
 
 // Fetch recent payment history
 $payStmt = $pdo->prepare("SELECT * FROM payments WHERE tenant_id = ? ORDER BY payment_date DESC LIMIT 4");
 $payStmt->execute([$currentTenant['id']]);
 $recentPayments = $payStmt->fetchAll();
+
+// The three latest announcements; the rest are on the announcements page.
+$announcements = $pdo->query("SELECT * FROM announcements ORDER BY created_at DESC, id DESC LIMIT 3")->fetchAll();
 
 // Fetch settings (for GCash)
 $settings = $pdo->query("SELECT setting_key, setting_value FROM settings")->fetchAll(PDO::FETCH_KEY_PAIR);
@@ -25,7 +34,6 @@ $gcashNumber = $settings['gcash_number'] ?? '0917 123 4567';
 $gcashName = $settings['gcash_name'] ?? 'Boarding House';
 
 // Rent is due every 30th (see includes/billing.php)
-require_once '../includes/billing.php';
 $nextDue = nextDueDate($currentTenant);
 $nextDueDate = $nextDue ? date('M d, Y', strtotime($nextDue)) : 'No room assigned';
 $billing = tenantBillingStatus($currentTenant, chargesNotYetDue($pdo, (int)$currentTenant['id']));
@@ -135,7 +143,7 @@ $balance = $currentTenant['balance'] ?? 0;
 <div class="dashboard-header d-flex justify-content-between align-items-center">
     <div>
         <h3 class="fw-bolder mb-0 text-dark">My Space</h3>
-        <p class="text-muted mb-0" style="font-size: 0.85rem;">Welcome back, <?= htmlspecialchars($currentTenant['first_name']) ?>! 👋</p>
+        <p class="text-muted mb-0" style="font-size: 0.85rem;">Welcome back, <?= htmlspecialchars($currentTenant['first_name'] ?? '') ?>! 👋</p>
     </div>
     <a href="payments.php" class="btn btn-primary fw-bold rounded-3 shadow-sm px-3 py-2" style="font-size: 0.85rem;">
         <i class="fa-solid fa-upload me-2"></i> Submit Payment
@@ -155,9 +163,12 @@ $balance = $currentTenant['balance'] ?? 0;
     </div>
     
     <div class="position-relative z-2 mb-3">
-        <h1 class="fw-bolder text-white mb-1" style="font-size: 2rem;">Room <?= htmlspecialchars($room['room_number']) ?></h1>
+        <h1 class="fw-bolder text-white mb-1" style="font-size: 2rem;">Room <?= htmlspecialchars($room['room_number'] ?? '') ?></h1>
         <div class="text-white-50 fw-semibold" style="font-size: 0.85rem;">
-            <i class="fa-solid fa-money-bill-wave me-1"></i> PHP <?= number_format($room['price_per_month'], 2) ?> / month <span class="text-white-50">(your share)</span>
+            <i class="fa-solid fa-money-bill-wave me-1"></i> PHP <?= number_format($myRentShare, 2) ?> / month <span class="text-white-50">(your share of the PHP <?= number_format($room['price_per_month'], 2) ?> room<?= $roomOccupants > 1 ? ', split ' . $roomOccupants . ' ways' : '' ?>)</span>
+            <?php if ($myDeposit > 0): ?>
+                <br><i class="fa-solid fa-vault me-1"></i> PHP <?= number_format($myDeposit, 2) ?> deposit <span class="text-white-50">(pays for your last month)</span>
+            <?php endif; ?>
         </div>
     </div>
 
@@ -181,12 +192,18 @@ $balance = $currentTenant['balance'] ?? 0;
             <?php if ($balance <= 0): ?>
                 <div class="text-white-50 fw-semibold" style="font-size: 0.7rem; letter-spacing: 0.5px;">Balance Status</div>
                 <div class="fw-bolder" style="font-size: 1.25rem; color: #4ade80;">Fully Paid <i class="fa-solid fa-check-circle ms-1" style="font-size: 1rem;"></i></div>
-            <?php else: ?>
+                <?php if ($balance < 0): ?>
+                    <div class="fw-semibold" style="font-size: 0.7rem; color: #bbf7d0;">PHP <?= number_format(-$balance, 2) ?> credit &middot; goes toward your next bill</div>
+                <?php endif; ?>
+            <?php elseif ($billing['overdue'] > 0): ?>
                 <div class="text-white-50 fw-semibold" style="font-size: 0.7rem; letter-spacing: 0.5px;">Outstanding Balance</div>
                 <div class="fw-bolder" style="font-size: 1.25rem; color: #ff6b6b;">PHP <?= number_format($balance, 2) ?></div>
-                <?php if ($billing['overdue'] > 0): ?>
-                    <div class="fw-semibold" style="font-size: 0.65rem; color: #fecaca;"><i class="fa-solid fa-triangle-exclamation me-1"></i>PHP <?= number_format($billing['overdue'], 2) ?> overdue</div>
-                <?php endif; ?>
+                <div class="fw-semibold" style="font-size: 0.65rem; color: #fecaca;"><i class="fa-solid fa-triangle-exclamation me-1"></i>PHP <?= number_format($billing['overdue'], 2) ?> overdue</div>
+            <?php else: ?>
+                <?php // Rent for the month is posted on the 1st but paid by the 30th: until then it's a bill to come, not a debt. ?>
+                <div class="text-white-50 fw-semibold" style="font-size: 0.7rem; letter-spacing: 0.5px;">Balance Status</div>
+                <div class="fw-bolder" style="font-size: 1.25rem; color: #4ade80;">Nothing overdue <i class="fa-solid fa-check-circle ms-1" style="font-size: 1rem;"></i></div>
+                <div class="fw-semibold" style="font-size: 0.7rem; color: #fde68a;"><i class="fa-regular fa-clock me-1"></i>Next bill PHP <?= number_format($balance, 2) ?><?= $upcomingDue ? ' due ' . dueDateLabel($upcomingDue) : '' ?></div>
             <?php endif; ?>
         </div>
         <a href="payments.php" class="btn bg-white text-primary fw-bold rounded-pill shadow-sm px-3 py-2" style="font-size: 0.75rem;">
@@ -251,7 +268,7 @@ $balance = $currentTenant['balance'] ?? 0;
                         <div class="text-muted" style="font-size: 0.7rem;"><?= date('h:i A', strtotime($p['created_at'] ?? $p['payment_date'])) ?></div>
                     </td>
                     <td>
-                        <div class="fw-bold text-dark font-monospace"><?= htmlspecialchars($p['reference_number']) ?></div>
+                        <div class="fw-bold text-dark font-monospace"><?= htmlspecialchars($p['reference_number'] ?? '') ?></div>
                         <div class="text-muted" style="font-size: 0.7rem;"><?= ucfirst($p['payment_method'] ?? 'gcash') ?></div>
                     </td>
                     <td class="fw-bold text-dark">PHP <?= number_format($p['amount'], 2) ?></td>
@@ -310,18 +327,23 @@ $balance = $currentTenant['balance'] ?? 0;
 
 <div class="announcement-card mb-4">
     <div class="d-flex justify-content-between align-items-center mb-3">
-        <h6 class="fw-bold text-dark mb-0"><i class="fa-solid fa-bullhorn text-warning me-2"></i> Announcements</h6>
+        <h6 class="fw-bold text-dark mb-0"><i class="fa-solid fa-bullhorn text-warning me-2"></i> Announcements
+            <?php if ($newAnnouncementCount > 0): ?><span class="badge bg-danger rounded-pill ms-1" style="font-size: 0.65rem;"><?= $newAnnouncementLabel ?> new</span><?php endif; ?>
+        </h6>
+        <?php if (!empty($announcements)): ?>
+        <a href="announcements.php" class="text-decoration-none fw-semibold" style="font-size: 0.8rem;">View all <i class="fa-solid fa-chevron-right ms-1" style="font-size: 0.65rem;"></i></a>
+        <?php endif; ?>
     </div>
     
     <?php if (empty($announcements)): ?>
-        <div class="text-muted small">No recent announcements.</div>
+        <div class="text-muted small">No announcements yet.</div>
     <?php else: ?>
         <?php foreach ($announcements as $a): ?>
         <div class="d-flex gap-2 align-items-start mb-3">
             <div class="mt-1"><span class="dot" style="width: 6px; height: 6px; background: #eab308; border-radius: 50%; display: block;"></span></div>
             <div>
-                <div class="text-dark fw-bold" style="font-size: 0.85rem;"><?= htmlspecialchars($a['title']) ?></div>
-                <div class="text-dark" style="font-size: 0.8rem;"><?= nl2br(htmlspecialchars($a['message'])) ?></div>
+                <div class="text-dark fw-bold" style="font-size: 0.85rem;"><?= htmlspecialchars($a['title'] ?? '') ?></div>
+                <div class="text-dark" style="font-size: 0.8rem;"><?= nl2br(htmlspecialchars($a['message'] ?? '')) ?></div>
                 <div class="text-muted mt-1" style="font-size: 0.7rem;"><?= date('M j, Y h:i A', strtotime($a['created_at'])) ?></div>
             </div>
         </div>

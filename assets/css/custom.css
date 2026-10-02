@@ -146,3 +146,23 @@ body {
     color: #475569;
     margin-bottom: 0.5rem;
 }
+
+/* ---------------------------------------------------------------------------
+   Initials avatars (see includes/avatar.php)
+   Drawn in the page instead of fetched from an avatar service, so a table of
+   200 rows costs zero network requests.
+   --------------------------------------------------------------------------- */
+.avatar-initials {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    border-radius: 50%;
+    color: #fff;
+    font-weight: 600;
+    line-height: 1;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    user-select: none;
+    overflow: hidden;
+}

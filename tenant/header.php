@@ -2,6 +2,7 @@
 require_once '../includes/db.php';
 require_once '../includes/auth.php';
 requireTenant();
+require_once '../includes/avatar.php';
 
 // Fetch current tenant info
 $stmt = $pdo->prepare("SELECT * FROM tenants WHERE user_id = ?");
@@ -14,11 +15,28 @@ if (!$currentTenant) {
 if (($currentTenant['status'] ?? 'active') !== 'active') {
     session_unset();
     session_destroy();
-    header('Location: /login.php?deactivated=1');
+    header('Location: ' . appUrl('login.php?deactivated=1'));
     exit;
 }
 $_SESSION['tenant_id'] = $currentTenant['id'];
 $current_page = basename($_SERVER['PHP_SELF']);
+
+// Announcements posted since this tenant last opened the announcements page count as new.
+// Opening that page marks them read; the page keeps the previous visit time so it can still
+// flag which posts were new on this visit.
+$announcementsSeenBefore = $currentTenant['announcements_seen_at'] ?? null;
+if ($current_page === 'announcements.php') {
+    $pdo->prepare("UPDATE tenants SET announcements_seen_at = CURRENT_TIMESTAMP WHERE id = ?")
+        ->execute([$currentTenant['id']]);
+    $newAnnouncementCount = 0;
+} elseif ($announcementsSeenBefore === null) {
+    $newAnnouncementCount = (int)$pdo->query("SELECT COUNT(*) FROM announcements")->fetchColumn();
+} else {
+    $stmt = $pdo->prepare("SELECT COUNT(*) FROM announcements WHERE created_at > ?");
+    $stmt->execute([$announcementsSeenBefore]);
+    $newAnnouncementCount = (int)$stmt->fetchColumn();
+}
+$newAnnouncementLabel = $newAnnouncementCount > 9 ? '9+' : (string)$newAnnouncementCount;
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -52,6 +70,7 @@ $current_page = basename($_SERVER['PHP_SELF']);
                     <li><a href="dashboard.php" class="sidebar-link text-decoration-none <?= $current_page == 'dashboard.php' ? 'active' : '' ?>"><i class="fa-solid fa-house"></i> My Space</a></li>
                     <li><a href="payments.php" class="sidebar-link text-decoration-none <?= $current_page == 'payments.php' ? 'active' : '' ?>"><i class="fa-solid fa-cloud-arrow-up"></i> Upload Payment</a></li>
                     <li><a href="receipts.php" class="sidebar-link text-decoration-none <?= $current_page == 'receipts.php' ? 'active' : '' ?>"><i class="fa-solid fa-file-invoice"></i> Digital Receipts</a></li>
+                    <li><a href="announcements.php" class="sidebar-link text-decoration-none <?= $current_page == 'announcements.php' ? 'active' : '' ?>"><i class="fa-solid fa-bullhorn"></i> Announcements<?php if ($newAnnouncementCount > 0): ?><span class="badge rounded-pill bg-danger ms-auto"><?= $newAnnouncementLabel ?></span><?php endif; ?></a></li>
                     <li><a href="complaints.php" class="sidebar-link text-decoration-none <?= $current_page == 'complaints.php' ? 'active' : '' ?>"><i class="fa-solid fa-headset"></i> Support / Complaints</a></li>
                 </ul>
                 
@@ -62,13 +81,11 @@ $current_page = basename($_SERVER['PHP_SELF']);
 
                 <div class="mt-auto bg-dark p-3 rounded-3 mb-2 d-flex align-items-center">
                     <?php
-                    $hFullName = htmlspecialchars($currentTenant['first_name'] . ' ' . $currentTenant['last_name']);
-                    $hUrl = trim($currentTenant['profile_picture'] ?? '');
-                      $hAvatar = !empty($hUrl) ? (preg_match('/^https?:\/\//i', $hUrl) ? htmlspecialchars($hUrl) : '../' . htmlspecialchars($hUrl)) : 'https://ui-avatars.com/api/?name=' . urlencode($hFullName) . '&background=10b981&color=fff';
+                    $hFullName = $currentTenant['first_name'] . ' ' . $currentTenant['last_name'];
                     ?>
-                    <img src="<?= $hAvatar ?>" class="rounded-circle me-3" width="40" height="40" style="object-fit: cover;" alt="Tenant">
+                    <?= avatarHtml($hFullName, 40, 'me-3', $currentTenant['profile_picture'] ?? null, '../') ?>
                     <div>
-                        <h6 class="mb-0 fw-bold fs-6 text-truncate" style="max-width: 130px;"><?= htmlspecialchars($currentTenant['first_name']) ?></h6>
+                        <h6 class="mb-0 fw-bold fs-6 text-truncate" style="max-width: 130px;"><?= htmlspecialchars($currentTenant['first_name'] ?? '') ?></h6>
                         <small class="text-muted">Tenant</small>
                     </div>
                 </div>
@@ -87,12 +104,16 @@ $current_page = basename($_SERVER['PHP_SELF']);
                     <h5 class="m-0 fw-bold text-dark d-none d-md-block"><?= ucfirst(str_replace('.php', '', $current_page)) ?></h5>
                 </div>
                 <div class="d-flex align-items-center">
-                    <button class="btn btn-light rounded-circle position-relative me-3" style="width:40px; height:40px;">
+                    <a href="announcements.php" class="btn btn-light rounded-circle position-relative me-3 d-inline-flex align-items-center justify-content-center" style="width:40px; height:40px;"
+                       title="<?= $newAnnouncementCount > 0 ? $newAnnouncementCount . ' new announcement' . ($newAnnouncementCount === 1 ? '' : 's') : 'Announcements' ?>">
                         <i class="fa-solid fa-bell text-muted"></i>
-                    </button>
+                        <?php if ($newAnnouncementCount > 0): ?>
+                        <span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger" style="font-size: 0.6rem;"><?= $newAnnouncementLabel ?></span>
+                        <?php endif; ?>
+                    </a>
                     <div class="dropdown">
                         <button class="btn btn-light dropdown-toggle border-0 fw-semibold text-dark" type="button" data-bs-toggle="dropdown">
-                            <?= htmlspecialchars($currentTenant['first_name']) ?>
+                            <?= htmlspecialchars($currentTenant['first_name'] ?? '') ?>
                         </button>
                         <ul class="dropdown-menu dropdown-menu-end shadow border-0 mt-2">
                             <li><a class="dropdown-item py-2" href="settings.php"><i class="fa-solid fa-user me-2 text-muted"></i> My Profile</a></li>

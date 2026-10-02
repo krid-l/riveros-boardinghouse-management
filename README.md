@@ -1,3 +1,5 @@
+> **Running it on your own machine?** See [LOCAL_SETUP.md](LOCAL_SETUP.md) for the WAMP/XAMPP setup steps.
+
 AGENT.md
 
 Project: Boarding House Management System

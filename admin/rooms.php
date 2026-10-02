@@ -16,15 +16,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     $isRoomAction = in_array($action, $roomActions, true) && !isset($_POST['tenant_id']) && !isset($_POST['first_name']);
 
     if ($isRoomAction) {
-        if ($action === 'add') {
-            $stmt = $pdo->prepare("INSERT INTO rooms (room_number, capacity, price_per_month, status) VALUES (?, ?, ?, ?)");
-            $stmt->execute([$_POST['room_number'], $_POST['capacity'], $_POST['price_per_month'], 'vacant']);
-        } elseif ($action === 'edit') {
-            $stmt = $pdo->prepare("UPDATE rooms SET room_number = ?, capacity = ?, price_per_month = ?, status = ? WHERE id = ?");
-            $stmt->execute([$_POST['room_number'], $_POST['capacity'], $_POST['price_per_month'], $_POST['status'], $_POST['room_id']]);
-        } elseif ($action === 'delete') {
-            $pdo->prepare("UPDATE tenants SET room_id = NULL WHERE room_id = ?")->execute([$_POST['room_id']]);
-            $pdo->prepare("DELETE FROM rooms WHERE id = ?")->execute([$_POST['room_id']]);
+        // price_per_month is the price of the WHOLE room; the tenants living in it split it.
+        $roomNumber = trim($_POST['room_number'] ?? '');
+        $capacity = (int)($_POST['capacity'] ?? 0);
+        $roomPrice = round((float)($_POST['price_per_month'] ?? 0), 2);
+        $roomError = '';
+
+        if ($action !== 'delete') {
+            if ($roomNumber === '') {
+                $roomError = 'Room number is required.';
+            } elseif ($capacity < 1) {
+                $roomError = 'Capacity must be at least 1 tenant.';
+            } elseif ($roomPrice < 0) {
+                $roomError = 'Room price cannot be negative.';
+            }
+        }
+
+        if ($roomError) {
+            header("Location: rooms.php?err=" . urlencode($roomError));
+            exit;
+        }
+
+        try {
+            if ($action === 'add') {
+                $stmt = $pdo->prepare("INSERT INTO rooms (room_number, capacity, price_per_month, status) VALUES (?, ?, ?, ?)");
+                $stmt->execute([$roomNumber, $capacity, $roomPrice, 'vacant']);
+            } elseif ($action === 'edit') {
+                $stmt = $pdo->prepare("UPDATE rooms SET room_number = ?, capacity = ?, price_per_month = ?, status = ? WHERE id = ?");
+                $stmt->execute([$roomNumber, $capacity, $roomPrice, $_POST['status'], $_POST['room_id']]);
+            } elseif ($action === 'delete') {
+                $pdo->prepare("UPDATE tenants SET room_id = NULL WHERE room_id = ?")->execute([$_POST['room_id']]);
+                $pdo->prepare("DELETE FROM rooms WHERE id = ?")->execute([$_POST['room_id']]);
+            }
+        } catch (PDOException $e) {
+            header("Location: rooms.php?err=" . urlencode("Could not save the room. Room number '$roomNumber' may already be taken."));
+            exit;
         }
         header("Location: rooms.php");
         exit;
@@ -36,8 +62,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     header("Location: $back&" . ($error ? 'err=' . urlencode($error) : 'msg=' . urlencode(strip_tags($success))));
     exit;
 }
-if (!empty($_GET['msg'])) $success = htmlspecialchars($_GET['msg']);
-if (!empty($_GET['err'])) $error = htmlspecialchars($_GET['err']);
+if (!empty($_GET['msg'])) $success = htmlspecialchars($_GET['msg'] ?? '');
+if (!empty($_GET['err'])) $error = htmlspecialchars($_GET['err'] ?? '');
 
 // Fetch all rooms
 $roomsStmt = $pdo->query("SELECT * FROM rooms ORDER BY room_number ASC");
@@ -45,8 +71,8 @@ $rooms = $roomsStmt->fetchAll();
 
 // Fetch all assigned tenants
 $tenantsByRoom = [];
-$tenantsStmt = $pdo->query("SELECT t.id, t.first_name, t.last_name, t.room_id, t.balance, t.move_in_date,
-    COALESCE(t.move_in_date, u.created_at::date) AS created_at
+$tenantsStmt = $pdo->query("SELECT t.id, t.first_name, t.last_name, t.room_id, t.balance, t.move_in_date, t.profile_picture,
+    COALESCE(t.move_in_date, " . sqlToDate('u.created_at') . ") AS created_at
     FROM tenants t JOIN users u ON t.user_id = u.id
     WHERE t.room_id IS NOT NULL AND t.status = 'active'
     ORDER BY t.first_name");
@@ -55,19 +81,20 @@ foreach ($tenantsStmt->fetchAll() as $t) {
 }
 
 // Calculate Stats
-// rooms.price_per_month is the rent per tenant: each tenant in a room is billed that amount.
-// A full room therefore earns price_per_month x capacity per month.
+// rooms.price_per_month is the price of the whole room. The tenants in it split that amount
+// equally, so a room brings in its full price as soon as anyone lives there, and each tenant
+// is billed price_per_month / (number of tenants in the room).
 $totalRooms = count($rooms);
 $totalCapacity = 0;
-$potentialValue = 0;   // if every bed were filled
-$currentValue = 0;     // from the tenants living there now
+$potentialValue = 0;   // if every room had at least one tenant
+$currentValue = 0;     // from the rooms that are lived in now
 $occupiedRooms = 0;
 
 foreach ($rooms as $r) {
     $totalCapacity += $r['capacity'];
-    $potentialValue += $r['price_per_month'] * $r['capacity'];
-    $currentValue += $r['price_per_month'] * (isset($tenantsByRoom[$r['id']]) ? count($tenantsByRoom[$r['id']]) : 0);
+    $potentialValue += $r['price_per_month'];
     $occCount = isset($tenantsByRoom[$r['id']]) ? count($tenantsByRoom[$r['id']]) : 0;
+    $currentValue += $occCount > 0 ? $r['price_per_month'] : 0;
     if ($occCount >= $r['capacity'] && $r['capacity'] > 0) {
         $occupiedRooms++;
         if ($r['status'] !== 'occupied') {
@@ -239,7 +266,7 @@ require_once 'header.php';
                         $badgeText = 'Available';
                     }
                 ?>
-                <div class="col-md-6 col-xxl-4 room-grid-item" data-status="<?= htmlspecialchars($r['status']) ?>" data-search="<?= strtolower($r['room_number']) ?>">
+                <div class="col-md-6 col-xxl-4 room-grid-item" data-status="<?= htmlspecialchars($r['status'] ?? '') ?>" data-search="<?= strtolower($r['room_number']) ?>">
                     <div class="card h-100 shadow-sm room-card <?= ($selectedRoom ? $selectedRoom === (int)$r['id'] : $index === 0) ? 'active' : '' ?>" id="card-<?= $r['id'] ?>" onclick="selectRoom(<?= $r['id'] ?>)">
                         <div class="card-body p-3 d-flex flex-column">
                             <div class="d-flex justify-content-between align-items-start mb-3">
@@ -247,13 +274,16 @@ require_once 'header.php';
                                     <div class="bg-primary bg-opacity-10 text-primary rounded d-flex justify-content-center align-items-center me-2" style="width: 32px; height: 32px;">
                                         <i class="fa-solid fa-door-open"></i>
                                     </div>
-                                    <h6 class="fw-bold mb-0 text-dark">Room <?= htmlspecialchars($r['room_number']) ?></h6>
+                                    <h6 class="fw-bold mb-0 text-dark">Room <?= htmlspecialchars($r['room_number'] ?? '') ?></h6>
                                 </div>
                                 <span class="badge <?= $badgeClass ?>" style="font-size: 0.65rem;"><?= $badgeText ?></span>
                             </div>
                             
-                            <p class="text-muted mb-1" style="font-size: 0.8rem;">Capacity: <?= htmlspecialchars($r['capacity']) ?></p>
-                            <p class="fw-bold text-dark mb-4" style="font-size: 0.85rem;">₱<?= number_format($r['price_per_month'] * $r['capacity'], 2) ?> / month <span class="text-muted fw-normal">when full</span></p>
+                            <p class="text-muted mb-1" style="font-size: 0.8rem;">Capacity: <?= htmlspecialchars($r['capacity'] ?? '') ?></p>
+                            <p class="fw-bold text-dark mb-1" style="font-size: 0.85rem;">₱<?= number_format($r['price_per_month'], 2) ?> / month <span class="text-muted fw-normal">per room</span></p>
+                            <p class="text-muted mb-4" style="font-size: 0.75rem;"><?= $occCount > 0
+                                ? '₱' . number_format($r['price_per_month'] / $occCount, 2) . ' each, split between ' . $occCount . ' tenant' . ($occCount === 1 ? '' : 's')
+                                : 'No tenants yet' ?></p>
                             
                             <div class="mt-auto">
                                 <div class="d-flex justify-content-between align-items-center mb-1" style="font-size: 0.75rem;">
@@ -282,7 +312,11 @@ require_once 'header.php';
         <?php endif; ?>
 
         <?php foreach ($rooms as $index => $r): ?>
-            <?php 
+            <?php
+                // Only the open room's panel is built; the others are a link away (?room=id).
+                $isOpenPanel = $selectedRoom ? $selectedRoom === (int)$r['id'] : $index === 0;
+                if (!$isOpenPanel) continue;
+
                 $roomTenants = $tenantsByRoom[$r['id']] ?? []; 
                 $occCount = count($roomTenants);
                 $occPct = $r['capacity'] > 0 ? min(100, round(($occCount / $r['capacity']) * 100)) : 0;
@@ -301,8 +335,7 @@ require_once 'header.php';
                     $badgeText = 'Available';
                 }
             ?>
-            <?php $isOpenPanel = $selectedRoom ? $selectedRoom === (int)$r['id'] : $index === 0; ?>
-            <div class="room-details-panel d-flex flex-column h-100 p-3 <?= $isOpenPanel ? '' : 'd-none' ?>" id="panel-<?= $r['id'] ?>">
+            <div class="room-details-panel d-flex flex-column h-100 p-3" id="panel-<?= $r['id'] ?>">
                 
                 <!-- Panel Header -->
                 <div class="d-flex justify-content-between align-items-start mb-3">
@@ -311,7 +344,7 @@ require_once 'header.php';
                             <i class="fa-solid fa-building"></i>
                         </div>
                         <div class="d-flex align-items-center">
-                            <h5 class="fw-bold mb-0 text-dark me-2">Room <?= htmlspecialchars($r['room_number']) ?></h5>
+                            <h5 class="fw-bold mb-0 text-dark me-2">Room <?= htmlspecialchars($r['room_number'] ?? '') ?></h5>
                             <span class="badge <?= $badgeClass ?> ms-1" style="font-size: 0.65rem;"><?= $badgeText ?></span>
                         </div>
                     </div>
@@ -325,16 +358,18 @@ require_once 'header.php';
                         <span class="fw-bold text-dark" style="font-size: 0.8rem;"> <?= $r['capacity'] ?> Persons</span>
                     </div>
                     <div class="d-flex justify-content-between align-items-center py-2 border-bottom border-light">
-                        <span class="text-muted fw-semibold" style="font-size: 0.75rem;"><i class="fa-solid fa-user me-2"></i> Price / Tenant</span>
+                        <span class="text-muted fw-semibold" style="font-size: 0.75rem;"><i class="fa-solid fa-peso-sign me-2"></i> Price / Room</span>
                         <span class="fw-bold text-dark" style="font-size: 0.8rem;">₱<?= number_format($r['price_per_month'], 2) ?> <span class="text-muted fw-normal">/ month</span></span>
                     </div>
                     <div class="d-flex justify-content-between align-items-center py-2 border-bottom border-light">
-                        <span class="text-muted fw-semibold" style="font-size: 0.75rem;"><i class="fa-solid fa-peso-sign me-2"></i> Room Total / Month</span>
-                        <span class="fw-bold text-dark" style="font-size: 0.8rem;">₱<?= number_format($r['price_per_month'] * $r['capacity'], 2) ?> <span class="text-muted fw-normal">when full</span></span>
+                        <span class="text-muted fw-semibold" style="font-size: 0.75rem;"><i class="fa-solid fa-user me-2"></i> Share / Tenant</span>
+                        <span class="fw-bold text-dark" style="font-size: 0.8rem;"><?= $occCount > 0
+                            ? '₱' . number_format($r['price_per_month'] / $occCount, 2) . ' <span class="text-muted fw-normal">/ month (÷ ' . $occCount . ')</span>'
+                            : '<span class="text-muted fw-normal">No tenants yet</span>' ?></span>
                     </div>
                     <div class="d-flex justify-content-between align-items-center py-2 border-bottom border-light">
                         <span class="text-muted fw-semibold" style="font-size: 0.75rem;"><i class="fa-solid fa-sack-dollar me-2"></i> Earning Now</span>
-                        <span class="fw-bold <?= $occCount ? 'text-success' : 'text-muted' ?>" style="font-size: 0.8rem;">₱<?= number_format($r['price_per_month'] * $occCount, 2) ?> <span class="text-muted fw-normal">/ month</span></span>
+                        <span class="fw-bold <?= $occCount ? 'text-success' : 'text-muted' ?>" style="font-size: 0.8rem;">₱<?= number_format($occCount > 0 ? $r['price_per_month'] : 0, 2) ?> <span class="text-muted fw-normal">/ month</span></span>
                     </div>
                     <div class="d-flex justify-content-between align-items-center py-2 border-bottom border-light">
                         <span class="text-muted fw-semibold" style="font-size: 0.75rem;"><i class="fa-solid fa-lock me-2"></i> Status</span>
@@ -380,7 +415,7 @@ require_once 'header.php';
                     ?>
                         <div class="d-flex align-items-center justify-content-between p-1 mb-1 tenant-item rounded" data-tenant="<?= $tData ?>">
                             <div class="d-flex align-items-center">
-                                <img src="https://ui-avatars.com/api/?name=<?= urlencode($t['first_name'].' '.$t['last_name']) ?>&background=random&color=fff" class="rounded-circle me-2 shadow-sm" width="30" height="30" alt="Tenant">
+                                <?= avatarHtml($t['first_name'] . ' ' . $t['last_name'], 30, 'me-2 shadow-sm', $t['profile_picture'] ?? null, '../') ?>
                                 <div>
                                     <h6 class="mb-0 fw-bold text-dark" style="font-size: 0.75rem; line-height:1.2;"><?= htmlspecialchars($t['first_name'] . ' ' . $t['last_name']) ?></h6>
                                     <small class="text-muted" style="font-size: 0.65rem;">Since <?= date('M j, Y', strtotime($t['created_at'])) ?></small>
@@ -403,7 +438,7 @@ require_once 'header.php';
 
                 <!-- Action Buttons -->
                 <div class="mt-auto pt-2">
-                    <button class="btn btn-light border w-100 fw-bold text-dark mb-1 py-1" style="font-size: 0.8rem;" onclick="openEditModal(<?= $r['id'] ?>, '<?= htmlspecialchars(addslashes($r['room_number'])) ?>', <?= $r['capacity'] ?>, <?= $r['price_per_month'] ?>, '<?= htmlspecialchars($r['status']) ?>')">
+                    <button class="btn btn-light border w-100 fw-bold text-dark mb-1 py-1" style="font-size: 0.8rem;" onclick="openEditModal(<?= $r['id'] ?>, '<?= htmlspecialchars(addslashes($r['room_number'])) ?>', <?= $r['capacity'] ?>, <?= $r['price_per_month'] ?>, '<?= htmlspecialchars($r['status'] ?? '') ?>')">
                         <i class="fa-solid fa-pen me-1 text-muted"></i> Edit Room
                     </button>
                     
@@ -451,7 +486,7 @@ require_once 'header.php';
                                 $optFull = $optOcc >= $opt['capacity'];
                             ?>
                                 <option value="<?= $opt['id'] ?>" data-full="<?= $optFull ? 1 : 0 ?>" <?= $optFull ? 'disabled' : '' ?>>
-                                    Room <?= htmlspecialchars($opt['room_number']) ?><?= $optFull ? ' - FULL' : ' (Avail: ' . ($opt['capacity'] - $optOcc) . ' | ₱' . number_format($opt['price_per_month']) . '/tenant)' ?>
+                                    Room <?= htmlspecialchars($opt['room_number'] ?? '') ?><?= $optFull ? ' - FULL' : ' (Avail: ' . ($opt['capacity'] - $optOcc) . ' | ₱' . number_format($opt['price_per_month']) . '/room, ₱' . number_format($opt['price_per_month'] / ($optOcc + 1), 2) . ' each)' ?>
                                 </option>
                             <?php endforeach; ?>
                         </select>
@@ -529,8 +564,9 @@ require_once 'header.php';
                             <input type="number" class="form-control" name="capacity" min="1" required placeholder="e.g. 4">
                         </div>
                         <div class="col-md-6">
-                            <label class="form-label text-muted fw-semibold">Price per Tenant / Month (PHP)</label>
-                            <input type="number" step="0.01" class="form-control" name="price_per_month" required placeholder="2500.00">
+                            <label class="form-label text-muted fw-semibold">Price per Room / Month (PHP)</label>
+                            <input type="number" step="0.01" min="0" class="form-control" name="price_per_month" required placeholder="8000.00">
+                            <div class="form-text" style="font-size: 0.7rem;">The rent for the whole room. It is split equally between the tenants living in it.</div>
                             <small class="text-muted" style="font-size:0.7rem;">Each tenant in this room is billed this amount.</small>
                         </div>
                     </div>
@@ -565,8 +601,9 @@ require_once 'header.php';
                             <input type="number" class="form-control" name="capacity" id="edit_capacity" min="1" required>
                         </div>
                         <div class="col-md-6">
-                            <label class="form-label text-muted fw-semibold">Price per Tenant / Month (PHP)</label>
-                            <input type="number" step="0.01" class="form-control" name="price_per_month" id="edit_price" required>
+                            <label class="form-label text-muted fw-semibold">Price per Room / Month (PHP)</label>
+                            <input type="number" step="0.01" min="0" class="form-control" name="price_per_month" id="edit_price" required>
+                            <div class="form-text" style="font-size: 0.7rem;">The rent for the whole room. It is split equally between the tenants living in it. A change applies from next month's rent.</div>
                             <small class="text-muted" style="font-size:0.7rem;">Each tenant in this room is billed this amount.</small>
                         </div>
                     </div>
@@ -600,22 +637,15 @@ function closeDetailsPanel() {
 }
 
 function selectRoom(id) {
-    document.querySelectorAll('.room-card').forEach(card => card.classList.remove('active'));
-    
-    const selectedCard = document.getElementById('card-' + id);
-    if (selectedCard) selectedCard.classList.add('active');
-    
-    document.querySelectorAll('.room-details-panel').forEach(panel => panel.classList.add('d-none'));
-    
-    const selectedPanel = document.getElementById('panel-' + id);
-    if (selectedPanel) selectedPanel.classList.remove('d-none');
-    
-    const container = document.getElementById('rightDetailsContainer');
-    if (container) {
-        container.classList.remove('d-none');
-        // If they select a room, we show the panel as a block regardless of screen size
-        container.classList.add('d-block');
+    // Already showing this room? Nothing to fetch.
+    if (document.getElementById('panel-' + id)) {
+        const container = document.getElementById('rightDetailsContainer');
+        if (container) { container.classList.remove('d-none'); container.classList.add('d-block'); }
+        return;
     }
+    // Otherwise ask the server for that room's panel. Only one panel is ever built, which
+    // keeps this page small no matter how many rooms and tenants there are.
+    window.location = 'rooms.php?room=' + encodeURIComponent(id);
 }
 
 function openEditModal(id, number, capacity, price, status) {

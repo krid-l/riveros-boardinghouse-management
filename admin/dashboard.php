@@ -76,7 +76,7 @@ $roomsWithSpaceCount = $availableRooms + $partialRooms;
 
 // Fetch recent payments (verified or not)
 $recentPayments = $pdo->query("
-    SELECT p.*, t.first_name, t.last_name, r.room_number
+    SELECT p.*, t.first_name, t.last_name, t.profile_picture, r.room_number
     FROM payments p
     JOIN tenants t ON p.tenant_id = t.id
     LEFT JOIN rooms r ON t.room_id = r.id
@@ -87,7 +87,7 @@ $recentPayments = $pdo->query("
 // Monthly Revenue Data for Charts (PostgreSQL)
 // Latest 6 months of revenue, shown oldest to newest
 $monthlyRevData = array_reverse($pdo->query("
-    SELECT TO_CHAR(payment_date, 'Mon') as month_name,
+    SELECT " . sqlMonthName('payment_date') . " as month_name,
            EXTRACT(MONTH FROM payment_date) as month_num,
            EXTRACT(YEAR FROM payment_date) as year_num,
            SUM(amount) as total
@@ -408,11 +408,11 @@ require_once 'header.php';
                             <tr>
                                 <td class="ps-3">
                                     <div class="d-flex align-items-center">
-                                        <img src="https://ui-avatars.com/api/?name=<?= urlencode($p['first_name'].' '.$p['last_name']) ?>&background=random&color=fff" class="rounded-circle me-2 shadow-sm" width="20" height="20">
+                                        <?= avatarHtml($p['first_name'] . ' ' . $p['last_name'], 20, 'me-2 shadow-sm', $p['profile_picture'] ?? null, '../') ?>
                                         <span class="fw-semibold text-dark text-truncate d-inline-block" style="max-width:70px; font-size: 0.75rem;"><?= htmlspecialchars($p['first_name'].' '.$p['last_name']) ?></span>
                                     </div>
                                 </td>
-                                <td class="text-muted fw-semibold" style="font-size: 0.75rem;">Rm <?= htmlspecialchars($p['room_number']) ?></td>
+                                <td class="text-muted fw-semibold" style="font-size: 0.75rem;"><?= $p['room_number'] ? 'Rm ' . htmlspecialchars($p['room_number']) : '<span class="text-black-50">No room</span>' ?></td>
                                 <td class="fw-bold text-dark" style="font-size: 0.75rem;">₱<?= number_format($p['amount'], 0) ?></td>
                                 <td class="pe-3"><?= $statusBadge ?></td>
                             </tr>
@@ -457,7 +457,7 @@ require_once 'header.php';
                             <i class="fa-solid fa-door-open"></i>
                         </div>
                         <div>
-                            <div class="fw-bold text-dark" style="font-size: 0.75rem;">Room <?= htmlspecialchars($r['room_number']) ?></div>
+                            <div class="fw-bold text-dark" style="font-size: 0.75rem;">Room <?= htmlspecialchars($r['room_number'] ?? '') ?></div>
                             <div class="text-muted" style="font-size: 0.65rem;"><?= $r['tenant_count'] ?> / <?= $r['capacity'] ?> tenants</div>
                         </div>
                     </div>

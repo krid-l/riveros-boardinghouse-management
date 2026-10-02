@@ -1,0 +1,25 @@
+# Local configuration (database credentials, API keys)
+
+
+# Uploaded files and generated receipts
+uploads/payments/*
+uploads/receipts/*
+uploads/profiles/*
+uploads/qr/*
+!uploads/**/.gitkeep
+
+# Local SMS log written when no SMS API key is configured
+sms_mock_log.txt
+
+# Composer
+/vendor/
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+*.swp
+
+# Offline backup of unpushed commits (see chat)
+boardinghouse-work.bundle
+riveros-updated.zip
+boardinghouse-full.bundle
