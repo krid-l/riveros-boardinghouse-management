@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS tenants (
     address TEXT,
     date_of_birth DATE,
     profile_picture TEXT,
+    announcements_seen_at TIMESTAMP NULL DEFAULT NULL,
     status VARCHAR(20) NOT NULL DEFAULT 'active',     -- 'active' | 'deactivated'
     move_in_date DATE,                                -- set when the tenant first gets a room
     deactivated_at DATE,

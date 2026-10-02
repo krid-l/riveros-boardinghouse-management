@@ -8,7 +8,7 @@
 require_once __DIR__ . '/billing.php';
 require_once __DIR__ . '/sql_compat.php';
 
-const SCHEMA_VERSION = '3';
+const SCHEMA_VERSION = '4';
 
 function runMigrations(PDO $pdo): void {
     try {
@@ -34,7 +34,11 @@ function runMigrations(PDO $pdo): void {
 
         migrateBaseSchema($pdo);
         migrateToV2($pdo);
-        migrateToV3($pdo);
+        // v3 rewrites posted rent, so it only runs on databases that haven't had it yet.
+        if ((int)$current < 3) {
+            migrateToV3($pdo);
+        }
+        migrateToV4($pdo);
 
         $pdo->prepare("INSERT INTO settings (setting_key, setting_value) VALUES ('schema_version', ?)
                        " . sqlUpsert(['setting_key'], ['setting_value']))
@@ -72,6 +76,12 @@ function migrateBaseSchema(PDO $pdo): void {
         message TEXT NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )");
+}
+
+// v4: remember when each tenant last opened the announcements page, so the portal can show
+// how many announcements they haven't read yet.
+function migrateToV4(PDO $pdo): void {
+    ensureColumn($pdo, 'tenants', 'announcements_seen_at', 'TIMESTAMP NULL DEFAULT NULL');
 }
 
 // v3: repair rent shares that were posted before rooms were split equally.

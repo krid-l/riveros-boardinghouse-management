@@ -25,6 +25,9 @@ $payStmt = $pdo->prepare("SELECT * FROM payments WHERE tenant_id = ? ORDER BY pa
 $payStmt->execute([$currentTenant['id']]);
 $recentPayments = $payStmt->fetchAll();
 
+// The three latest announcements; the rest are on the announcements page.
+$announcements = $pdo->query("SELECT * FROM announcements ORDER BY created_at DESC, id DESC LIMIT 3")->fetchAll();
+
 // Fetch settings (for GCash)
 $settings = $pdo->query("SELECT setting_key, setting_value FROM settings")->fetchAll(PDO::FETCH_KEY_PAIR);
 $gcashNumber = $settings['gcash_number'] ?? '0917 123 4567';
@@ -324,11 +327,16 @@ $balance = $currentTenant['balance'] ?? 0;
 
 <div class="announcement-card mb-4">
     <div class="d-flex justify-content-between align-items-center mb-3">
-        <h6 class="fw-bold text-dark mb-0"><i class="fa-solid fa-bullhorn text-warning me-2"></i> Announcements</h6>
+        <h6 class="fw-bold text-dark mb-0"><i class="fa-solid fa-bullhorn text-warning me-2"></i> Announcements
+            <?php if ($newAnnouncementCount > 0): ?><span class="badge bg-danger rounded-pill ms-1" style="font-size: 0.65rem;"><?= $newAnnouncementLabel ?> new</span><?php endif; ?>
+        </h6>
+        <?php if (!empty($announcements)): ?>
+        <a href="announcements.php" class="text-decoration-none fw-semibold" style="font-size: 0.8rem;">View all <i class="fa-solid fa-chevron-right ms-1" style="font-size: 0.65rem;"></i></a>
+        <?php endif; ?>
     </div>
     
     <?php if (empty($announcements)): ?>
-        <div class="text-muted small">No recent announcements.</div>
+        <div class="text-muted small">No announcements yet.</div>
     <?php else: ?>
         <?php foreach ($announcements as $a): ?>
         <div class="d-flex gap-2 align-items-start mb-3">

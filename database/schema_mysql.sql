@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS tenants (
     address TEXT,
     date_of_birth DATE,
     profile_picture VARCHAR(255),
+    announcements_seen_at TIMESTAMP NULL DEFAULT NULL,   -- last visit to the announcements page
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
     FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE SET NULL
 ) ENGINE=InnoDB;
