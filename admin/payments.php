@@ -8,8 +8,19 @@ require_once '../includes/billing.php';
 require_once '../includes/pagination.php';
 
 // --- ACTION HANDLING ---
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
-    $paymentId = (int)$_POST['payment_id'];
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'send_reminders') {
+    // Rent reminders by SMS: due within a few days, or overdue. Never repeats one already sent.
+    require_once '../includes/sms_reminders.php';
+    $r = sendRentReminders($pdo);
+    if ($r['sent'] + $r['failed'] + $r['skipped'] === 0) {
+        $success = "Nobody needs a reminder right now. Everyone with rent due in the next " . REMINDER_DAYS_BEFORE . " days or overdue has already been reminded.";
+    } elseif ($r['sent'] > 0 && $r['failed'] + $r['skipped'] === 0) {
+        $success = "Rent reminders sent: {$r['due']} due soon, {$r['overdue']} overdue.";
+    } else {
+        $error = "Rent reminders: {$r['sent']} sent, " . ($r['failed'] + $r['skipped']) . " not sent. " . smsErrorText($r);
+    }
+} elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    $paymentId = (int)($_POST['payment_id'] ?? 0);
     $action = $_POST['action']; // 'verify' or 'reject'
     
     // Fetch payment details
@@ -17,6 +28,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     $stmt->execute([$paymentId]);
     $payment = $stmt->fetch();
     
+    $smsName = smsConfig($pdo)['name'];
     if (!$payment || $payment['status'] !== 'pending') {
         $error = "This payment was already processed.";
     } elseif ($action === 'verify') {
@@ -79,7 +91,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $proxyReceiptPath = generateReceipt($newPaymentId, $bmFullName, $s['share'], $payment['payment_date'], $payment['reference_number'], $payMethodStr);
                 $pdo->prepare("UPDATE payments SET receipt_path = ? WHERE id = ?")->execute([$proxyReceiptPath, $newPaymentId]);
 
-                $smsQueue[] = [$bm['contact_number'], "Your rent of PHP " . number_format($s['share'], 2) . " was paid by " . $payment['first_name'] . ". Receipt: RCP-" . str_pad($newPaymentId, 6, '0', STR_PAD_LEFT)];
+                $smsQueue[] = [$bm['contact_number'], (int)$bm['id'], 'payment_covered',
+                    "$smsName: Your rent of PHP " . number_format($s['share'], 2) . " was paid by " . $payment['first_name'] . ". Receipt: RCP-" . str_pad($newPaymentId, 6, '0', STR_PAD_LEFT)];
             }
 
             // Generate Receipt PDF
@@ -90,12 +103,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $pdo->commit();
 
             // SMS only after the money is committed.
-            $smsQueue[] = [$payment['contact_number'], "Your payment of PHP " . number_format($amount, 2) . " has been VERIFIED. Receipt: RCP-" . str_pad($paymentId, 6, '0', STR_PAD_LEFT)];
-            foreach ($smsQueue as [$to, $msg]) {
-                sendSMS($to, $msg);
+            $smsQueue[] = [$payment['contact_number'], (int)$payment['tenant_id'], 'payment_verified',
+                "$smsName: Your payment of PHP " . number_format($amount, 2) . " has been VERIFIED. Receipt: RCP-" . str_pad($paymentId, 6, '0', STR_PAD_LEFT) . ". Thank you!"];
+            $smsResults = [];
+            foreach ($smsQueue as [$to, $tenantId, $purpose, $msg]) {
+                $smsResults[] = sendSMS($pdo, $to, $msg, $purpose, $tenantId);
             }
 
-            $success = "Payment verified successfully. Receipt generated and SMS sent.";
+            $success = "Payment verified successfully. Receipt generated. " . smsOutcomeText(mergeSmsResults(...$smsResults));
         } catch (Exception $e) {
             $pdo->rollBack();
             $error = "Error verifying payment: " . $e->getMessage();
@@ -104,9 +119,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $upd = $pdo->prepare("UPDATE payments SET status = 'rejected' WHERE id = ? AND status = 'pending'");
         $upd->execute([$paymentId]);
         if ($upd->rowCount() === 1) {
-            $msg = "Your recent payment submission of PHP " . number_format($payment['amount'], 2) . " was REJECTED. Please contact admin.";
-            sendSMS($payment['contact_number'], $msg);
-            $success = "Payment rejected and SMS sent.";
+            $msg = "$smsName: Your payment submission of PHP " . number_format($payment['amount'], 2) . " (ref " . $payment['reference_number'] . ") was REJECTED. Please check it and submit again.";
+            $success = "Payment rejected. " . smsOutcomeText(sendSMS($pdo, $payment['contact_number'], $msg, 'payment_rejected', (int)$payment['tenant_id']));
         } else {
             $error = "This payment was already processed.";
         }
@@ -205,6 +219,11 @@ $paymentsStmt = $pdo->prepare("
 $paymentsStmt->execute($params);
 $payments = $paymentsStmt->fetchAll();
 
+// Who the "Send rent reminders" button would text right now.
+require_once '../includes/sms_reminders.php';
+$pendingReminders = pendingRentReminders($pdo);
+$smsReady = smsConfigured($pdo);
+
 require_once 'header.php';
 ?>
 
@@ -288,6 +307,9 @@ require_once 'header.php';
         <p class="text-muted mb-0" style="font-size: 0.75rem;">Track and manage all tenant payments and verify manual GCash payments.</p>
     </div>
     <div class="d-flex gap-2">
+        <button type="button" class="btn btn-outline-primary fw-semibold btn-sm px-2 py-1 rounded-2" style="font-size:0.75rem;" data-bs-toggle="modal" data-bs-target="#remindersModal">
+            <i class="fa-solid fa-comment-sms me-1"></i> Send Rent Reminders<?php if ($pendingReminders): ?> <span class="badge bg-primary rounded-pill ms-1"><?= count($pendingReminders) ?></span><?php endif; ?>
+        </button>
         <a href="export_payments.php" class="btn btn-primary fw-semibold btn-sm px-2 py-1 rounded-2" style="font-size:0.75rem;"><i class="fa-solid fa-download me-1"></i> Export Data</a>
     </div>
 </div>
@@ -586,5 +608,57 @@ document.addEventListener('DOMContentLoaded', function () {
     });
 });
 </script>
+
+<!-- Rent reminders by SMS -->
+<div class="modal fade" id="remindersModal" tabindex="-1">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content border-0 shadow">
+            <div class="modal-header border-bottom-0 pb-0">
+                <h5 class="modal-title fw-bold text-dark"><i class="fa-solid fa-comment-sms text-primary me-2"></i>Rent Reminders</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" style="font-size: 0.85rem;">
+                <p class="text-muted small mb-3">
+                    Texts tenants whose rent is due within <?= REMINDER_DAYS_BEFORE ?> days, and tenants with an overdue balance
+                    (at most once a week). Nobody gets the same reminder twice, so this is safe to press again.
+                </p>
+                <?php if (!$smsReady): ?>
+                    <div class="alert alert-warning py-2 small"><i class="fa-solid fa-triangle-exclamation me-1"></i>
+                        SMS isn't set up yet, so nothing will actually be sent. Add your PhilSMS API token in <a href="settings.php#sms">Settings</a>.</div>
+                <?php endif; ?>
+                <?php if (empty($pendingReminders)): ?>
+                    <div class="text-center text-muted py-4"><i class="fa-regular fa-circle-check fa-2x d-block mb-2 text-success"></i>Nobody needs a reminder right now.</div>
+                <?php else: ?>
+                    <?php foreach ($pendingReminders as $r): ?>
+                    <div class="border rounded-3 p-2 mb-2">
+                        <div class="d-flex justify-content-between align-items-center gap-2 flex-wrap mb-1">
+                            <span class="fw-bold text-dark"><?= htmlspecialchars($r['name']) ?>
+                                <span class="text-muted fw-normal small ms-1"><?= htmlspecialchars(($n = normalizePhMobile($r['phone'])) ? formatPhMobile($n) : ($r['phone'] ?: 'no number')) ?></span></span>
+                            <?php if ($r['kind'] === 'overdue'): ?>
+                                <span class="badge badge-soft-danger">Overdue · PHP <?= number_format($r['amount'], 2) ?></span>
+                            <?php else: ?>
+                                <span class="badge badge-soft-warning">Due soon · PHP <?= number_format($r['amount'], 2) ?></span>
+                            <?php endif; ?>
+                        </div>
+                        <div class="text-muted small"><?= htmlspecialchars($r['message']) ?></div>
+                        <?php if (!normalizePhMobile($r['phone'])): ?>
+                            <div class="text-danger small mt-1"><i class="fa-solid fa-circle-exclamation me-1"></i>Can't be texted: add a valid mobile number to this tenant.</div>
+                        <?php endif; ?>
+                    </div>
+                    <?php endforeach; ?>
+                <?php endif; ?>
+            </div>
+            <div class="modal-footer border-top-0">
+                <button type="button" class="btn btn-light fw-semibold" data-bs-dismiss="modal">Close</button>
+                <?php if ($pendingReminders): ?>
+                <form method="POST" class="m-0">
+                    <input type="hidden" name="action" value="send_reminders">
+                    <button type="submit" class="btn btn-primary fw-bold"><i class="fa-solid fa-paper-plane me-1"></i>Send <?= count($pendingReminders) ?> Reminder<?= count($pendingReminders) === 1 ? '' : 's' ?></button>
+                </form>
+                <?php endif; ?>
+            </div>
+        </div>
+    </div>
+</div>
 
 <?php require_once 'footer.php'; ?>

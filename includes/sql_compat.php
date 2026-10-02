@@ -91,6 +91,18 @@ function tableExists(PDO $pdo, string $table): bool {
     return (int)$stmt->fetchColumn() > 0;
 }
 
+/** True when the table has an index of that name. */
+function indexExists(PDO $pdo, string $table, string $index): bool {
+    if (isPgsql()) {
+        $stmt = $pdo->prepare("SELECT COUNT(*) FROM pg_indexes WHERE schemaname = CURRENT_SCHEMA() AND tablename = ? AND indexname = ?");
+    } else {
+        $stmt = $pdo->prepare("SELECT COUNT(*) FROM information_schema.statistics
+                               WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ?");
+    }
+    $stmt->execute([$table, $index]);
+    return (int)$stmt->fetchColumn() > 0;
+}
+
 /** True when the column exists on the table. */
 function columnExists(PDO $pdo, string $table, string $column): bool {
     $stmt = $pdo->prepare("SELECT COUNT(*) FROM information_schema.columns

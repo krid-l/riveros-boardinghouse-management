@@ -7,8 +7,9 @@
 
 require_once __DIR__ . '/billing.php';
 require_once __DIR__ . '/sql_compat.php';
+require_once __DIR__ . '/sms.php';
 
-const SCHEMA_VERSION = '4';
+const SCHEMA_VERSION = '5';
 
 function runMigrations(PDO $pdo): void {
     try {
@@ -39,6 +40,7 @@ function runMigrations(PDO $pdo): void {
             migrateToV3($pdo);
         }
         migrateToV4($pdo);
+        migrateToV5($pdo);
 
         $pdo->prepare("INSERT INTO settings (setting_key, setting_value) VALUES ('schema_version', ?)
                        " . sqlUpsert(['setting_key'], ['setting_value']))
@@ -76,6 +78,33 @@ function migrateBaseSchema(PDO $pdo): void {
         message TEXT NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )");
+}
+
+// v5: SMS through PhilSMS. A log of every text, sent or not, so the admin can see what went
+// out and why something didn't; reminders also use it to avoid texting the same thing twice.
+function migrateToV5(PDO $pdo): void {
+    $pdo->exec("CREATE TABLE IF NOT EXISTS sms_log (
+        id " . sqlSerialPk() . ",
+        tenant_id INT REFERENCES tenants(id) ON DELETE SET NULL,
+        recipient VARCHAR(30) NOT NULL,
+        message TEXT NOT NULL,
+        purpose VARCHAR(30) NOT NULL DEFAULT 'general',
+        status VARCHAR(10) NOT NULL,
+        error VARCHAR(255),
+        ref VARCHAR(80),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )");
+    if (!indexExists($pdo, 'sms_log', 'idx_sms_log_ref')) {
+        $pdo->exec("CREATE INDEX idx_sms_log_ref ON sms_log (ref)");
+    }
+
+    // The original seed data had a made-up key and an unregistered sender name, which PhilSMS
+    // would reject. Clear them so the system treats SMS as "not set up yet" instead.
+    $pdo->exec("UPDATE settings SET setting_value = '' WHERE setting_key = 'sms_api_key'
+                AND setting_value IN ('1234567890', 'your_semaphore_key_here')");
+    $pdo->exec("UPDATE settings SET setting_value = '" . PHILSMS_DEFAULT_SENDER . "' WHERE setting_key = 'sms_sender_id'
+                AND setting_value IN ('', 'BOARDINGHOUSE')");
+    $pdo->exec("UPDATE settings SET setting_value = 'PhilSMS' WHERE setting_key = 'sms_provider'");
 }
 
 // v4: remember when each tenant last opened the announcements page, so the portal can show

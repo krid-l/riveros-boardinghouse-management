@@ -106,8 +106,8 @@ Change that password straight away under **Settings → Administrator Profile**.
   WampServer predates PHP 8 - install the current 64-bit WampServer instead. A `C:\wamp\`
   path rather than `C:\wamp64\` is a good sign you are on an old one.
 * The `pdo_mysql` extension — enabled by default in WAMP and XAMPP
-* The `gd` and `curl` extensions — also on by default; `curl` is only needed for SMS and
-  Supabase uploads, neither of which local testing uses
+* The `gd` and `curl` extensions — also on by default; `curl` is used for SMS and
+  Supabase uploads
 
 To check, create a file `info.php` in the project folder containing `<?php phpinfo();` and
 open <http://localhost/riveros-boardinghouse-management/info.php>. Delete it afterwards.
@@ -134,8 +134,9 @@ To hand someone your actual data as well, export the `boardinghouse` database fr
   Linux run `chmod -R 775 uploads`.
 * **Schema updates apply themselves.** The first page load after pulling new code runs any
   pending migration, on MySQL and on PostgreSQL alike — there is nothing to import by hand.
-* **SMS stays off locally** unless you put a real API key in Settings → SMS API Integration.
-  Without one, notifications are skipped and the rest of the flow carries on working.
+* **SMS is off until you connect PhilSMS.** Without an API token, texts are skipped (and
+  listed under Settings → Recent SMS) and the rest of the flow carries on working. To turn it
+  on, follow [SMS_SETUP.md](SMS_SETUP.md).
 
 ## Clearing out test data
 

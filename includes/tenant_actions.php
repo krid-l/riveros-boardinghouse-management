@@ -4,6 +4,7 @@
 // Shared by the Tenants tab and the Rooms tab so both behave identically.
 
 require_once __DIR__ . '/billing.php';
+require_once __DIR__ . '/sms.php';
 
 function postedDate(string $field): string {
     $value = trim($_POST[$field] ?? '');
@@ -30,6 +31,7 @@ function handleTenantAction(PDO $pdo): array {
             $lastName = trim($_POST['last_name'] ?? '');
             $roomId = !empty($_POST['room_id']) ? (int)$_POST['room_id'] : null;
             $moveInDate = $roomId ? postedDate('move_in_date') : null;
+            $contactNumber = validatedMobileInput($_POST['contact_number'] ?? '');
 
             if ($roomId && !roomHasSpace($pdo, $roomId)) {
                 throw new Exception("Cannot assign tenant: Room is already full.");
@@ -68,7 +70,7 @@ function handleTenantAction(PDO $pdo): array {
                     $userId,
                     $firstName,
                     $lastName,
-                    $_POST['contact_number'],
+                    $contactNumber,
                     $roomId,
                     !empty($_POST['occupation']) ? $_POST['occupation'] : null,
                     !empty($_POST['emergency_contact']) ? $_POST['emergency_contact'] : null,
@@ -93,7 +95,7 @@ function handleTenantAction(PDO $pdo): array {
             $stmt->execute([
                 trim($_POST['first_name'] ?? ''),
                 trim($_POST['last_name'] ?? ''),
-                $_POST['contact_number'],
+                validatedMobileInput($_POST['contact_number'] ?? ''),
                 !empty($_POST['occupation']) ? $_POST['occupation'] : null,
                 !empty($_POST['emergency_contact']) ? $_POST['emergency_contact'] : null,
                 (int)$_POST['tenant_id']

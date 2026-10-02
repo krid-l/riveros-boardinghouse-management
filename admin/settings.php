@@ -3,6 +3,7 @@ require_once '../includes/db.php';
 require_once '../includes/auth.php';
 requireAdmin();
 require_once '../includes/uploads.php';
+require_once '../includes/sms.php';
 
 $success = '';
 $error = '';
@@ -74,10 +75,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         updateSetting($pdo, 'gcash_qr_uploaded_at', '');
         $success = 'GCash QR code removed.';
     } elseif ($action === 'update_sms') {
-        updateSetting($pdo, 'sms_provider', $_POST['sms_provider'] ?? '');
-        updateSetting($pdo, 'sms_api_key', $_POST['sms_api_key'] ?? '');
-        updateSetting($pdo, 'sms_sender_id', $_POST['sms_sender_id'] ?? '');
-        $success = 'SMS settings saved successfully.';
+        // The saved token is never sent back to the page, so a blank box means "keep it".
+        $token = trim($_POST['sms_api_key'] ?? '');
+        $sender = trim($_POST['sms_sender_id'] ?? '') ?: PHILSMS_DEFAULT_SENDER;
+        if (!preg_match('/^[A-Za-z0-9 .\-]{1,11}$/', $sender)) {
+            $error = 'The sender name can be at most 11 letters or digits, and must be one PhilSMS has approved for your account.';
+        } else {
+            updateSetting($pdo, 'sms_provider', 'PhilSMS');
+            updateSetting($pdo, 'sms_sender_id', $sender);
+            if (!empty($_POST['clear_token'])) {
+                updateSetting($pdo, 'sms_api_key', '');
+                $success = 'SMS settings saved. The API token was removed, so texts are no longer sent.';
+            } else {
+                if ($token !== '') {
+                    updateSetting($pdo, 'sms_api_key', $token);
+                }
+                $success = 'SMS settings saved. Send a test message to check that they work.';
+            }
+        }
+    } elseif ($action === 'sms_test') {
+        $number = trim($_POST['test_number'] ?? '');
+        if (!normalizePhMobile($number)) {
+            $error = 'Enter a Philippine mobile number for the test, like 0917 123 4567.';
+        } elseif (!smsConfigured($pdo)) {
+            $error = 'Save your PhilSMS API token first.';
+        } else {
+            $name = smsConfig($pdo)['name'];
+            $r = sendSMS($pdo, $number, "$name: This is a test message from your boarding house system. SMS is working!", 'test');
+            if ($r['sent'] > 0) {
+                $success = 'Test message sent to ' . formatPhMobile(normalizePhMobile($number)) . '. It should arrive within a minute.';
+            } else {
+                $error = 'Test message not sent. ' . smsErrorText($r);
+            }
+        }
+    } elseif ($action === 'sms_balance') {
+        $b = philsmsBalance($pdo);
+        if ($b['ok']) {
+            $success = 'PhilSMS is connected. Credits left: ' . $b['balance'] . ($b['expires'] ? ' (expires ' . $b['expires'] . ')' : '') . '.';
+        } else {
+            $error = 'Could not check the balance. ' . $b['error'];
+        }
     } elseif ($action === 'update_business') {
         updateSetting($pdo, 'boarding_house_name', $_POST['boarding_house_name'] ?? '');
         updateSetting($pdo, 'address', $_POST['address'] ?? '');
@@ -109,6 +146,19 @@ $s = function($key) use ($settingsMap) {
 
 // GCash QR code: a Supabase URL when deployed, an uploads/ path when run locally.
 $qrSrc = uploadSrc($settingsMap['gcash_qr_path'] ?? '', '../');
+
+// SMS: whether a token is saved (the token itself never goes back to the browser), and the
+// latest texts, so the admin can see what went out and why anything didn't.
+$smsTokenSaved = trim($settingsMap['sms_api_key'] ?? '') !== '';
+$smsTokenFromEnv = !$smsTokenSaved && smsConfigured($pdo);
+$smsLog = $pdo->query("SELECT l.*, t.first_name, t.last_name FROM sms_log l
+                       LEFT JOIN tenants t ON t.id = l.tenant_id
+                       ORDER BY l.created_at DESC, l.id DESC LIMIT 15")->fetchAll();
+$smsPurposeLabels = [
+    'payment_verified' => 'Payment verified', 'payment_covered' => 'Paid by roommate',
+    'payment_rejected' => 'Payment rejected', 'reminder_due' => 'Rent due soon',
+    'reminder_overdue' => 'Rent overdue', 'announcement' => 'Announcement', 'test' => 'Test',
+];
 $qrUploadedAt = $settingsMap['gcash_qr_uploaded_at'] ?? '';
 
 require_once 'header.php';
@@ -303,40 +353,110 @@ require_once 'header.php';
             </form>
         </div>
         
-        <!-- SMS API Integration -->
-        <div class="settings-card shadow-sm mb-0">
+        <!-- SMS (PhilSMS) -->
+        <div class="settings-card shadow-sm mb-0" id="sms">
             <form method="POST">
                 <input type="hidden" name="action" value="update_sms">
                 <div class="settings-header">
                     <div>
-                        <h6 class="card-title-lg"><i class="fa-solid fa-comment-sms icon-header text-primary"></i> SMS API Integration</h6>
-                        <div class="card-subtitle-sm">Configure your SMS gateway for sending notifications to tenants.</div>
+                        <h6 class="card-title-lg"><i class="fa-solid fa-comment-sms icon-header text-primary"></i> SMS Notifications (PhilSMS)</h6>
+                        <div class="card-subtitle-sm">Texts tenants when payments are verified or rejected, rent reminders, and announcements.</div>
                     </div>
+                    <?php if ($smsTokenSaved || $smsTokenFromEnv): ?>
+                        <span class="badge badge-soft-success align-self-start"><i class="fa-solid fa-circle-check me-1"></i>Set up</span>
+                    <?php else: ?>
+                        <span class="badge badge-soft-warning align-self-start">Not set up</span>
+                    <?php endif; ?>
                 </div>
                 <div class="settings-body">
+                    <?php if (!$smsTokenSaved && !$smsTokenFromEnv): ?>
+                    <div class="alert alert-light border small py-2 mb-3">
+                        Until an API token is saved, no texts are sent; they are listed below as "skipped" instead.
+                        Get the token from your PhilSMS account: <strong>app.philsms.com &rarr; Developers &rarr; API Token</strong>.
+                    </div>
+                    <?php endif; ?>
                     <div class="row g-3 mb-3">
-                        <div class="col-md-4">
-                            <label class="form-label">SMS Provider</label>
-                            <select class="form-select" name="sms_provider">
-                                <option value="Local SMS Gateway" <?= $s('sms_provider') == 'Local SMS Gateway' ? 'selected' : '' ?>>Local SMS Gateway</option>
-                                <option value="Semaphore API" <?= $s('sms_provider') == 'Semaphore API' ? 'selected' : '' ?>>Semaphore API</option>
-                            </select>
-                        </div>
-                        <div class="col-md-4 password-input-group">
-                            <label class="form-label">API Key</label>
-                            <input type="password" name="sms_api_key" class="form-control" value="<?= $s('sms_api_key') ?>">
+                        <div class="col-md-7 password-input-group">
+                            <label class="form-label">PhilSMS API Token</label>
+                            <input type="password" name="sms_api_key" class="form-control" autocomplete="off"
+                                   placeholder="<?= $smsTokenSaved ? 'Saved. Leave blank to keep it' : ($smsTokenFromEnv ? 'Set on the server (PHILSMS_API_TOKEN)' : 'Paste your API token') ?>">
                             <i class="fa-regular fa-eye eye-icon"></i>
                         </div>
-                        <div class="col-md-4">
-                            <label class="form-label">Sender ID</label>
-                            <input type="text" name="sms_sender_id" class="form-control" value="<?= $s('sms_sender_id') ?>">
+                        <div class="col-md-5">
+                            <label class="form-label">Sender Name</label>
+                            <input type="text" name="sms_sender_id" class="form-control" maxlength="11" value="<?= $s('sms_sender_id') ?: PHILSMS_DEFAULT_SENDER ?>">
+                            <div class="form-text" style="font-size:0.65rem;">Shown as the sender. Use "PhilSMS" unless PhilSMS approved your own.</div>
                         </div>
                     </div>
-                    <div class="text-end border-top pt-3 mt-1">
+                    <div class="d-flex justify-content-between align-items-center border-top pt-3 mt-1 gap-2 flex-wrap">
+                        <?php if ($smsTokenSaved): ?>
+                        <div class="form-check mb-0">
+                            <input class="form-check-input" type="checkbox" name="clear_token" value="1" id="clearToken">
+                            <label class="form-check-label small text-muted" for="clearToken">Remove the saved token</label>
+                        </div>
+                        <?php else: ?><span></span><?php endif; ?>
                         <button type="submit" class="btn btn-primary btn-save shadow-sm"><i class="fa-regular fa-floppy-disk me-2" style="font-size:0.65rem;"></i>Save SMS Settings</button>
                     </div>
                 </div>
             </form>
+
+            <div class="settings-body border-top">
+                <div class="row g-2 align-items-end">
+                    <div class="col-md-7">
+                        <form method="POST" class="d-flex gap-2 align-items-end">
+                            <input type="hidden" name="action" value="sms_test">
+                            <div class="flex-grow-1">
+                                <label class="form-label">Send a test SMS to</label>
+                                <input type="text" name="test_number" class="form-control" placeholder="e.g., 0917 123 4567" required>
+                            </div>
+                            <button type="submit" class="btn btn-outline-primary btn-save text-nowrap"><i class="fa-solid fa-paper-plane me-1"></i>Send Test</button>
+                        </form>
+                    </div>
+                    <div class="col-md-5 text-md-end">
+                        <form method="POST" class="m-0">
+                            <input type="hidden" name="action" value="sms_balance">
+                            <button type="submit" class="btn btn-light border btn-save text-nowrap"><i class="fa-solid fa-coins me-1 text-warning"></i>Check Credits</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
+            <div class="settings-body border-top">
+                <div class="fw-semibold text-dark mb-2" style="font-size: 0.8rem;">Recent SMS</div>
+                <?php if (empty($smsLog)): ?>
+                    <div class="text-muted small">No texts yet.</div>
+                <?php else: ?>
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0" style="font-size: 0.72rem;">
+                        <thead class="table-light"><tr><th>When</th><th>To</th><th>Type</th><th>Status</th></tr></thead>
+                        <tbody>
+                        <?php foreach ($smsLog as $l): ?>
+                            <tr title="<?= htmlspecialchars($l['message']) ?>">
+                                <td class="text-muted text-nowrap"><?= date('M j, g:i A', strtotime($l['created_at'])) ?></td>
+                                <td>
+                                    <?= htmlspecialchars(trim(($l['first_name'] ?? '') . ' ' . ($l['last_name'] ?? '')) ?: '-') ?>
+                                    <div class="text-muted"><?= htmlspecialchars(($n = normalizePhMobile($l['recipient'])) ? formatPhMobile($n) : ($l['recipient'] ?: 'no number')) ?></div>
+                                </td>
+                                <td><?= htmlspecialchars($smsPurposeLabels[$l['purpose']] ?? ucfirst(str_replace('_', ' ', $l['purpose']))) ?></td>
+                                <td>
+                                    <?php if ($l['status'] === 'sent'): ?>
+                                        <span class="badge badge-soft-success">Sent</span>
+                                    <?php elseif ($l['status'] === 'failed'): ?>
+                                        <span class="badge badge-soft-danger">Failed</span>
+                                    <?php else: ?>
+                                        <span class="badge badge-soft-secondary">Skipped</span>
+                                    <?php endif; ?>
+                                    <?php if (!empty($l['error'])): ?>
+                                        <div class="text-muted" style="font-size: 0.65rem; max-width: 220px;"><?= htmlspecialchars($l['error']) ?></div>
+                                    <?php endif; ?>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+                <?php endif; ?>
+            </div>
         </div>
         
     </div>
