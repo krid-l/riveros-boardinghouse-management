@@ -155,7 +155,7 @@ $smsLog = $pdo->query("SELECT l.*, t.first_name, t.last_name FROM sms_log l
                        LEFT JOIN tenants t ON t.id = l.tenant_id
                        ORDER BY l.created_at DESC, l.id DESC LIMIT 15")->fetchAll();
 $smsPurposeLabels = [
-    'payment_verified' => 'Payment verified', 'payment_covered' => 'Paid by roommate',
+    'payment_verified' => 'Payment verified', 'payment_covered' => 'Paid by roommate', 'move_in_payment' => 'Move-in payment',
     'payment_rejected' => 'Payment rejected', 'reminder_due' => 'Rent due soon',
     'reminder_overdue' => 'Rent overdue', 'announcement' => 'Announcement', 'test' => 'Test',
 ];

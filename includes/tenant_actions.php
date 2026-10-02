@@ -5,6 +5,7 @@
 
 require_once __DIR__ . '/billing.php';
 require_once __DIR__ . '/sms.php';
+require_once __DIR__ . '/pdf_generator.php';
 
 function postedDate(string $field): string {
     $value = trim($_POST[$field] ?? '');
@@ -16,6 +17,105 @@ function postedDate(string $field): string {
     return $value;
 }
 
+/**
+ * The money a tenant hands over when moving in: the first month in advance plus the deposit,
+ * as posted for their move-in month and not yet paid. Zero when there is nothing left to pay.
+ * @return array advance, deposit, amount (what is still owed of the two)
+ */
+function moveInAmountDue(PDO $pdo, int $tenantId): array {
+    $stmt = $pdo->prepare("SELECT move_in_date, balance, status FROM tenants WHERE id = ?");
+    $stmt->execute([$tenantId]);
+    $t = $stmt->fetch();
+    if (!$t || $t['status'] !== 'active' || empty($t['move_in_date'])) {
+        return ['advance' => 0.0, 'deposit' => 0.0, 'amount' => 0.0];
+    }
+    $charges = $pdo->prepare("SELECT kind, SUM(amount) FROM charges
+                              WHERE tenant_id = ? AND billing_month = ? AND kind IN ('rent', ?)
+                              GROUP BY kind");
+    $charges->execute([$tenantId, date('Y-m', strtotime($t['move_in_date'])), DEPOSIT_KIND]);
+    $byKind = $charges->fetchAll(PDO::FETCH_KEY_PAIR);
+    $advance = round((float)($byKind['rent'] ?? 0), 2);
+    $deposit = round((float)($byKind[DEPOSIT_KIND] ?? 0), 2);
+    // Payments come off the oldest charges first, and these are the oldest of this stay, so
+    // whatever is still owed (up to their total) is the unpaid part of them.
+    $amount = round(min($advance + $deposit, max(0, (float)$t['balance'])), 2);
+    return ['advance' => $advance, 'deposit' => $deposit, 'amount' => $amount];
+}
+
+/**
+ * Record the advance and deposit as received at move-in: a verified payment with a receipt,
+ * so the tenant starts at a zero balance and the money counts as collected.
+ *
+ * @return ?array the payment (id, amount, advance, deposit, sms), or null if nothing was owed
+ */
+function recordMoveInPayment(PDO $pdo, int $tenantId, string $method, string $reference): ?array {
+    $method = $method === 'gcash' ? 'gcash' : 'cash';
+    $reference = trim($reference);
+
+    $pdo->beginTransaction();
+    try {
+        $lock = $pdo->prepare("SELECT first_name, last_name, contact_number, move_in_date FROM tenants WHERE id = ? FOR UPDATE");
+        $lock->execute([$tenantId]);
+        $tenant = $lock->fetch();
+        $due = $tenant ? moveInAmountDue($pdo, $tenantId) : ['amount' => 0];
+        if ($due['amount'] <= 0) {
+            $pdo->commit();
+            return null;
+        }
+        // Paid on the move-in day; a move-in entered for a future date was paid today.
+        $paidOn = min($tenant['move_in_date'], date('Y-m-d'));
+        $paymentId = insertReturningId($pdo,
+            "INSERT INTO payments (tenant_id, amount, payment_date, reference_number, screenshot_path, payment_method, status, pay_for_room)
+             VALUES (?, ?, ?, ?, NULL, ?, 'verified', ?)",
+            [$tenantId, $due['amount'], $paidOn, $reference !== '' ? substr($reference, 0, 100) : 'MOVE-IN', $method, dbBool(false)]
+        );
+        $pdo->prepare("UPDATE tenants SET balance = balance - ? WHERE id = ?")->execute([$due['amount'], $tenantId]);
+        $pdo->commit();
+    } catch (Exception $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $e;
+    }
+
+    $name = $tenant['first_name'] . ' ' . $tenant['last_name'];
+    try {
+        $receiptPath = generateReceipt($paymentId, $name, $due['amount'], $paidOn,
+                                       $reference !== '' ? $reference : 'MOVE-IN', $method, 'Advance + Deposit',
+                                       date('Y-m', strtotime($tenant['move_in_date'])));
+        $pdo->prepare("UPDATE payments SET receipt_path = ? WHERE id = ?")->execute([$receiptPath, $paymentId]);
+    } catch (Exception $e) {
+        error_log("Move-in receipt for payment $paymentId failed: " . $e->getMessage());   // the payment itself stands
+    }
+
+    $parts = 'advance PHP ' . number_format($due['advance'], 2)
+           . ($due['deposit'] > 0 ? ' + deposit PHP ' . number_format($due['deposit'], 2) : '');
+    $sms = sendSMS($pdo, $tenant['contact_number'],
+        smsConfig($pdo)['name'] . ": Hi {$tenant['first_name']}, welcome! We received your move-in payment of PHP "
+        . number_format($due['amount'], 2) . " ($parts). Receipt: RCP-" . str_pad($paymentId, 6, '0', STR_PAD_LEFT) . '.',
+        'move_in_payment', $tenantId);
+
+    return ['id' => $paymentId, 'amount' => $due['amount'], 'advance' => $due['advance'], 'deposit' => $due['deposit'], 'sms' => $sms];
+}
+
+/** "Move-in payment of ₱8,000.00 recorded (...). Receipt RCP-000012." for the admin. */
+function moveInPaymentMessage(?array $payment): string {
+    if ($payment === null) {
+        return '';
+    }
+    // Less than advance + deposit when part of it was already covered, e.g. by a credit.
+    $covered = round($payment['advance'] + $payment['deposit'] - $payment['amount'], 2);
+    $text = 'Move-in payment of ₱' . number_format($payment['amount'], 2) . ' recorded as paid ('
+          . '₱' . number_format($payment['advance'], 2) . ' advance'
+          . ($payment['deposit'] > 0 ? ' + ₱' . number_format($payment['deposit'], 2) . ' deposit' : '')
+          . ($covered > 0 ? ', less ₱' . number_format($covered, 2) . ' already paid or credited' : '')
+          . '). Receipt RCP-' . str_pad($payment['id'], 6, '0', STR_PAD_LEFT) . '.';
+    $smsText = smsOutcomeText($payment['sms']);
+    // Only mention SMS when it was actually set up; otherwise every move-in would nag about it.
+    if ($payment['sms']['sent'] > 0 || $payment['sms']['failed'] > 0) {
+        $text .= ' ' . $smsText;
+    }
+    return $text;
+}
+
 /** Runs the posted tenant action. Returns ['action' =>, 'success' =>, 'error' =>]. */
 function handleTenantAction(PDO $pdo): array {
     $error = '';
@@ -23,6 +123,23 @@ function handleTenantAction(PDO $pdo): array {
     $action = $_POST['action'];
     $billTenantId = null;
     $resplitRooms = [];   // rooms whose occupancy changed: their rent shares need recomputing
+    $moveInTenantId = null;   // a tenant moving in: their advance and deposit can be marked received
+    $moveInDueNote = '';      // what to tell the admin when they weren't
+
+    // The advance and deposit, received after the fact (the tenant was added without ticking it).
+    if ($action === 'movein_payment') {
+        try {
+            $payment = recordMoveInPayment($pdo, (int)($_POST['tenant_id'] ?? 0),
+                                           (string)($_POST['movein_method'] ?? 'cash'), (string)($_POST['movein_reference'] ?? ''));
+            if ($payment === null) {
+                return ['action' => $action, 'success' => '', 'error' => 'Error: There is no unpaid advance or deposit for this tenant.'];
+            }
+            return ['action' => $action, 'success' => htmlspecialchars(moveInPaymentMessage($payment)), 'error' => ''];
+        } catch (Exception $e) {
+            return ['action' => $action, 'success' => '', 'error' => 'Error: ' . $e->getMessage()];
+        }
+    }
+
     try {
         $pdo->beginTransaction();
 
@@ -80,14 +197,15 @@ function handleTenantAction(PDO $pdo): array {
             if ($roomId) {
                 logRoomTransfer($pdo, $tenantId, null, $roomId, $moveInDate, 'Moved in');
                 $billTenantId = $tenantId;
+                $moveInTenantId = $tenantId;
             }
 
             $success = "Tenant added successfully! <br><strong>Username:</strong> " . htmlspecialchars($username) . " <br><strong>Password:</strong> " . htmlspecialchars($rawPassword) . " <br><small>Please save these credentials!</small>";
             if ($moveInDate && $roomId) {
                 $firstRent = isHalfMonthMoveIn($moveInDate) ? 'half' : 'full';
-                $success .= "<br><small>Due on moving in (" . date('M j, Y', strtotime(firstMonthDueDate($moveInDate))) . "): "
-                          . "the first month in advance ($firstRent month) plus a deposit of one month's share, "
-                          . "which pays for their last month.</small>";
+                $moveInDueNote = "<br><small>Due on moving in (" . date('M j, Y', strtotime(firstMonthDueDate($moveInDate))) . "): "
+                               . "the first month in advance ($firstRent month) plus a deposit of one month's share, "
+                               . "which pays for their last month.</small>";
             }
 
         } elseif ($action === 'edit') {
@@ -121,9 +239,11 @@ function handleTenantAction(PDO $pdo): array {
                 $pdo->prepare("UPDATE tenants SET room_id = ?, move_in_date = ? WHERE id = ?")->execute([$newRoomId, $date, $tenantId]);
                 logRoomTransfer($pdo, $tenantId, null, $newRoomId, $date, 'Moved in');
                 $billTenantId = $tenantId;
+                $moveInTenantId = $tenantId;
                 $resplitRooms[] = $newRoomId;
-                $success = "Room assigned. The first month in advance and the deposit are due "
-                         . date('M j, Y', strtotime(firstMonthDueDate($date))) . ".";
+                $success = "Room assigned.";
+                $moveInDueNote = " The first month in advance and the deposit are due "
+                               . date('M j, Y', strtotime(firstMonthDueDate($date))) . ".";
             } else {
                 $pdo->prepare("UPDATE tenants SET room_id = ? WHERE id = ?")->execute([$newRoomId, $tenantId]);
                 logRoomTransfer($pdo, $tenantId, $t['room_id'] ? (int)$t['room_id'] : null, $newRoomId, $date, 'Room change');
@@ -183,8 +303,11 @@ function handleTenantAction(PDO $pdo): array {
                 ->execute([$roomId, $date, $tenantId]);
             logRoomTransfer($pdo, $tenantId, null, $roomId, $date, 'Moved in again (account re-activated)');
             $billTenantId = $tenantId;
+            $moveInTenantId = $tenantId;
             $resplitRooms[] = $roomId;
             $success = "Tenant re-activated.";
+            $moveInDueNote = " The first month in advance and the deposit are due "
+                           . date('M j, Y', strtotime(firstMonthDueDate($date))) . ".";
 
         } elseif ($action === 'delete') {
             // Permanent delete is only for tenants added by mistake: anyone with payment history must be deactivated instead.
@@ -225,6 +348,26 @@ function handleTenantAction(PDO $pdo): array {
             } catch (Exception $e) {
                 error_log("Rent re-split error for room $roomId: " . $e->getMessage());
             }
+        }
+    }
+
+    // Moving in means handing over the advance and deposit. Recorded last, once billing and the
+    // room's re-split have settled what this tenant's share actually is.
+    if (!$error && $moveInTenantId) {
+        $payment = null;
+        if (!empty($_POST['movein_paid'])) {
+            try {
+                $payment = recordMoveInPayment($pdo, $moveInTenantId,
+                                               (string)($_POST['movein_method'] ?? 'cash'), (string)($_POST['movein_reference'] ?? ''));
+            } catch (Exception $e) {
+                error_log("Move-in payment for tenant $moveInTenantId failed: " . $e->getMessage());
+                $success .= ' <br><strong>The move-in payment could not be recorded:</strong> ' . htmlspecialchars($e->getMessage());
+            }
+        }
+        if ($payment !== null) {
+            $success .= ($action === 'add' ? '<br>' : ' ') . htmlspecialchars(moveInPaymentMessage($payment));
+        } else {
+            $success .= $moveInDueNote;
         }
     }
 

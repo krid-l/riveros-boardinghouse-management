@@ -9,7 +9,7 @@ require_once __DIR__ . '/billing.php';
 require_once __DIR__ . '/sql_compat.php';
 require_once __DIR__ . '/sms.php';
 
-const SCHEMA_VERSION = '5';
+const SCHEMA_VERSION = '6';
 
 function runMigrations(PDO $pdo): void {
     try {
@@ -41,6 +41,7 @@ function runMigrations(PDO $pdo): void {
         }
         migrateToV4($pdo);
         migrateToV5($pdo);
+        migrateToV6($pdo);
 
         $pdo->prepare("INSERT INTO settings (setting_key, setting_value) VALUES ('schema_version', ?)
                        " . sqlUpsert(['setting_key'], ['setting_value']))
@@ -78,6 +79,13 @@ function migrateBaseSchema(PDO $pdo): void {
         message TEXT NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )");
+}
+
+// v6: payments without a screenshot. Cash payments, and the advance and deposit the admin
+// records at move-in, have no GCash screenshot; databases created from the first schema
+// refused to store them.
+function migrateToV6(PDO $pdo): void {
+    ensureColumnNullable($pdo, 'payments', 'screenshot_path');
 }
 
 // v5: SMS through PhilSMS. A log of every text, sent or not, so the admin can see what went

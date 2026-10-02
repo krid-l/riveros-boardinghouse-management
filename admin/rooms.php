@@ -59,7 +59,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     // Tenant actions (change room / remove), shared with the Tenants tab
     ['success' => $success, 'error' => $error] = handleTenantAction($pdo);
     $back = 'rooms.php?room=' . (int)($_POST['return_room'] ?? 0);
-    header("Location: $back&" . ($error ? 'err=' . urlencode($error) : 'msg=' . urlencode(strip_tags($success))));
+    header("Location: $back&" . ($error ? 'err=' . urlencode($error) : 'msg=' . urlencode(html_entity_decode(strip_tags($success)))));
     exit;
 }
 if (!empty($_GET['msg'])) $success = htmlspecialchars($_GET['msg'] ?? '');

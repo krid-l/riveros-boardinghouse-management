@@ -103,6 +103,25 @@ function indexExists(PDO $pdo, string $table, string $index): bool {
     return (int)$stmt->fetchColumn() > 0;
 }
 
+/**
+ * Let a column hold NULL if it currently can't. Older databases were created with some columns
+ * NOT NULL that the app now leaves empty (e.g. a cash payment has no screenshot).
+ */
+function ensureColumnNullable(PDO $pdo, string $table, string $column): void {
+    $stmt = $pdo->prepare("SELECT is_nullable, " . (isPgsql() ? "NULL" : "column_type") . " FROM information_schema.columns
+                           WHERE table_schema = " . currentSchemaSql() . " AND table_name = ? AND column_name = ?");
+    $stmt->execute([$table, $column]);
+    $row = $stmt->fetch(PDO::FETCH_NUM);
+    if (!$row || strtoupper($row[0]) === 'YES') {
+        return;
+    }
+    if (isPgsql()) {
+        $pdo->exec("ALTER TABLE $table ALTER COLUMN $column DROP NOT NULL");
+    } else {
+        $pdo->exec("ALTER TABLE $table MODIFY $column {$row[1]} NULL");
+    }
+}
+
 /** True when the column exists on the table. */
 function columnExists(PDO $pdo, string $table, string $column): bool {
     $stmt = $pdo->prepare("SELECT COUNT(*) FROM information_schema.columns

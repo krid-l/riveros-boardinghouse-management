@@ -1,11 +1,11 @@
-﻿<?php
+<?php
 // includes/pdf_generator.php
 
 if (!class_exists('FPDF')) {
     require_once __DIR__ . '/fpdf/fpdf.php';
 }
 
-function generateReceipt($paymentId, $tenantName, $amount, $date, $reference, $paymentMethod = 'GCash') {
+function generateReceipt($paymentId, $tenantName, $amount, $date, $reference, $paymentMethod = 'GCash', $typeLabel = null, $coveringMonth = null) {
     global $pdo;
     
     require_once __DIR__ . '/billing.php';
@@ -33,6 +33,9 @@ function generateReceipt($paymentId, $tenantName, $amount, $date, $reference, $p
         }
     }
 
+    if ($coveringMonth !== null) {
+        $billedMonth = $coveringMonth;   // e.g. the move-in month, for the advance
+    }
     // Rent months run from the 1st (or move-in day) to month end, due on the 30th.
     $cycleStr = billingPeriodLabel($billedMonth, $moveInDate);
     
@@ -42,6 +45,9 @@ function generateReceipt($paymentId, $tenantName, $amount, $date, $reference, $p
         $typeStr = 'Entire Room';
     } elseif (stripos($paymentMethod, 'Covered by') !== false) {
         $typeStr = 'Covered by Roommate';
+    }
+    if ($typeLabel !== null) {
+        $typeStr = $typeLabel;   // e.g. 'Advance + Deposit' for the move-in payment
     }
     
     $filename = 'receipt_' . $paymentId . '_' . time() . '.pdf';
