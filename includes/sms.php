@@ -4,8 +4,6 @@
 // Text messages through PhilSMS (https://dashboard.philsms.com), API v3:
 //   POST https://dashboard.philsms.com/api/v3/sms/send   {recipient, sender_id, type, message}
 //   GET  https://dashboard.philsms.com/api/v3/balance
-// The address can be changed under Settings > SMS (API URL), should PhilSMS move it again: a
-// token only works on the PhilSMS site it was created on.
 // Both take "Authorization: Bearer <API token>" and answer with JSON whose "status" is
 // "success" or "error" (with a "message" saying why).
 //
@@ -15,7 +13,7 @@
 //
 // Every message, sent or not, is recorded in the sms_log table, which the settings page shows.
 
-const PHILSMS_API_BASE = 'https://dashboard.philsms.com/api/v3';   // default; Settings or the PHILSMS_API_BASE env var override it
+const PHILSMS_API_BASE = 'https://dashboard.philsms.com/api/v3';
 const PHILSMS_DEFAULT_SENDER = 'PhilSMS';
 const SMS_BULK_CHUNK = 100;
 // PhilSMS answers a send only after handing the text to the network, which can take a while.
@@ -38,32 +36,11 @@ function smsTokenHint(string $token): string {
     return "$shown ($len characters)";
 }
 
-/**
- * The API base address from what the admin typed, or null if it isn't a usable https address.
- * Accepts the base (…/api/v3) or a full endpoint copied from the docs (…/api/v3/sms/send).
- */
-function normalizeSmsApiBase(string $url): ?string {
-    $url = trim($url);
-    if ($url === '') {
-        return null;
-    }
-    if (!preg_match('#^[a-z]+://#i', $url)) {
-        $url = 'https://' . $url;   // just the host was typed
-    }
-    $url = preg_replace('#/(sms/send|balance)/?$#i', '', rtrim($url, '/'));
-    if ((parse_url($url, PHP_URL_PATH) ?? '') === '') {
-        $url .= '/api/v3';
-    }
-    // https only, except a local test server.
-    $ok = preg_match('#^https://[a-z0-9.-]+\.[a-z]{2,}(/[A-Za-z0-9._~/-]*)?$#i', $url)
-       || preg_match('#^http://(localhost|127\.0\.0\.1)(:\d+)?(/[A-Za-z0-9._~/-]*)?$#i', $url);
-    return $ok ? $url : null;
-}
 
 /** Token and sender ID: the admin's settings, else PHILSMS_API_TOKEN / PHILSMS_SENDER_ID env vars. */
 function smsConfig(PDO $pdo): array {
     $rows = $pdo->query("SELECT setting_key, setting_value FROM settings
-                         WHERE setting_key IN ('sms_api_key', 'sms_sender_id', 'sms_api_url', 'boarding_house_name')")
+                         WHERE setting_key IN ('sms_api_key', 'sms_sender_id', 'boarding_house_name')")
                 ->fetchAll(PDO::FETCH_KEY_PAIR);
 
     $token = cleanSmsToken((string)($rows['sms_api_key'] ?? ''));
@@ -74,12 +51,10 @@ function smsConfig(PDO $pdo): array {
     if ($sender === '') {
         $sender = trim((string)(getenv('PHILSMS_SENDER_ID') ?: '')) ?: PHILSMS_DEFAULT_SENDER;
     }
-    $base = normalizeSmsApiBase((string)($rows['sms_api_url'] ?? ''))
-         ?? (getenv('PHILSMS_API_BASE') ? rtrim(getenv('PHILSMS_API_BASE'), '/') : PHILSMS_API_BASE);
     return [
         'token'  => $token,
         'sender' => $sender,
-        'base'   => $base,
+        'base'   => PHILSMS_API_BASE,
         'name'   => trim((string)($rows['boarding_house_name'] ?? '')) ?: 'Riveros Boarding House',
     ];
 }

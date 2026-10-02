@@ -36,10 +36,7 @@ then; an unapproved name is rejected.
 1. Log in as admin and go to **Settings**. The **SMS Notifications (PhilSMS)** card is at the
    bottom of the left column.
 2. Paste the token into **PhilSMS API Token**, leave **Sender Name** as `PhilSMS`, and press
-   **Save SMS Settings**. The card's badge changes to **Set up**. **API URL** is already
-   `https://dashboard.philsms.com/api/v3`; change it only if the PhilSMS API documentation shows
-   a different address. A token only works on the PhilSMS site it was created on, so a token
-   from dashboard.philsms.com is refused by any other address.
+   **Save SMS Settings**. The card's badge changes to **Set up**.
 3. Type your own mobile number under **Send a test SMS to** and press **Send Test**. The text
    should arrive within a minute.
 4. **Check Credits** shows how many credits are left.

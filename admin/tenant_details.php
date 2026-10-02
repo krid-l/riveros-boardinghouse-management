@@ -2,13 +2,60 @@
 require_once '../includes/db.php';
 require_once '../includes/auth.php';
 require_once '../includes/billing.php';
+require_once '../includes/sms.php';
+require_once '../includes/sms_reminders.php';
 requireAdmin();
+
+$reminderSuccess = '';
+$reminderError   = '';
 
 if (!isset($_GET['id']) || !is_numeric($_GET['id'])) {
     die("Invalid Tenant ID.");
 }
-
 $tenantId = (int)$_GET['id'];
+
+// Handle Send Reminder action before any output
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'send_reminder' && (int)($_POST['tenant_id'] ?? 0) === $tenantId) {
+    // Re-fetch minimal tenant info needed for the reminder message
+    $tStmt = $pdo->prepare("SELECT id, first_name, last_name, contact_number, balance, status, room_id, move_in_date FROM tenants WHERE id = ?");
+    $tStmt->execute([$tenantId]);
+    $tRow = $tStmt->fetch();
+
+    if (!$tRow || $tRow['status'] !== 'active') {
+        $reminderError = 'Reminder can only be sent to active tenants.';
+    } elseif ((float)$tRow['balance'] <= 0) {
+        $reminderError = 'This tenant has no outstanding balance — no reminder needed.';
+    } elseif (!smsConfigured($pdo)) {
+        $reminderError = 'SMS is not set up yet. Add your PhilSMS API token in Settings.';
+    } else {
+        $config  = smsConfig($pdo);
+        $billing = tenantBillingStatus($tRow, chargesNotYetDue($pdo, $tenantId));
+
+        if ($billing['key'] === 'overdue') {
+            $since   = oldestUnpaidDueDate($pdo, $tenantId, (float)$tRow['balance']);
+            $ref     = 'overdue:' . $tenantId . ':' . date('o-W');
+            $message = sprintf(
+                '%s: Hi %s, you have an overdue rent balance of PHP %s%s. Please settle it via GCash and upload the screenshot in the tenant portal. Thank you!',
+                $config['name'], $tRow['first_name'], number_format($billing['overdue'], 2),
+                $since ? ' (due since ' . date('M j', strtotime($since)) . ')' : ''
+            );
+        } else {
+            // due or any positive balance — send a general reminder
+            $ref     = 'due:manual:' . $tenantId . ':' . date('Y-m-d');
+            $message = sprintf(
+                '%s: Hi %s, your rent of PHP %s is due soon. Please pay via GCash and upload the screenshot in the tenant portal. Thank you!',
+                $config['name'], $tRow['first_name'], number_format((float)$tRow['balance'], 2)
+            );
+        }
+
+        $r = sendSMS($pdo, $tRow['contact_number'], $message, 'reminder_' . $billing['key'], $tenantId, $ref);
+        if ($r['sent'] > 0) {
+            $reminderSuccess = 'Reminder sent to ' . formatPhMobile(normalizePhMobile($tRow['contact_number'])) . '.';
+        } else {
+            $reminderError = 'Reminder not sent. ' . smsErrorText($r);
+        }
+    }
+}
 
 // Fetch Tenant & Room details
 $stmt = $pdo->prepare("
@@ -484,8 +531,19 @@ require_once 'header.php';
         <div class="section-card shadow-sm">
             <div class="section-header"><h6 class="section-title"><i class="fa-solid fa-user-gear text-muted me-2"></i>Actions</h6></div>
             <div class="p-3 d-flex flex-column gap-2">
-                <a href="#" class="btn btn-outline-primary btn-sm text-start" style="font-size:0.7rem;"><i class="fa-regular fa-envelope me-2"></i>Send Reminder</a>
-                <a href="#" class="btn btn-outline-primary btn-sm text-start" style="font-size:0.7rem;"><i class="fa-regular fa-user me-2"></i>View Tenant Profile</a>
+                <?php if ($reminderSuccess): ?>
+                <div class="alert alert-success py-1 px-2 mb-1" style="font-size:0.7rem;"><?= htmlspecialchars($reminderSuccess) ?></div>
+                <?php elseif ($reminderError): ?>
+                <div class="alert alert-danger py-1 px-2 mb-1" style="font-size:0.7rem;"><?= htmlspecialchars($reminderError) ?></div>
+                <?php endif; ?>
+                <form method="POST">
+                    <input type="hidden" name="action" value="send_reminder">
+                    <input type="hidden" name="tenant_id" value="<?= $tenantId ?>">
+                    <button type="submit" class="btn btn-outline-primary btn-sm text-start w-100" style="font-size:0.7rem;"
+                        <?= (!smsConfigured($pdo) || (float)($tenant['balance'] ?? 0) <= 0 || $tenant['status'] !== 'active') ? 'disabled title="' . (!smsConfigured($pdo) ? 'SMS not set up' : ((float)($tenant['balance'] ?? 0) <= 0 ? 'No outstanding balance' : 'Tenant is not active')) . '"' : '' ?>>
+                        <i class="fa-regular fa-envelope me-2"></i>Send Reminder
+                    </button>
+                </form>
             </div>
         </div>
     </div> <!-- Close Right Column -->
