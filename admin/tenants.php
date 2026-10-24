@@ -171,6 +171,9 @@ require_once 'header.php';
         font-size: 0.8rem;
         padding: 0.4rem 0.75rem;
     }
+    tr.tenant-row[data-href] { cursor: pointer; }
+    tr.tenant-row[data-href] .row-actions { cursor: default; }
+    tr.tenant-row[data-href]:hover .tenant-link { color: #2563eb !important; text-decoration: underline !important; }
     .movein-box { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 0.6rem 0.75rem; }
     .movein-box .form-check-label { font-size: 0.75rem; font-weight: 600; color: #0f172a; margin-bottom: 0; }
 </style>
@@ -341,11 +344,11 @@ require_once 'header.php';
                                 'movein_due' => $moveInDue,
                             ]), ENT_QUOTES);
                         ?>
-                        <tr class="tenant-row <?= $isDeactivated ? 'opacity-75' : '' ?>" data-status="<?= $bs['key'] ?>" data-search="<?= htmlspecialchars(strtolower($t['first_name'].' '.$t['last_name'].' '.$t['username'])) ?>">
+                        <tr class="tenant-row <?= $isDeactivated ? 'opacity-75' : '' ?>" data-href="tenant_details.php?id=<?= (int)$t['id'] ?>" data-status="<?= $bs['key'] ?>" data-search="<?= htmlspecialchars(strtolower($t['first_name'].' '.$t['last_name'].' '.$t['username'])) ?>">
                             <td class="ps-4">
                                 <div class="d-flex align-items-center">
                                     <?= avatarHtml($t['first_name'] . ' ' . $t['last_name'], 28, 'me-2', $t['profile_picture'] ?? null, '../') ?>
-                                    <span class="fw-bold text-dark text-truncate" style="max-width:130px;"><?= htmlspecialchars($t['first_name'].' '.$t['last_name']) ?></span>
+                                    <a href="tenant_details.php?id=<?= (int)$t['id'] ?>" class="fw-bold text-dark text-truncate text-decoration-none tenant-link" style="max-width:130px;"><?= htmlspecialchars($t['first_name'].' '.$t['last_name']) ?></a>
                                 </div>
                             </td>
                             <td class="text-muted"><?= htmlspecialchars($t['contact_number'] ?? '') ?: '<span class="text-black-50 fst-italic">None</span>' ?></td>
@@ -368,7 +371,7 @@ require_once 'header.php';
                                     <span class="status-dot bg-<?= $bs['color'] ?>"></span> <?= $bs['label'] ?>
                                 </span>
                             </td>
-                            <td class="text-end pe-4 text-nowrap" data-tenant="<?= $rowData ?>">
+                            <td class="text-end pe-4 text-nowrap row-actions" data-tenant="<?= $rowData ?>">
                                 <a href="tenant_details.php?id=<?= $t['id'] ?>" class="btn btn-sm btn-outline-secondary rounded-1 px-1 py-0 me-1" title="View details">
                                     <i class="fa-regular fa-eye" style="font-size: 0.65rem;"></i>
                                 </a>
@@ -840,6 +843,24 @@ function openReactivateModal(btn) {
     updateMoveIn(document.getElementById('react_room').form);
     showModal('reactivateModal');
 }
+
+// Clicking anywhere on a tenant's row opens their details, except on the action buttons.
+// Ctrl/Cmd-click or a middle click opens it in a new tab, like a link would.
+document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('tr.tenant-row[data-href]').forEach(function (row) {
+        const open = function (e) {
+            if (e.target.closest('a, button, input, select, label, .row-actions')) return;   // their own job
+            if (window.getSelection && String(window.getSelection()).length > 0) return;     // selecting text
+            if (e.ctrlKey || e.metaKey || e.button === 1) {
+                window.open(row.dataset.href, '_blank');
+            } else if (e.button === 0) {
+                window.location = row.dataset.href;
+            }
+        };
+        row.addEventListener('click', open);
+        row.addEventListener('auxclick', open);
+    });
+});
 
 // Typing in the search box submits the form after a short pause, so the server can filter.
 document.addEventListener('DOMContentLoaded', function () {
