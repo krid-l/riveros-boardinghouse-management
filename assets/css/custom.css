@@ -81,6 +81,7 @@ body {
 .badge-soft-danger { background-color: #fee2e2; color: #991b1b; }
 .badge-soft-primary { background-color: #dbeafe; color: #1e40af; }
 .badge-soft-secondary { background-color: #f1f5f9; color: #475569; }
+.badge-soft-info { background-color: #e0f2fe; color: #075985; }
 .badge { 
     font-weight: 600; 
     padding: 0.5em 0.8em; 

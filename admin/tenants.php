@@ -417,11 +417,11 @@ function roomOptions(array $rooms): string {
     foreach ($rooms as $r) {
         $isFull = $r['occupied'] >= $r['capacity'];
         $avail = max(0, $r['capacity'] - $r['occupied']);
-        // Adding this tenant makes one more person to split the room price between.
-        $share = $r['price_per_month'] / ($r['occupied'] + 1);
+        // Rent per bed: the room price divided by its capacity.
+        $share = rentShare((float)$r['price_per_month'], (int)$r['capacity']);
         $label = 'Room ' . htmlspecialchars($r['room_number'] ?? '')
-               . ($isFull ? ' - FULL' : " (Avail: $avail | ₱" . number_format($r['price_per_month']) . "/room, ₱" . number_format($share, 2) . " each)");
-        $html .= '<option value="' . (int)$r['id'] . '" data-full="' . ($isFull ? 1 : 0) . '" data-share="' . round($share, 2) . '"' . ($isFull ? ' disabled' : '') . '>' . $label . '</option>';
+               . ($isFull ? ' - FULL' : " (Avail: $avail | ₱" . number_format($share, 2) . " per tenant)");
+        $html .= '<option value="' . (int)$r['id'] . '" data-full="' . ($isFull ? 1 : 0) . '" data-share="' . $share . '"' . ($isFull ? ' disabled' : '') . '>' . $label . '</option>';
     }
     return $html;
 }
@@ -504,12 +504,12 @@ function moveInPaymentFields(string $id, bool $startHidden = false): string {
                                         $label .= ' - FULL';
                                     } else {
                                         $avail = $r['capacity'] - $r['occupied'];
-                                        // Adding this tenant makes one more person to split the room price between.
-                                        $share = $r['price_per_month'] / ($r['occupied'] + 1);
-                                        $label .= " (Avail: $avail | ₱" . number_format($r['price_per_month']) . "/room, ₱" . number_format($share, 2) . " each)";
+                                        // Rent per bed: the room price divided by its capacity.
+                                        $share = rentShare((float)$r['price_per_month'], (int)$r['capacity']);
+                                        $label .= " (Avail: $avail | ₱" . number_format($share, 2) . " per tenant)";
                                     }
                                 ?>
-                                <option value="<?= $r['id'] ?>" <?= (int)($addOld['room_id'] ?? 0) === (int)$r['id'] && !$isFull ? 'selected' : '' ?> data-share="<?= $isFull ? '' : round($r['price_per_month'] / ($r['occupied'] + 1), 2) ?>" <?= $isFull ? 'disabled' : '' ?>><?= $label ?></option>
+                                <option value="<?= $r['id'] ?>" <?= (int)($addOld['room_id'] ?? 0) === (int)$r['id'] && !$isFull ? 'selected' : '' ?> data-share="<?= $isFull ? '' : rentShare((float)$r['price_per_month'], (int)$r['capacity']) ?>" <?= $isFull ? 'disabled' : '' ?>><?= $label ?></option>
                             <?php endforeach; ?>
                         </select>
                     </div>

@@ -14,9 +14,10 @@ if (!empty($currentTenant['room_id'])) {
     $room = $stmt->fetch();
     $roomOccupants = $room ? (int)$room['occupant_count'] : 0;
 }
-// The room price covers the whole room; this tenant pays an equal share of it.
-$myRentShare = $room ? rentShare((float)$room['price_per_month'], $roomOccupants) : 0.0;
-// Held to pay for their last month; follows the share as roommates come and go.
+// Rent is per bed: the room price divided by its capacity, however many beds are taken.
+$roomCapacity = $room ? max(1, (int)$room['capacity']) : 1;
+$myRentShare = $room ? rentShare((float)$room['price_per_month'], $roomCapacity) : 0.0;
+// Held to pay for their last month: one month of their rent.
 $myDeposit = tenantDeposit($pdo, $currentTenant);
 $upcomingDue = upcomingDueDate($pdo, (int)$currentTenant['id']);
 
@@ -167,7 +168,7 @@ $balance = $currentTenant['balance'] ?? 0;
     <div class="position-relative z-2 mb-3">
         <h1 class="fw-bolder text-white mb-1" style="font-size: 2rem;">Room <?= htmlspecialchars($room['room_number'] ?? '') ?></h1>
         <div class="text-white-50 fw-semibold" style="font-size: 0.85rem;">
-            <i class="fa-solid fa-money-bill-wave me-1"></i> PHP <?= number_format($myRentShare, 2) ?> / month <span class="text-white-50">(your share of the PHP <?= number_format($room['price_per_month'], 2) ?> room<?= $roomOccupants > 1 ? ', split ' . $roomOccupants . ' ways' : '' ?>)</span>
+            <i class="fa-solid fa-money-bill-wave me-1"></i> PHP <?= number_format($myRentShare, 2) ?> / month<?php if ($roomCapacity > 1): ?> <span class="text-white-50">(1 of <?= $roomCapacity ?> beds in the PHP <?= number_format($room['price_per_month'], 2) ?> room)</span><?php endif; ?>
             <?php if ($myDeposit > 0): ?>
                 <br><i class="fa-solid fa-vault me-1"></i> PHP <?= number_format($myDeposit, 2) ?> deposit <span class="text-white-50">(pays for your last month)</span>
             <?php endif; ?>

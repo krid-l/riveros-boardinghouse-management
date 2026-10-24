@@ -16,7 +16,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     $isRoomAction = in_array($action, $roomActions, true) && !isset($_POST['tenant_id']) && !isset($_POST['first_name']);
 
     if ($isRoomAction) {
-        // price_per_month is the price of the WHOLE room; the tenants living in it split it.
+        // price_per_month is the price of the whole room when full; each tenant pays price / capacity.
         $roomNumber = trim($_POST['room_number'] ?? '');
         $capacity = (int)($_POST['capacity'] ?? 0);
         $roomPrice = round((float)($_POST['price_per_month'] ?? 0), 2);
@@ -83,20 +83,20 @@ foreach ($tenantsStmt->fetchAll() as $t) {
 }
 
 // Calculate Stats
-// rooms.price_per_month is the price of the whole room. The tenants in it split that amount
-// equally, so a room brings in its full price as soon as anyone lives there, and each tenant
-// is billed price_per_month / (number of tenants in the room).
+// rooms.price_per_month is the price of the whole room when every bed is taken. Each tenant
+// pays one bed's part, price_per_month / capacity, so a room earns that per occupied bed and
+// its full price only when full.
 $totalRooms = count($rooms);
 $totalCapacity = 0;
-$potentialValue = 0;   // if every room had at least one tenant
-$currentValue = 0;     // from the rooms that are lived in now
+$potentialValue = 0;   // if every bed were taken
+$currentValue = 0;     // from the beds taken now
 $occupiedRooms = 0;
 
 foreach ($rooms as $r) {
     $totalCapacity += $r['capacity'];
     $potentialValue += $r['price_per_month'];
     $occCount = isset($tenantsByRoom[$r['id']]) ? count($tenantsByRoom[$r['id']]) : 0;
-    $currentValue += $occCount > 0 ? $r['price_per_month'] : 0;
+    $currentValue += rentShare((float)$r['price_per_month'], (int)$r['capacity']) * min($occCount, max(1, (int)$r['capacity']));
     if ($occCount >= $r['capacity'] && $r['capacity'] > 0) {
         $occupiedRooms++;
         if ($r['status'] !== 'occupied') {
@@ -306,9 +306,9 @@ require_once 'header.php';
                                 </td>
                                 <td class="text-end text-nowrap">
                                     <div class="fw-bold text-dark">₱<?= number_format($r['price_per_month'], 2) ?></div>
-                                    <div class="text-muted" style="font-size: 0.68rem;"><?= $occCount > 1
-                                        ? '₱' . number_format($r['price_per_month'] / $occCount, 2) . ' each (÷ ' . $occCount . ')'
-                                        : ($occCount === 1 ? 'one tenant pays it all' : 'per month') ?></div>
+                                    <div class="text-muted" style="font-size: 0.68rem;"><?= $r['capacity'] > 1
+                                        ? '₱' . number_format(rentShare((float)$r['price_per_month'], (int)$r['capacity']), 2) . ' per tenant (÷ ' . (int)$r['capacity'] . ' beds)'
+                                        : 'one tenant' ?></div>
                                 </td>
                                 <td>
                                     <?php if ($occCount === 0): ?>
@@ -393,14 +393,12 @@ require_once 'header.php';
                         <span class="fw-bold text-dark" style="font-size: 0.8rem;">₱<?= number_format($r['price_per_month'], 2) ?> <span class="text-muted fw-normal">/ month</span></span>
                     </div>
                     <div class="d-flex justify-content-between align-items-center py-2 border-bottom border-light">
-                        <span class="text-muted fw-semibold" style="font-size: 0.75rem;"><i class="fa-solid fa-user me-2"></i> Share / Tenant</span>
-                        <span class="fw-bold text-dark" style="font-size: 0.8rem;"><?= $occCount > 0
-                            ? '₱' . number_format($r['price_per_month'] / $occCount, 2) . ' <span class="text-muted fw-normal">/ month (÷ ' . $occCount . ')</span>'
-                            : '<span class="text-muted fw-normal">No tenants yet</span>' ?></span>
+                        <span class="text-muted fw-semibold" style="font-size: 0.75rem;"><i class="fa-solid fa-user me-2"></i> Rent / Tenant</span>
+                        <span class="fw-bold text-dark" style="font-size: 0.8rem;">₱<?= number_format(rentShare((float)$r['price_per_month'], (int)$r['capacity']), 2) ?> <span class="text-muted fw-normal">/ month<?= $r['capacity'] > 1 ? ' (÷ ' . (int)$r['capacity'] . ' beds)' : '' ?></span></span>
                     </div>
                     <div class="d-flex justify-content-between align-items-center py-2 border-bottom border-light">
                         <span class="text-muted fw-semibold" style="font-size: 0.75rem;"><i class="fa-solid fa-sack-dollar me-2"></i> Earning Now</span>
-                        <span class="fw-bold <?= $occCount ? 'text-success' : 'text-muted' ?>" style="font-size: 0.8rem;">₱<?= number_format($occCount > 0 ? $r['price_per_month'] : 0, 2) ?> <span class="text-muted fw-normal">/ month</span></span>
+                        <span class="fw-bold <?= $occCount ? 'text-success' : 'text-muted' ?>" style="font-size: 0.8rem;">₱<?= number_format(rentShare((float)$r['price_per_month'], (int)$r['capacity']) * $occCount, 2) ?> <span class="text-muted fw-normal">/ month<?= $occCount < $r['capacity'] ? ' (₱' . number_format($r['price_per_month'], 0) . ' when full)' : '' ?></span></span>
                     </div>
                     <div class="d-flex justify-content-between align-items-center py-2 border-bottom border-light">
                         <span class="text-muted fw-semibold" style="font-size: 0.75rem;"><i class="fa-solid fa-lock me-2"></i> Status</span>
@@ -517,7 +515,7 @@ require_once 'header.php';
                                 $optFull = $optOcc >= $opt['capacity'];
                             ?>
                                 <option value="<?= $opt['id'] ?>" data-full="<?= $optFull ? 1 : 0 ?>" <?= $optFull ? 'disabled' : '' ?>>
-                                    Room <?= htmlspecialchars($opt['room_number'] ?? '') ?><?= $optFull ? ' - FULL' : ' (Avail: ' . ($opt['capacity'] - $optOcc) . ' | ₱' . number_format($opt['price_per_month']) . '/room, ₱' . number_format($opt['price_per_month'] / ($optOcc + 1), 2) . ' each)' ?>
+                                    Room <?= htmlspecialchars($opt['room_number'] ?? '') ?><?= $optFull ? ' - FULL' : ' (Avail: ' . ($opt['capacity'] - $optOcc) . ' | ₱' . number_format(rentShare((float)$opt['price_per_month'], (int)$opt['capacity']), 2) . ' per tenant)' ?>
                                 </option>
                             <?php endforeach; ?>
                         </select>
@@ -597,8 +595,8 @@ require_once 'header.php';
                         <div class="col-md-6">
                             <label class="form-label text-muted fw-semibold">Price per Room / Month (PHP)</label>
                             <input type="number" step="0.01" min="0" class="form-control" name="price_per_month" required placeholder="8000.00">
-                            <div class="form-text" style="font-size: 0.7rem;">The rent for the whole room. It is split equally between the tenants living in it.</div>
-                            <small class="text-muted" style="font-size:0.7rem;">Each tenant in this room is billed this amount.</small>
+                            <div class="form-text" style="font-size: 0.7rem;">The rent for the whole room when every bed is taken. Each tenant pays this ÷ capacity, even while beds are empty.</div>
+                            <div class="fw-semibold text-primary mt-1 rent-preview" style="font-size:0.75rem;"></div>
                         </div>
                     </div>
                 </div>
@@ -634,8 +632,8 @@ require_once 'header.php';
                         <div class="col-md-6">
                             <label class="form-label text-muted fw-semibold">Price per Room / Month (PHP)</label>
                             <input type="number" step="0.01" min="0" class="form-control" name="price_per_month" id="edit_price" required>
-                            <div class="form-text" style="font-size: 0.7rem;">The rent for the whole room. It is split equally between the tenants living in it. A change applies from next month's rent.</div>
-                            <small class="text-muted" style="font-size:0.7rem;">Each tenant in this room is billed this amount.</small>
+                            <div class="form-text" style="font-size: 0.7rem;">The rent for the whole room when every bed is taken. Each tenant pays this ÷ capacity. A change applies from next month's rent.</div>
+                            <div class="fw-semibold text-primary mt-1 rent-preview" style="font-size:0.75rem;"></div>
                         </div>
                     </div>
                     <div class="mb-3">
@@ -679,12 +677,30 @@ function selectRoom(id) {
     window.location = 'rooms.php?room=' + encodeURIComponent(id);
 }
 
+// "Each tenant pays ₱2,000.00 (₱4,000.00 ÷ 2 beds)" under the price, as it is typed.
+function updateRentPreview(form) {
+    const price = parseFloat(form.querySelector('[name="price_per_month"]').value);
+    const capacity = parseInt(form.querySelector('[name="capacity"]').value, 10);
+    const out = form.querySelector('.rent-preview');
+    if (!out) return;
+    if (!(price >= 0) || !(capacity >= 1)) { out.textContent = ''; return; }
+    const peso = n => '₱' + n.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    out.textContent = 'Each tenant pays ' + peso(Math.round(price / capacity * 100) / 100)
+        + (capacity > 1 ? ' (' + peso(price) + ' ÷ ' + capacity + ' beds)' : '');
+}
+document.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('#addRoomModal form, #editRoomModal form').forEach(form => {
+        form.addEventListener('input', () => updateRentPreview(form));
+    });
+});
+
 function openEditModal(id, number, capacity, price, status) {
     document.getElementById('edit_room_id').value = id;
     document.getElementById('edit_room_number').value = number;
     document.getElementById('edit_capacity').value = capacity;
     document.getElementById('edit_price').value = price;
     document.getElementById('edit_status').value = status;
+    updateRentPreview(document.getElementById('edit_price').form);
     
     var editModal = new bootstrap.Modal(document.getElementById('editRoomModal'));
     editModal.show();
