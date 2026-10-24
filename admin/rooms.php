@@ -16,7 +16,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     $isRoomAction = in_array($action, $roomActions, true) && !isset($_POST['tenant_id']) && !isset($_POST['first_name']);
 
     if ($isRoomAction) {
-        // price_per_month is the price of the WHOLE room; the tenants living in it split it.
+        // price_per_month is the price of the whole room when full; each tenant pays price / capacity.
         $roomNumber = trim($_POST['room_number'] ?? '');
         $capacity = (int)($_POST['capacity'] ?? 0);
         $roomPrice = round((float)($_POST['price_per_month'] ?? 0), 2);
@@ -65,9 +65,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 if (!empty($_GET['msg'])) $success = htmlspecialchars($_GET['msg'] ?? '');
 if (!empty($_GET['err'])) $error = htmlspecialchars($_GET['err'] ?? '');
 
-// Fetch all rooms
-$roomsStmt = $pdo->query("SELECT * FROM rooms ORDER BY room_number ASC");
+// Fetch all rooms, in natural room-number order: 1, 2, 10, 101 (the column is text, so SQL
+// alone would put "10" before "2").
+$roomsStmt = $pdo->query("SELECT * FROM rooms");
 $rooms = $roomsStmt->fetchAll();
+usort($rooms, fn($a, $b) => strnatcasecmp((string)$a['room_number'], (string)$b['room_number']));
 
 // Fetch all assigned tenants
 $tenantsByRoom = [];
@@ -81,20 +83,20 @@ foreach ($tenantsStmt->fetchAll() as $t) {
 }
 
 // Calculate Stats
-// rooms.price_per_month is the price of the whole room. The tenants in it split that amount
-// equally, so a room brings in its full price as soon as anyone lives there, and each tenant
-// is billed price_per_month / (number of tenants in the room).
+// rooms.price_per_month is the price of the whole room when every bed is taken. Each tenant
+// pays one bed's part, price_per_month / capacity, so a room earns that per occupied bed and
+// its full price only when full.
 $totalRooms = count($rooms);
 $totalCapacity = 0;
-$potentialValue = 0;   // if every room had at least one tenant
-$currentValue = 0;     // from the rooms that are lived in now
+$potentialValue = 0;   // if every bed were taken
+$currentValue = 0;     // from the beds taken now
 $occupiedRooms = 0;
 
 foreach ($rooms as $r) {
     $totalCapacity += $r['capacity'];
     $potentialValue += $r['price_per_month'];
     $occCount = isset($tenantsByRoom[$r['id']]) ? count($tenantsByRoom[$r['id']]) : 0;
-    $currentValue += $occCount > 0 ? $r['price_per_month'] : 0;
+    $currentValue += rentShare((float)$r['price_per_month'], (int)$r['capacity']) * min($occCount, max(1, (int)$r['capacity']));
     if ($occCount >= $r['capacity'] && $r['capacity'] > 0) {
         $occupiedRooms++;
         if ($r['status'] !== 'occupied') {
@@ -108,19 +110,16 @@ require_once 'header.php';
 ?>
 
 <style>
-    .room-card {
-        border: 2px solid transparent !important;
-        transition: all 0.2s ease;
-        cursor: pointer;
-    }
-    .room-card:hover {
-        border-color: #cbd5e1 !important;
-        box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
-    }
-    .room-card.active {
-        border-color: #2563eb !important;
-        background-color: #f8fafc;
-    }
+    .rooms-table { font-size: 0.8rem; }
+    .rooms-table thead th { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.4px; color: #64748b; font-weight: 700; white-space: nowrap; }
+    .rooms-table thead th.sortable { cursor: pointer; user-select: none; }
+    .rooms-table thead th.sortable:hover { color: #1e293b; }
+    .rooms-table thead th .sort-icon { font-size: 0.6rem; margin-left: 4px; opacity: 0.35; }
+    .rooms-table thead th.sorted .sort-icon { opacity: 1; color: #2563eb; }
+    .room-row { cursor: pointer; }
+    .room-row td { vertical-align: middle; }
+    .room-row.active td { background-color: #eff6ff !important; }
+    .room-row.active td:first-child { box-shadow: inset 3px 0 0 #2563eb; }
     .tenant-item {
         transition: background-color 0.2s;
     }
@@ -155,9 +154,8 @@ require_once 'header.php';
         <?php endif; ?>
 
         <!-- Header -->
-        <div class="d-flex justify-content-between align-items-end mb-4">
+        <div class="d-flex justify-content-between align-items-center mb-4 gap-2 flex-wrap">
             <div>
-                <h3 class="fw-bold mb-1 text-dark">Manage Rooms</h3>
                 <p class="text-muted mb-0">Organize and monitor all rooms in your boarding house.</p>
             </div>
             <div>
@@ -228,76 +226,109 @@ require_once 'header.php';
         <div class="d-flex flex-column flex-md-row gap-3 mb-4">
             <div class="input-group bg-white rounded-3 shadow-sm" style="max-width: 350px; border: none;">
                 <span class="input-group-text bg-transparent border-0"><i class="fa-solid fa-magnifying-glass text-muted"></i></span>
-                <input type="text" class="form-control border-0 bg-transparent ps-0" placeholder="Search rooms..." onkeyup="filterRooms(this.value)">
+                <input type="text" class="form-control border-0 bg-transparent ps-0" placeholder="Search rooms..." id="roomSearch" oninput="applyRoomFilters()">
             </div>
-            <select class="form-select bg-white border-0 shadow-sm w-auto fw-semibold text-dark" onchange="filterStatus(this.value)">
+            <select class="form-select bg-white border-0 shadow-sm w-auto fw-semibold text-dark" id="statusFilter" onchange="applyRoomFilters()">
                 <option value="all">All Status</option>
-                <option value="vacant">Available</option>
-                <option value="occupied">Occupied</option>
+                <option value="available">Available</option>
+                <option value="partial">Partial</option>
+                <option value="occupied">Occupied (full)</option>
                 <option value="maintenance">Maintenance</option>
+            </select>
+            <select class="form-select bg-white border-0 shadow-sm w-auto fw-semibold text-dark" id="roomSort" onchange="sortRooms(this.value)" aria-label="Sort rooms">
+                <option value="number">Sort: Room number</option>
+                <option value="space">Sort: Most free beds</option>
+                <option value="price-asc">Sort: Price, low to high</option>
+                <option value="price-desc">Sort: Price, high to low</option>
+                <option value="occupancy">Sort: Fullest first</option>
             </select>
         </div>
 
-        <!-- Rooms Grid -->
-        <div class="row g-3" id="roomGrid">
-            <?php if (count($rooms) === 0): ?>
-                <div class="col-12 text-center py-5">
-                    <p class="text-muted">No rooms found. Add a new room to get started.</p>
-                </div>
-            <?php endif; ?>
+        <!-- Rooms List -->
+        <div class="card border-0 shadow-sm rounded-3">
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0 rooms-table">
+                    <thead class="table-light">
+                        <tr>
+                            <th class="ps-3 sortable sorted" data-sort="number" onclick="sortRooms('number')">Room <i class="fa-solid fa-sort sort-icon"></i></th>
+                            <th>Status</th>
+                            <th class="sortable" data-sort="occupancy" onclick="sortRooms('occupancy')">Occupancy <i class="fa-solid fa-sort sort-icon"></i></th>
+                            <th class="sortable text-end" data-sort="price-desc" onclick="sortRooms(currentSort === 'price-desc' ? 'price-asc' : 'price-desc')">Price / Room <i class="fa-solid fa-sort sort-icon"></i></th>
+                            <th>Tenants</th>
+                            <th class="pe-3"></th>
+                        </tr>
+                    </thead>
+                    <tbody id="roomList">
+                        <?php if (count($rooms) === 0): ?>
+                            <tr><td colspan="6" class="text-center py-5 text-muted">No rooms found. Add a new room to get started.</td></tr>
+                        <?php endif; ?>
 
-            <?php foreach ($rooms as $index => $r): ?>
-                <?php 
-                    $roomTenants = $tenantsByRoom[$r['id']] ?? []; 
-                    $occCount = count($roomTenants);
-                    $occPct = $r['capacity'] > 0 ? min(100, round(($occCount / $r['capacity']) * 100)) : 0;
-                    
-                    if ($r['status'] == 'maintenance') {
-                        $badgeClass = 'badge-soft-danger';
-                        $badgeText = 'Maintenance';
-                    } elseif ($occCount >= $r['capacity'] && $r['capacity'] > 0) {
-                        $badgeClass = 'badge-soft-success';
-                        $badgeText = 'Occupied';
-                    } elseif ($occCount > 0) {
-                        $badgeClass = 'badge-soft-info';
-                        $badgeText = 'Partial';
-                    } else {
-                        $badgeClass = 'badge-soft-warning';
-                        $badgeText = 'Available';
-                    }
-                ?>
-                <div class="col-md-6 col-xxl-4 room-grid-item" data-status="<?= htmlspecialchars($r['status'] ?? '') ?>" data-search="<?= strtolower($r['room_number']) ?>">
-                    <div class="card h-100 shadow-sm room-card <?= ($selectedRoom ? $selectedRoom === (int)$r['id'] : $index === 0) ? 'active' : '' ?>" id="card-<?= $r['id'] ?>" onclick="selectRoom(<?= $r['id'] ?>)">
-                        <div class="card-body p-3 d-flex flex-column">
-                            <div class="d-flex justify-content-between align-items-start mb-3">
-                                <div class="d-flex align-items-center">
-                                    <div class="bg-primary bg-opacity-10 text-primary rounded d-flex justify-content-center align-items-center me-2" style="width: 32px; height: 32px;">
-                                        <i class="fa-solid fa-door-open"></i>
+                        <?php foreach ($rooms as $index => $r): ?>
+                            <?php
+                                $roomTenants = $tenantsByRoom[$r['id']] ?? [];
+                                $occCount = count($roomTenants);
+                                $occPct = $r['capacity'] > 0 ? min(100, round(($occCount / $r['capacity']) * 100)) : 0;
+
+                                // The status shown (and filtered on) comes from who actually lives there.
+                                if ($r['status'] == 'maintenance') {
+                                    $badgeClass = 'badge-soft-danger'; $badgeText = 'Maintenance'; $statusKey = 'maintenance';
+                                } elseif ($occCount >= $r['capacity'] && $r['capacity'] > 0) {
+                                    $badgeClass = 'badge-soft-success'; $badgeText = 'Occupied'; $statusKey = 'occupied';
+                                } elseif ($occCount > 0) {
+                                    $badgeClass = 'badge-soft-info'; $badgeText = 'Partial'; $statusKey = 'partial';
+                                } else {
+                                    $badgeClass = 'badge-soft-warning'; $badgeText = 'Available'; $statusKey = 'available';
+                                }
+                                $isActive = $selectedRoom ? $selectedRoom === (int)$r['id'] : $index === 0;
+                                $names = array_map(fn($t) => $t['first_name'], $roomTenants);
+                            ?>
+                            <tr class="room-row <?= $isActive ? 'active' : '' ?>" id="row-<?= $r['id'] ?>" onclick="selectRoom(<?= $r['id'] ?>)"
+                                data-status="<?= $statusKey ?>" data-search="<?= htmlspecialchars(strtolower($r['room_number'] . ' ' . implode(' ', $names))) ?>"
+                                data-order="<?= $index ?>" data-price="<?= (float)$r['price_per_month'] ?>"
+                                data-free="<?= max(0, $r['capacity'] - $occCount) ?>" data-occ="<?= $occPct ?>">
+                                <td class="ps-3">
+                                    <div class="d-flex align-items-center">
+                                        <div class="bg-primary bg-opacity-10 text-primary rounded d-flex justify-content-center align-items-center me-2 flex-shrink-0" style="width: 30px; height: 30px;">
+                                            <i class="fa-solid fa-door-open" style="font-size: 0.8rem;"></i>
+                                        </div>
+                                        <span class="fw-bold text-dark text-nowrap">Room <?= htmlspecialchars($r['room_number'] ?? '') ?></span>
                                     </div>
-                                    <h6 class="fw-bold mb-0 text-dark">Room <?= htmlspecialchars($r['room_number'] ?? '') ?></h6>
-                                </div>
-                                <span class="badge <?= $badgeClass ?>" style="font-size: 0.65rem;"><?= $badgeText ?></span>
-                            </div>
-                            
-                            <p class="text-muted mb-1" style="font-size: 0.8rem;">Capacity: <?= htmlspecialchars($r['capacity'] ?? '') ?></p>
-                            <p class="fw-bold text-dark mb-1" style="font-size: 0.85rem;">₱<?= number_format($r['price_per_month'], 2) ?> / month <span class="text-muted fw-normal">per room</span></p>
-                            <p class="text-muted mb-4" style="font-size: 0.75rem;"><?= $occCount > 0
-                                ? '₱' . number_format($r['price_per_month'] / $occCount, 2) . ' each, split between ' . $occCount . ' tenant' . ($occCount === 1 ? '' : 's')
-                                : 'No tenants yet' ?></p>
-                            
-                            <div class="mt-auto">
-                                <div class="d-flex justify-content-between align-items-center mb-1" style="font-size: 0.75rem;">
-                                    <span class="text-muted"><i class="fa-solid fa-user me-1"></i> <?= $occCount ?>/<?= $r['capacity'] ?></span>
-                                    <span class="fw-semibold text-primary"><?= $occPct ?>%</span>
-                                </div>
-                                <div class="progress rounded-pill bg-light" style="height: 4px;">
-                                    <div class="progress-bar bg-primary" role="progressbar" style="width: <?= $occPct ?>%"></div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            <?php endforeach; ?>
+                                </td>
+                                <td><span class="badge <?= $badgeClass ?>" style="font-size: 0.65rem;"><?= $badgeText ?></span></td>
+                                <td style="min-width: 120px;">
+                                    <div class="d-flex justify-content-between mb-1" style="font-size: 0.72rem;">
+                                        <span class="text-muted"><i class="fa-solid fa-user me-1"></i><?= $occCount ?>/<?= $r['capacity'] ?></span>
+                                        <span class="fw-semibold text-primary"><?= $occPct ?>%</span>
+                                    </div>
+                                    <div class="progress rounded-pill bg-light" style="height: 4px;">
+                                        <div class="progress-bar bg-primary" role="progressbar" style="width: <?= $occPct ?>%"></div>
+                                    </div>
+                                </td>
+                                <td class="text-end text-nowrap">
+                                    <div class="fw-bold text-dark">₱<?= number_format($r['price_per_month'], 2) ?></div>
+                                    <div class="text-muted" style="font-size: 0.68rem;"><?= $r['capacity'] > 1
+                                        ? '₱' . number_format(rentShare((float)$r['price_per_month'], (int)$r['capacity']), 2) . ' per tenant (÷ ' . (int)$r['capacity'] . ' beds)'
+                                        : 'one tenant' ?></div>
+                                </td>
+                                <td>
+                                    <?php if ($occCount === 0): ?>
+                                        <span class="text-muted fst-italic" style="font-size: 0.75rem;">No tenants yet</span>
+                                    <?php else: ?>
+                                        <div class="d-flex align-items-center gap-1">
+                                            <?php foreach (array_slice($roomTenants, 0, 3) as $t): ?>
+                                                <span title="<?= htmlspecialchars($t['first_name'] . ' ' . $t['last_name']) ?>"><?= avatarHtml($t['first_name'] . ' ' . $t['last_name'], 24, 'shadow-sm', $t['profile_picture'] ?? null, '../') ?></span>
+                                            <?php endforeach; ?>
+                                            <span class="text-muted text-truncate ms-1 d-inline-block" style="font-size: 0.72rem; max-width: 140px;"><?= htmlspecialchars(implode(', ', $names)) ?></span>
+                                        </div>
+                                    <?php endif; ?>
+                                </td>
+                                <td class="pe-3 text-end"><i class="fa-solid fa-chevron-right text-muted" style="font-size: 0.7rem;"></i></td>
+                            </tr>
+                        <?php endforeach; ?>
+                        <tr id="noRoomMatch" class="d-none"><td colspan="6" class="text-center py-4 text-muted">No rooms match your search.</td></tr>
+                    </tbody>
+                </table>
+            </div>
         </div>
 
     </div>
@@ -362,14 +393,12 @@ require_once 'header.php';
                         <span class="fw-bold text-dark" style="font-size: 0.8rem;">₱<?= number_format($r['price_per_month'], 2) ?> <span class="text-muted fw-normal">/ month</span></span>
                     </div>
                     <div class="d-flex justify-content-between align-items-center py-2 border-bottom border-light">
-                        <span class="text-muted fw-semibold" style="font-size: 0.75rem;"><i class="fa-solid fa-user me-2"></i> Share / Tenant</span>
-                        <span class="fw-bold text-dark" style="font-size: 0.8rem;"><?= $occCount > 0
-                            ? '₱' . number_format($r['price_per_month'] / $occCount, 2) . ' <span class="text-muted fw-normal">/ month (÷ ' . $occCount . ')</span>'
-                            : '<span class="text-muted fw-normal">No tenants yet</span>' ?></span>
+                        <span class="text-muted fw-semibold" style="font-size: 0.75rem;"><i class="fa-solid fa-user me-2"></i> Rent / Tenant</span>
+                        <span class="fw-bold text-dark" style="font-size: 0.8rem;">₱<?= number_format(rentShare((float)$r['price_per_month'], (int)$r['capacity']), 2) ?> <span class="text-muted fw-normal">/ month<?= $r['capacity'] > 1 ? ' (÷ ' . (int)$r['capacity'] . ' beds)' : '' ?></span></span>
                     </div>
                     <div class="d-flex justify-content-between align-items-center py-2 border-bottom border-light">
                         <span class="text-muted fw-semibold" style="font-size: 0.75rem;"><i class="fa-solid fa-sack-dollar me-2"></i> Earning Now</span>
-                        <span class="fw-bold <?= $occCount ? 'text-success' : 'text-muted' ?>" style="font-size: 0.8rem;">₱<?= number_format($occCount > 0 ? $r['price_per_month'] : 0, 2) ?> <span class="text-muted fw-normal">/ month</span></span>
+                        <span class="fw-bold <?= $occCount ? 'text-success' : 'text-muted' ?>" style="font-size: 0.8rem;">₱<?= number_format(rentShare((float)$r['price_per_month'], (int)$r['capacity']) * $occCount, 2) ?> <span class="text-muted fw-normal">/ month<?= $occCount < $r['capacity'] ? ' (₱' . number_format($r['price_per_month'], 0) . ' when full)' : '' ?></span></span>
                     </div>
                     <div class="d-flex justify-content-between align-items-center py-2 border-bottom border-light">
                         <span class="text-muted fw-semibold" style="font-size: 0.75rem;"><i class="fa-solid fa-lock me-2"></i> Status</span>
@@ -486,7 +515,7 @@ require_once 'header.php';
                                 $optFull = $optOcc >= $opt['capacity'];
                             ?>
                                 <option value="<?= $opt['id'] ?>" data-full="<?= $optFull ? 1 : 0 ?>" <?= $optFull ? 'disabled' : '' ?>>
-                                    Room <?= htmlspecialchars($opt['room_number'] ?? '') ?><?= $optFull ? ' - FULL' : ' (Avail: ' . ($opt['capacity'] - $optOcc) . ' | ₱' . number_format($opt['price_per_month']) . '/room, ₱' . number_format($opt['price_per_month'] / ($optOcc + 1), 2) . ' each)' ?>
+                                    Room <?= htmlspecialchars($opt['room_number'] ?? '') ?><?= $optFull ? ' - FULL' : ' (Avail: ' . ($opt['capacity'] - $optOcc) . ' | ₱' . number_format(rentShare((float)$opt['price_per_month'], (int)$opt['capacity']), 2) . ' per tenant)' ?>
                                 </option>
                             <?php endforeach; ?>
                         </select>
@@ -566,8 +595,8 @@ require_once 'header.php';
                         <div class="col-md-6">
                             <label class="form-label text-muted fw-semibold">Price per Room / Month (PHP)</label>
                             <input type="number" step="0.01" min="0" class="form-control" name="price_per_month" required placeholder="8000.00">
-                            <div class="form-text" style="font-size: 0.7rem;">The rent for the whole room. It is split equally between the tenants living in it.</div>
-                            <small class="text-muted" style="font-size:0.7rem;">Each tenant in this room is billed this amount.</small>
+                            <div class="form-text" style="font-size: 0.7rem;">The rent for the whole room when every bed is taken. Each tenant pays this ÷ capacity, even while beds are empty.</div>
+                            <div class="fw-semibold text-primary mt-1 rent-preview" style="font-size:0.75rem;"></div>
                         </div>
                     </div>
                 </div>
@@ -603,8 +632,8 @@ require_once 'header.php';
                         <div class="col-md-6">
                             <label class="form-label text-muted fw-semibold">Price per Room / Month (PHP)</label>
                             <input type="number" step="0.01" min="0" class="form-control" name="price_per_month" id="edit_price" required>
-                            <div class="form-text" style="font-size: 0.7rem;">The rent for the whole room. It is split equally between the tenants living in it. A change applies from next month's rent.</div>
-                            <small class="text-muted" style="font-size:0.7rem;">Each tenant in this room is billed this amount.</small>
+                            <div class="form-text" style="font-size: 0.7rem;">The rent for the whole room when every bed is taken. Each tenant pays this ÷ capacity. A change applies from next month's rent.</div>
+                            <div class="fw-semibold text-primary mt-1 rent-preview" style="font-size:0.75rem;"></div>
                         </div>
                     </div>
                     <div class="mb-3">
@@ -632,8 +661,8 @@ function closeDetailsPanel() {
         container.classList.remove('d-block', 'd-lg-block');
         container.classList.add('d-none');
     }
-    // Deselect all cards
-    document.querySelectorAll('.room-card').forEach(card => card.classList.remove('active'));
+    // Deselect all rows
+    document.querySelectorAll('.room-row').forEach(row => row.classList.remove('active'));
 }
 
 function selectRoom(id) {
@@ -648,24 +677,75 @@ function selectRoom(id) {
     window.location = 'rooms.php?room=' + encodeURIComponent(id);
 }
 
+// "Each tenant pays ₱2,000.00 (₱4,000.00 ÷ 2 beds)" under the price, as it is typed.
+function updateRentPreview(form) {
+    const price = parseFloat(form.querySelector('[name="price_per_month"]').value);
+    const capacity = parseInt(form.querySelector('[name="capacity"]').value, 10);
+    const out = form.querySelector('.rent-preview');
+    if (!out) return;
+    if (!(price >= 0) || !(capacity >= 1)) { out.textContent = ''; return; }
+    const peso = n => '₱' + n.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    out.textContent = 'Each tenant pays ' + peso(Math.round(price / capacity * 100) / 100)
+        + (capacity > 1 ? ' (' + peso(price) + ' ÷ ' + capacity + ' beds)' : '');
+}
+document.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('#addRoomModal form, #editRoomModal form').forEach(form => {
+        form.addEventListener('input', () => updateRentPreview(form));
+    });
+});
+
 function openEditModal(id, number, capacity, price, status) {
     document.getElementById('edit_room_id').value = id;
     document.getElementById('edit_room_number').value = number;
     document.getElementById('edit_capacity').value = capacity;
     document.getElementById('edit_price').value = price;
     document.getElementById('edit_status').value = status;
+    updateRentPreview(document.getElementById('edit_price').form);
     
     var editModal = new bootstrap.Modal(document.getElementById('editRoomModal'));
     editModal.show();
 }
 
-function filterRooms(query) {
-    query = query.toLowerCase();
-    document.querySelectorAll('.room-grid-item').forEach(item => {
-        const text = item.getAttribute('data-search');
-        item.style.display = text.includes(query) ? '' : 'none';
+// Search and the status filter together: a row shows only if it passes both.
+function applyRoomFilters() {
+    const query = document.getElementById('roomSearch').value.trim().toLowerCase();
+    const status = document.getElementById('statusFilter').value;
+    let shown = 0;
+    document.querySelectorAll('.room-row').forEach(row => {
+        const ok = row.dataset.search.includes(query) && (status === 'all' || row.dataset.status === status);
+        row.style.display = ok ? '' : 'none';
+        if (ok) shown++;
     });
+    document.getElementById('noRoomMatch').classList.toggle('d-none', shown > 0 || !document.querySelector('.room-row'));
 }
+
+// Re-order the rows in the page. "number" is the order the server sent (natural room order).
+let currentSort = 'number';
+function sortRooms(how) {
+    currentSort = how;
+    const body = document.getElementById('roomList');
+    const rows = Array.from(body.querySelectorAll('.room-row'));
+    const num = (row, key) => parseFloat(row.dataset[key]) || 0;
+    const byOrder = (a, b) => num(a, 'order') - num(b, 'order');
+    const compare = {
+        'number':     byOrder,
+        'space':      (a, b) => num(b, 'free') - num(a, 'free') || byOrder(a, b),
+        'price-asc':  (a, b) => num(a, 'price') - num(b, 'price') || byOrder(a, b),
+        'price-desc': (a, b) => num(b, 'price') - num(a, 'price') || byOrder(a, b),
+        'occupancy':  (a, b) => num(b, 'occ') - num(a, 'occ') || byOrder(a, b),
+    }[how] || byOrder;
+    rows.sort(compare).forEach(row => body.insertBefore(row, document.getElementById('noRoomMatch')));
+    document.getElementById('roomSort').value = how;
+    document.querySelectorAll('.rooms-table th.sortable').forEach(th => {
+        th.classList.toggle('sorted', th.dataset.sort === how || (how === 'price-asc' && th.dataset.sort === 'price-desc'));
+    });
+    try { localStorage.setItem('roomSort', how); } catch (e) {}
+}
+document.addEventListener('DOMContentLoaded', () => {
+    let saved = 'number';
+    try { saved = localStorage.getItem('roomSort') || 'number'; } catch (e) {}
+    if (saved !== 'number') sortRooms(saved);
+});
 
 function tenantData(el) {
     return JSON.parse(el.closest('[data-tenant]').dataset.tenant);
@@ -704,15 +784,6 @@ function openDeactivateModal(el) {
     bootstrap.Modal.getOrCreateInstance(document.getElementById('tenantRemoveModal')).show();
 }
 
-function filterStatus(status) {
-    document.querySelectorAll('.room-grid-item').forEach(item => {
-        if (status === 'all' || item.getAttribute('data-status') === status) {
-            item.style.display = '';
-        } else {
-            item.style.display = 'none';
-        }
-    });
-}
 </script>
 
 <?php require_once 'footer.php'; ?>

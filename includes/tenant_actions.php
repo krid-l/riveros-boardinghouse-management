@@ -122,7 +122,6 @@ function handleTenantAction(PDO $pdo): array {
     $success = '';
     $action = $_POST['action'];
     $billTenantId = null;
-    $resplitRooms = [];   // rooms whose occupancy changed: their rent shares need recomputing
     $moveInTenantId = null;   // a tenant moving in: their advance and deposit can be marked received
     $moveInDueNote = '';      // what to tell the admin when they weren't
 
@@ -204,7 +203,7 @@ function handleTenantAction(PDO $pdo): array {
             if ($moveInDate && $roomId) {
                 $firstRent = isHalfMonthMoveIn($moveInDate) ? 'half' : 'full';
                 $moveInDueNote = "<br><small>Due on moving in (" . date('M j, Y', strtotime(firstMonthDueDate($moveInDate))) . "): "
-                               . "the first month in advance ($firstRent month) plus a deposit of one month's share, "
+                               . "the first month in advance ($firstRent month) plus a deposit of one month's rent, "
                                . "which pays for their last month.</small>";
             }
 
@@ -240,16 +239,20 @@ function handleTenantAction(PDO $pdo): array {
                 logRoomTransfer($pdo, $tenantId, null, $newRoomId, $date, 'Moved in');
                 $billTenantId = $tenantId;
                 $moveInTenantId = $tenantId;
-                $resplitRooms[] = $newRoomId;
                 $success = "Room assigned.";
                 $moveInDueNote = " The first month in advance and the deposit are due "
                                . date('M j, Y', strtotime(firstMonthDueDate($date))) . ".";
             } else {
                 $pdo->prepare("UPDATE tenants SET room_id = ? WHERE id = ?")->execute([$newRoomId, $tenantId]);
                 logRoomTransfer($pdo, $tenantId, $t['room_id'] ? (int)$t['room_id'] : null, $newRoomId, $date, 'Room change');
-                $resplitRooms[] = $newRoomId;
-                if ($t['room_id']) $resplitRooms[] = (int)$t['room_id'];
                 $success = "Room changed. The new room's rent applies from next month's bill.";
+                // The deposit pays for the last month, which will be billed at the new rent.
+                $depositDelta = syncDepositToRoom($pdo, $tenantId);
+                if ($depositDelta > 0) {
+                    $success .= " Their deposit goes up by ₱" . number_format($depositDelta, 2) . " to match the new rent.";
+                } elseif ($depositDelta < 0) {
+                    $success .= " ₱" . number_format(-$depositDelta, 2) . " of their deposit is credited back, to match the new rent.";
+                }
             }
 
         } elseif ($action === 'deactivate') {
@@ -269,7 +272,6 @@ function handleTenantAction(PDO $pdo): array {
             // Keep the tenant's payments, receipts and any unpaid balance on record; just free the bed and block login.
             $pdo->prepare("UPDATE tenants SET status = 'deactivated', deactivated_at = ?, room_id = NULL WHERE id = ?")->execute([$date, $tenantId]);
             logRoomTransfer($pdo, $tenantId, $t['room_id'] ? (int)$t['room_id'] : null, null, $date, 'Moved out (account deactivated)');
-            if ($t['room_id']) $resplitRooms[] = (int)$t['room_id'];
 
             $balStmt = $pdo->prepare("SELECT balance FROM tenants WHERE id = ?");
             $balStmt->execute([$tenantId]);
@@ -304,7 +306,6 @@ function handleTenantAction(PDO $pdo): array {
             logRoomTransfer($pdo, $tenantId, null, $roomId, $date, 'Moved in again (account re-activated)');
             $billTenantId = $tenantId;
             $moveInTenantId = $tenantId;
-            $resplitRooms[] = $roomId;
             $success = "Tenant re-activated.";
             $moveInDueNote = " The first month in advance and the deposit are due "
                            . date('M j, Y', strtotime(firstMonthDueDate($date))) . ".";
@@ -321,7 +322,6 @@ function handleTenantAction(PDO $pdo): array {
             $roomStmt->execute([$tenantId]);
             $freedRoom = $roomStmt->fetchColumn();
             $pdo->prepare("DELETE FROM users WHERE id = ?")->execute([$t['user_id']]);
-            if ($freedRoom) $resplitRooms[] = (int)$freedRoom;
             $success = "Tenant deleted.";
 
         } else {
@@ -340,19 +340,8 @@ function handleTenantAction(PDO $pdo): array {
         runBilling($pdo, $billTenantId);
     }
 
-    // Everyone sharing an affected room now owes an equal share of it for this month.
-    if (!$error) {
-        foreach (array_unique($resplitRooms) as $roomId) {
-            try {
-                resplitRoomRent($pdo, (int)$roomId);
-            } catch (Exception $e) {
-                error_log("Rent re-split error for room $roomId: " . $e->getMessage());
-            }
-        }
-    }
-
-    // Moving in means handing over the advance and deposit. Recorded last, once billing and the
-    // room's re-split have settled what this tenant's share actually is.
+    // Moving in means handing over the advance and deposit. Recorded last, once billing has
+    // posted what this tenant owes.
     if (!$error && $moveInTenantId) {
         $payment = null;
         if (!empty($_POST['movein_paid'])) {

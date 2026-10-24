@@ -24,18 +24,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $stmt->execute([$username]);
     $user = $stmt->fetch();
 
+    // One login for everyone: the account's role decides whether it opens the admin dashboard
+    // or the tenant portal.
     if ($user && password_verify($password, $user['password_hash'])) {
-        $loginType = $_POST['login_type'] ?? 'tenant';
-
         if ($user['role'] === 'tenant' && $user['tenant_status'] === 'deactivated') {
             $error = "This tenant account has been deactivated. Please contact the admin.";
-        } elseif ($user['role'] !== $loginType) {
-            if ($user['role'] === 'admin') {
-                $error = "You are an Admin. Please click 'Login as Admin' below.";
-            } else {
-                $error = "You are a Tenant. Please click 'Login as Tenant' below.";
-            }
         } else {
+            session_regenerate_id(true);   // a fresh session id for the signed-in user
             $_SESSION['user_id'] = $user['id'];
             $_SESSION['role'] = $user['role'];
             
@@ -157,24 +152,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         /* Buttons */
         .btn-primary-custom {
             background: #1d4ed8; color: white; border: none; border-radius: 8px; width: 100%; padding: 10px;
-            font-size: 0.9rem; font-weight: 600; transition: all 0.2s; margin-bottom: 15px;
-        }
-        .btn-primary-custom:hover { background: #1e40af; box-shadow: 0 4px 12px rgba(29, 78, 216, 0.3); }
-        
-        .or-divider {
-            text-align: center; color: #94a3b8; font-size: 0.75rem; margin-bottom: 15px; position: relative;
-        }
-        .or-divider::before, .or-divider::after {
-            content: ''; position: absolute; top: 50%; width: 45%; border-bottom: 1px solid #e2e8f0;
-        }
-        .or-divider::before { left: 0; }
-        .or-divider::after { right: 0; }
-        
-        .btn-outline-custom {
-            background: transparent; color: #1d4ed8; border: 1px solid #1d4ed8; border-radius: 8px; width: 100%; padding: 10px;
             font-size: 0.9rem; font-weight: 600; transition: all 0.2s; margin-bottom: 20px;
         }
-        .btn-outline-custom:hover { background: #eff6ff; }
+        .btn-primary-custom:hover { background: #1e40af; box-shadow: 0 4px 12px rgba(29, 78, 216, 0.3); }
         
         .copyright { text-align: center; color: #94a3b8; font-size: 0.7rem; font-weight: 500; }
 
@@ -221,7 +201,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             
             <h3 class="brand-name">Riveros Boarding House</h3>
             
-            <div class="divider-text" id="portalType">Tenant Portal</div>
+            <div class="divider-text">Sign In</div>
             <p class="welcome-text">Welcome back! Please login to access your account.</p>
             
             <?php if ($error): ?>
@@ -229,11 +209,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <?php endif; ?>
 
             <form method="POST" action="">
-                <input type="hidden" name="login_type" id="loginType" value="tenant">
                 <label class="form-label-custom">Username</label>
                 <div class="input-group-custom">
                     <i class="fa-regular fa-user icon-left"></i>
-                    <input type="text" name="username" placeholder="Enter your username" required autofocus>
+                    <input type="text" name="username" placeholder="Enter your username" value="<?= htmlspecialchars($_POST['username'] ?? '') ?>" required autofocus>
                 </div>
 
                 <label class="form-label-custom">Password</label>
@@ -255,12 +234,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     <i class="fa-solid fa-lock me-2"></i> Login
                 </button>
             </form>
-            
-            <div class="or-divider">or</div>
-            
-            <button type="button" class="btn-outline-custom" id="toggleLoginModeBtn" onclick="toggleLoginMode()">
-                <i class="fa-solid fa-shield-halved me-2" id="toggleLoginIcon"></i> <span id="toggleLoginText">Login as Admin</span>
-            </button>
             
             <div class="copyright">
                 &copy; <?= date('Y') ?> Riveros Boarding House. All rights reserved.
@@ -306,29 +279,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 toggleIcon.classList.remove('fa-eye-slash');
                 toggleIcon.classList.add('fa-eye');
             }
-        }
-
-        function toggleLoginMode() {
-            const typeInput = document.getElementById('loginType');
-            const portalText = document.getElementById('portalType');
-            const toggleText = document.getElementById('toggleLoginText');
-            const toggleIcon = document.getElementById('toggleLoginIcon');
-            const submitBtn = document.querySelector('.btn-primary-custom');
-            
-            if (typeInput.value === 'tenant') {
-                typeInput.value = 'admin';
-                portalText.textContent = 'Admin Portal';
-                toggleText.textContent = 'Login as Tenant';
-                toggleIcon.className = 'fa-solid fa-user me-2';
-                submitBtn.style.background = '#0f172a'; // Darker theme for admin
-            } else {
-                typeInput.value = 'tenant';
-                portalText.textContent = 'Tenant Portal';
-                toggleText.textContent = 'Login as Admin';
-                toggleIcon.className = 'fa-solid fa-shield-halved me-2';
-                submitBtn.style.background = '#1d4ed8'; // Blue for tenant
-            }
-            document.querySelector('input[name=username]').focus();
         }
     </script>
 </body>

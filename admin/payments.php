@@ -6,6 +6,7 @@ require_once '../includes/pdf_generator.php';
 require_once '../includes/sms.php';
 require_once '../includes/billing.php';
 require_once '../includes/pagination.php';
+require_once '../includes/uploads.php';
 
 // --- ACTION HANDLING ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'send_reminders') {
@@ -160,19 +161,56 @@ $dueSoonAmount = 0;
 $dueSoonCount = 0;
 
 $notYetDue = chargesNotYetDue($pdo);
-$tenantsWithBal = $pdo->query("SELECT id, balance, status FROM tenants WHERE balance > 0")->fetchAll();
+$tenantsWithBal = $pdo->query("SELECT t.id, t.first_name, t.last_name, t.balance, t.status, t.contact_number,
+                                      t.profile_picture, r.room_number
+                               FROM tenants t LEFT JOIN rooms r ON r.id = t.room_id
+                               WHERE t.balance > 0")->fetchAll();
+// Who makes up the Due Soon and Overdue totals, shown when those cards are clicked.
+$dueSoonList = [];
+$overdueList = [];
+$today = date('Y-m-d');
 foreach ($tenantsWithBal as $t) {
     $bs = tenantBillingStatus($t, $notYetDue);
     if ($bs['overdue'] > 0) {
         $actualOverdueAmount += $bs['overdue'];
         $actualOverdueCount++;
+        $since = oldestUnpaidDueDate($pdo, (int)$t['id'], $bs['balance']);
+        $overdueList[] = $t + [
+            'overdue' => $bs['overdue'],
+            'total'   => $bs['balance'],
+            'since'   => $since,
+            'days'    => $since ? (int)floor((strtotime($today) - strtotime($since)) / 86400) : null,
+        ];
     }
     $notDuePart = round($bs['balance'] - $bs['overdue'], 2);
     if ($notDuePart > 0) {
         $dueSoonAmount += $notDuePart;
         $dueSoonCount++;
+        $dueSoonList[] = $t + ['amount' => $notDuePart, 'due' => upcomingDueDate($pdo, (int)$t['id'])];
     }
 }
+usort($dueSoonList, fn($a, $b) => strcmp($a['due'] ?? '9999', $b['due'] ?? '9999') ?: $b['amount'] <=> $a['amount']);
+usort($overdueList, fn($a, $b) => $b['overdue'] <=> $a['overdue']);
+
+// The payments behind Total Collected and Paid Payments: money received this month.
+$monthPaymentsStmt = $pdo->prepare("SELECT p.*, t.first_name, t.last_name, t.profile_picture, r.room_number
+    FROM payments p
+    JOIN tenants t ON t.id = p.tenant_id
+    LEFT JOIN rooms r ON r.id = t.room_id
+    WHERE " . revenueFilterSql('p') . " AND p.payment_date BETWEEN ? AND ?
+    ORDER BY p.payment_date DESC, p.id DESC");
+$monthPaymentsStmt->execute([$monthStart, $monthEnd]);
+$monthPayments = $monthPaymentsStmt->fetchAll();
+$collectedByMethod = [];
+$collectedByRoom = [];
+foreach ($monthPayments as $mp) {
+    $method = ($mp['payment_method'] ?? 'gcash') === 'cash' ? 'Cash' : 'GCash';
+    $collectedByMethod[$method] = ($collectedByMethod[$method] ?? 0) + (float)$mp['amount'];
+    $roomKey = $mp['room_number'] !== null ? 'Room ' . $mp['room_number'] : 'No room (moved out)';
+    $collectedByRoom[$roomKey] = ($collectedByRoom[$roomKey] ?? 0) + (float)$mp['amount'];
+}
+arsort($collectedByMethod);
+uksort($collectedByRoom, 'strnatcasecmp');
 $chartTotal = max(1, $paidCount + $dueSoonCount + $actualOverdueCount + $pendingCount);
 
 // --- PAYMENTS LIST ---
@@ -229,8 +267,15 @@ require_once 'header.php';
 
 <style>
     body { background-color: #f8fafc; }
-    .metric-card { transition: transform 0.2s; border: 1px solid #f1f5f9; }
-    .metric-card:hover { transform: translateY(-2px); box-shadow: 0 5px 10px -3px rgba(0,0,0,0.05); }
+    .metric-card { transition: transform 0.2s; border: 1px solid #f1f5f9; cursor: pointer; }
+    .metric-card:hover { transform: translateY(-2px); box-shadow: 0 5px 10px -3px rgba(0,0,0,0.05); border-color: #bfdbfe; }
+    .metric-card .view-hint { font-size: 0.6rem; color: #94a3b8; font-weight: 600; }
+    .metric-card:hover .view-hint { color: #2563eb; }
+    .metric-card .view-hint { line-height: 1.2; vertical-align: baseline; }
+    .metric-card:has(.stretched-link:focus-visible) { outline: 2px solid #2563eb; outline-offset: 2px; }
+    .metric-card .stretched-link:focus-visible { box-shadow: none; }
+    .stat-table { font-size: 0.78rem; }
+    .stat-table th { font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.4px; color: #64748b; white-space: nowrap; }
     
     .icon-box-lg {
         width: 38px; height: 38px;
@@ -303,8 +348,7 @@ require_once 'header.php';
 <!-- Header -->
 <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center mb-3 gap-2">
     <div>
-        <h4 class="fw-bold mb-1 text-dark">Manage Payments</h4>
-        <p class="text-muted mb-0" style="font-size: 0.75rem;">Track and manage all tenant payments and verify manual GCash payments.</p>
+        <p class="text-muted mb-0" style="font-size: 0.8rem;">Track and manage all tenant payments and verify manual GCash payments.</p>
     </div>
     <div class="d-flex gap-2">
         <button type="button" class="btn btn-outline-primary fw-semibold btn-sm px-2 py-1 rounded-2" style="font-size:0.75rem;" data-bs-toggle="modal" data-bs-target="#remindersModal">
@@ -327,6 +371,7 @@ require_once 'header.php';
                     <div class="card-title-sm">Total Collected (This Month)</div>
                     <h5 class="fw-bold mb-0 text-dark">₱<?= number_format($totalCollected, 2) ?></h5>
                     <div class="trend-text <?= $totalCollected >= $lastMonthCollected ? 'text-success' : 'text-danger' ?> mt-1"><?= $collectedTrend ?></div>
+                    <button type="button" class="view-hint btn btn-link p-0 mt-1 text-decoration-none stretched-link" data-bs-toggle="modal" data-bs-target="#statCollectedModal" aria-label="Show how this month's collections break down">View details <i class="fa-solid fa-chevron-right" style="font-size:0.5rem;"></i></button>
                 </div>
             </div>
         </div>
@@ -342,6 +387,7 @@ require_once 'header.php';
                     <div class="card-title-sm">Due Soon</div>
                     <h5 class="fw-bold mb-0 text-dark">₱<?= number_format($dueSoonAmount, 2) ?></h5>
                     <div class="trend-text text-warning mt-1"><?= $dueSoonCount ?> tenants · due <?= date('M j', strtotime(billingDueDate(date('Y-m')))) ?></div>
+                    <button type="button" class="view-hint btn btn-link p-0 mt-1 text-decoration-none stretched-link" data-bs-toggle="modal" data-bs-target="#statDueModal" aria-label="Show who has rent coming due">View details <i class="fa-solid fa-chevron-right" style="font-size:0.5rem;"></i></button>
                 </div>
             </div>
         </div>
@@ -357,6 +403,7 @@ require_once 'header.php';
                     <div class="card-title-sm">Overdue</div>
                     <h5 class="fw-bold mb-0 text-dark">₱<?= number_format($actualOverdueAmount, 2) ?></h5>
                     <div class="trend-text text-danger mt-1"><?= $actualOverdueCount ?> tenants</div>
+                    <button type="button" class="view-hint btn btn-link p-0 mt-1 text-decoration-none stretched-link" data-bs-toggle="modal" data-bs-target="#statOverdueModal" aria-label="Show who is overdue">View details <i class="fa-solid fa-chevron-right" style="font-size:0.5rem;"></i></button>
                 </div>
             </div>
         </div>
@@ -372,6 +419,7 @@ require_once 'header.php';
                     <div class="card-title-sm">Paid Payments</div>
                     <h5 class="fw-bold mb-0 text-dark"><?= $paidCount ?></h5>
                     <div class="trend-text text-success mt-1"><span class="dot bg-success"></span> This month</div>
+                    <button type="button" class="view-hint btn btn-link p-0 mt-1 text-decoration-none stretched-link" data-bs-toggle="modal" data-bs-target="#statPaidModal" aria-label="Show this month's paid payments">View details <i class="fa-solid fa-chevron-right" style="font-size:0.5rem;"></i></button>
                 </div>
             </div>
         </div>
@@ -453,8 +501,15 @@ require_once 'header.php';
                             <td class="fw-bold text-dark" style="font-size:0.65rem;">₱<?= number_format($p['amount'], 2) ?></td>
                             <td>
                                 <div class="d-flex flex-column">
-                                    <span class="gcash-logo"><i class="fa-solid fa-g text-primary"></i>Cash</span>
-                                    <span class="text-muted" style="font-size:0.55rem;">Manual</span>
+                                    <?php if (($p['payment_method'] ?? 'gcash') === 'cash'): ?>
+                                        <span class="fw-bold text-success" style="font-size:0.7rem;"><i class="fa-solid fa-money-bill-wave me-1"></i>Cash</span>
+                                        <span class="text-muted" style="font-size:0.55rem;">In person</span>
+                                    <?php elseif (stripos($p['payment_method'] ?? '', 'covered by') === 0): ?>
+                                        <span class="fw-semibold text-muted" style="font-size:0.65rem;"><?= htmlspecialchars($p['payment_method']) ?></span>
+                                    <?php else: ?>
+                                        <span class="gcash-logo"><i class="fa-solid fa-g text-primary"></i>Cash</span>
+                                        <span class="text-muted" style="font-size:0.55rem;">Manual</span>
+                                    <?php endif; ?>
                                 </div>
                             </td>
                             <td class="text-muted" style="font-size:0.65rem;"><?= htmlspecialchars($p['reference_number'] ?: 'N/A') ?></td>
@@ -608,6 +663,185 @@ document.addEventListener('DOMContentLoaded', function () {
     });
 });
 </script>
+
+<?php
+// A tenant's name linking to their details page, with their photo.
+$tenantCell = function (array $t): string {
+    $name = $t['first_name'] . ' ' . $t['last_name'];
+    return '<div class="d-flex align-items-center">' . avatarHtml($name, 26, 'me-2 shadow-sm', $t['profile_picture'] ?? null, '../')
+         . '<a href="tenant_details.php?id=' . (int)($t['tenant_id'] ?? $t['id']) . '" class="fw-semibold text-dark text-decoration-none text-nowrap">' . htmlspecialchars($name) . '</a></div>';
+};
+$roomLabel = fn($room) => $room !== null ? 'Room ' . htmlspecialchars($room) : '<span class="text-muted fst-italic">Moved out</span>';
+$monthLabel = date('F Y');
+?>
+
+<!-- Total Collected: where this month's money came from -->
+<div class="modal fade" id="statCollectedModal" tabindex="-1" aria-labelledby="statCollectedTitle">
+    <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+        <div class="modal-content border-0 shadow">
+            <div class="modal-header border-bottom-0 pb-0">
+                <h6 class="modal-title fw-bold" id="statCollectedTitle"><i class="fa-solid fa-wallet text-primary me-2"></i>Total Collected · <?= $monthLabel ?></h6>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="row g-2 mb-3">
+                    <div class="col-sm-4"><div class="border rounded-3 p-2 h-100">
+                        <div class="text-muted" style="font-size:0.68rem;">This month</div>
+                        <div class="fw-bold fs-5 text-dark">₱<?= number_format($totalCollected, 2) ?></div>
+                        <div class="text-muted" style="font-size:0.68rem;"><?= count($monthPayments) ?> payment<?= count($monthPayments) === 1 ? '' : 's' ?></div>
+                    </div></div>
+                    <div class="col-sm-4"><div class="border rounded-3 p-2 h-100">
+                        <div class="text-muted" style="font-size:0.68rem;">Last month</div>
+                        <div class="fw-bold fs-5 text-dark">₱<?= number_format($lastMonthCollected, 2) ?></div>
+                        <div class="<?= $totalCollected >= $lastMonthCollected ? 'text-success' : 'text-danger' ?>" style="font-size:0.68rem;"><?= htmlspecialchars($collectedTrend) ?></div>
+                    </div></div>
+                    <div class="col-sm-4"><div class="border rounded-3 p-2 h-100">
+                        <div class="text-muted mb-1" style="font-size:0.68rem;">By method</div>
+                        <?php if (!$collectedByMethod): ?><div class="text-muted small">Nothing yet</div><?php endif; ?>
+                        <?php foreach ($collectedByMethod as $method => $amt): ?>
+                            <div class="d-flex justify-content-between" style="font-size:0.78rem;"><span><?= $method ?></span><span class="fw-bold">₱<?= number_format($amt, 2) ?></span></div>
+                        <?php endforeach; ?>
+                    </div></div>
+                </div>
+                <div class="fw-semibold text-dark mb-2" style="font-size:0.8rem;">By room</div>
+                <?php if (!$collectedByRoom): ?>
+                    <div class="text-center text-muted py-4 small">No payments verified yet this month.</div>
+                <?php else: ?>
+                    <?php foreach ($collectedByRoom as $room => $amt): $pctOf = $totalCollected > 0 ? round($amt / $totalCollected * 100) : 0; ?>
+                        <div class="mb-2">
+                            <div class="d-flex justify-content-between" style="font-size:0.78rem;">
+                                <span class="fw-semibold text-dark"><?= htmlspecialchars($room) ?></span>
+                                <span><span class="fw-bold">₱<?= number_format($amt, 2) ?></span> <span class="text-muted">(<?= $pctOf ?>%)</span></span>
+                            </div>
+                            <div class="progress rounded-pill bg-light" style="height: 5px;"><div class="progress-bar bg-primary" style="width: <?= $pctOf ?>%"></div></div>
+                        </div>
+                    <?php endforeach; ?>
+                <?php endif; ?>
+                <div class="text-muted mt-3" style="font-size:0.68rem;">Counts verified payments dated this month. A payment that also covered a roommate counts once, under the tenant who paid. Click <strong>Paid Payments</strong> for the individual payments.</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Due Soon: rent posted but not yet due -->
+<div class="modal fade" id="statDueModal" tabindex="-1" aria-labelledby="statDueTitle">
+    <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+        <div class="modal-content border-0 shadow">
+            <div class="modal-header border-bottom-0 pb-0">
+                <h6 class="modal-title fw-bold" id="statDueTitle"><i class="fa-regular fa-clock text-warning me-2"></i>Due Soon · ₱<?= number_format($dueSoonAmount, 2) ?> from <?= $dueSoonCount ?> tenant<?= $dueSoonCount === 1 ? '' : 's' ?></h6>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p class="text-muted small mb-2">Bills that are posted but not late yet, soonest first.</p>
+                <?php if (!$dueSoonList): ?>
+                    <div class="text-center text-muted py-4 small"><i class="fa-regular fa-circle-check text-success fa-2x d-block mb-2"></i>Nothing coming due.</div>
+                <?php else: ?>
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0 stat-table">
+                        <thead><tr><th>Tenant</th><th>Room</th><th>Due</th><th class="text-end">Amount</th><th>Contact</th></tr></thead>
+                        <tbody>
+                        <?php foreach ($dueSoonList as $d): ?>
+                            <tr>
+                                <td><?= $tenantCell($d) ?></td>
+                                <td class="text-muted text-nowrap"><?= $roomLabel($d['room_number']) ?></td>
+                                <td class="text-nowrap"><?= $d['due'] ? '<span class="fw-semibold">' . htmlspecialchars(dueDateLabel($d['due'])) . '</span>' : '<span class="text-muted">—</span>' ?></td>
+                                <td class="text-end fw-bold text-nowrap">₱<?= number_format($d['amount'], 2) ?></td>
+                                <td class="text-muted text-nowrap"><?= htmlspecialchars($d['contact_number'] ?? '') ?: '<span class="fst-italic">None</span>' ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+                <?php endif; ?>
+            </div>
+            <?php if ($dueSoonList): ?>
+            <div class="modal-footer border-top-0 pt-0">
+                <button type="button" class="btn btn-sm btn-outline-primary fw-semibold" data-bs-toggle="modal" data-bs-target="#remindersModal"><i class="fa-solid fa-comment-sms me-1"></i>Send Rent Reminders</button>
+            </div>
+            <?php endif; ?>
+        </div>
+    </div>
+</div>
+
+<!-- Overdue: past their due date -->
+<div class="modal fade" id="statOverdueModal" tabindex="-1" aria-labelledby="statOverdueTitle">
+    <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+        <div class="modal-content border-0 shadow">
+            <div class="modal-header border-bottom-0 pb-0">
+                <h6 class="modal-title fw-bold" id="statOverdueTitle"><i class="fa-solid fa-triangle-exclamation text-danger me-2"></i>Overdue · ₱<?= number_format($actualOverdueAmount, 2) ?> from <?= $actualOverdueCount ?> tenant<?= $actualOverdueCount === 1 ? '' : 's' ?></h6>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p class="text-muted small mb-2">Unpaid amounts past their due date, largest first.</p>
+                <?php if (!$overdueList): ?>
+                    <div class="text-center text-muted py-4 small"><i class="fa-regular fa-circle-check text-success fa-2x d-block mb-2"></i>Nobody is overdue.</div>
+                <?php else: ?>
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0 stat-table">
+                        <thead><tr><th>Tenant</th><th>Room</th><th>Overdue since</th><th class="text-end">Overdue</th><th class="text-end">Total owed</th><th>Contact</th></tr></thead>
+                        <tbody>
+                        <?php foreach ($overdueList as $o): ?>
+                            <tr>
+                                <td><?= $tenantCell($o) ?>
+                                    <?php if (($o['status'] ?? 'active') === 'deactivated'): ?><span class="badge badge-soft-secondary ms-1">Moved out</span><?php endif; ?>
+                                </td>
+                                <td class="text-muted text-nowrap"><?= $roomLabel($o['room_number']) ?></td>
+                                <td class="text-nowrap"><?= $o['since'] ? date('M j, Y', strtotime($o['since'])) . ' <span class="text-danger small">(' . $o['days'] . ' day' . ($o['days'] === 1 ? '' : 's') . ')</span>' : '—' ?></td>
+                                <td class="text-end fw-bold text-danger text-nowrap">₱<?= number_format($o['overdue'], 2) ?></td>
+                                <td class="text-end text-nowrap">₱<?= number_format($o['total'], 2) ?></td>
+                                <td class="text-muted text-nowrap"><?= htmlspecialchars($o['contact_number'] ?? '') ?: '<span class="fst-italic">None</span>' ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+                <?php endif; ?>
+            </div>
+            <?php if ($overdueList): ?>
+            <div class="modal-footer border-top-0 pt-0">
+                <button type="button" class="btn btn-sm btn-outline-primary fw-semibold" data-bs-toggle="modal" data-bs-target="#remindersModal"><i class="fa-solid fa-comment-sms me-1"></i>Send Rent Reminders</button>
+            </div>
+            <?php endif; ?>
+        </div>
+    </div>
+</div>
+
+<!-- Paid Payments: each payment verified this month -->
+<div class="modal fade" id="statPaidModal" tabindex="-1" aria-labelledby="statPaidTitle">
+    <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+        <div class="modal-content border-0 shadow">
+            <div class="modal-header border-bottom-0 pb-0">
+                <h6 class="modal-title fw-bold" id="statPaidTitle"><i class="fa-regular fa-circle-check text-success me-2"></i>Paid Payments · <?= $monthLabel ?></h6>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <?php if (!$monthPayments): ?>
+                    <div class="text-center text-muted py-4 small">No payments verified yet this month.</div>
+                <?php else: ?>
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0 stat-table">
+                        <thead><tr><th>Date</th><th>Tenant</th><th>Room</th><th>Method</th><th>Reference</th><th class="text-end">Amount</th><th></th></tr></thead>
+                        <tbody>
+                        <?php foreach ($monthPayments as $mp): $receipt = uploadSrc($mp['receipt_path'] ?? '', '../'); ?>
+                            <tr>
+                                <td class="text-nowrap text-muted"><?= date('M j', strtotime($mp['payment_date'])) ?></td>
+                                <td><?= $tenantCell($mp) ?></td>
+                                <td class="text-muted text-nowrap"><?= $roomLabel($mp['room_number']) ?></td>
+                                <td class="text-nowrap"><?= ($mp['payment_method'] ?? 'gcash') === 'cash' ? 'Cash' : 'GCash' ?><?= !empty($mp['pay_for_room']) ? ' <span class="badge badge-soft-primary">Whole room</span>' : '' ?></td>
+                                <td class="text-muted text-truncate" style="max-width: 130px;"><?= htmlspecialchars($mp['reference_number'] ?? '') ?></td>
+                                <td class="text-end fw-bold text-nowrap">₱<?= number_format($mp['amount'], 2) ?></td>
+                                <td class="text-end"><?php if ($receipt): ?><a href="<?= htmlspecialchars($receipt) ?>" target="_blank" rel="noopener" class="btn btn-sm btn-light border py-0 px-2" title="Open receipt"><i class="fa-solid fa-file-invoice"></i></a><?php endif; ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                        </tbody>
+                        <tfoot><tr class="fw-bold"><td colspan="5" class="text-end">Total</td><td class="text-end text-nowrap">₱<?= number_format($totalCollected, 2) ?></td><td></td></tr></tfoot>
+                    </table>
+                </div>
+                <?php endif; ?>
+            </div>
+        </div>
+    </div>
+</div>
 
 <!-- Rent reminders by SMS -->
 <div class="modal fade" id="remindersModal" tabindex="-1">

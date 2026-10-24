@@ -43,8 +43,8 @@ $roomsData = $pdo->query("
     SELECT r.id, r.room_number, r.capacity, 
            (SELECT COUNT(*) FROM tenants t WHERE t.room_id = r.id AND t.status = 'active') as tenant_count
     FROM rooms r
-    ORDER BY r.room_number ASC
 ")->fetchAll();
+usort($roomsData, fn($a, $b) => strnatcasecmp((string)$a['room_number'], (string)$b['room_number']));   // 1, 2, 10 - not 1, 10, 2
 
 $availableSpaces = 0;
 $totalCapacity = 0;
@@ -80,8 +80,8 @@ $recentPayments = $pdo->query("
     FROM payments p
     JOIN tenants t ON p.tenant_id = t.id
     LEFT JOIN rooms r ON t.room_id = r.id
-    ORDER BY p.payment_date DESC
-    LIMIT 6
+    ORDER BY p.payment_date DESC, p.id DESC
+    LIMIT 8
 ")->fetchAll();
 
 // Monthly Revenue Data for Charts (PostgreSQL)
@@ -176,11 +176,10 @@ require_once 'header.php';
 <!-- Header -->
 <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center mb-3 gap-2">
     <div>
-        <h4 class="fw-bold mb-1 text-dark">Dashboard</h4>
-        <p class="text-muted mb-0" style="font-size: 0.75rem;">Welcome back, Administrator! Here's what's happening today.</p>
+        <p class="text-muted mb-0" style="font-size: 0.8rem;">Welcome back, Administrator! Here's what's happening today.</p>
     </div>
     <div class="d-flex gap-2">
-        <a href="tenants.php" class="btn btn-outline-primary bg-white text-primary fw-semibold btn-sm px-2 py-1 rounded-2" style="font-size:0.75rem;"><i class="fa-solid fa-plus me-1"></i> Add Tenant</a>
+        <a href="tenants.php?add=1" class="btn btn-outline-primary bg-white text-primary fw-semibold btn-sm px-2 py-1 rounded-2" style="font-size:0.75rem;"><i class="fa-solid fa-plus me-1"></i> Add Tenant</a>
         <a href="rooms.php" class="btn btn-outline-primary bg-white text-primary fw-semibold btn-sm px-2 py-1 rounded-2" style="font-size:0.75rem;"><i class="fa-solid fa-plus me-1"></i> Add Room</a>
     </div>
 </div>
@@ -328,10 +327,10 @@ require_once 'header.php';
     </div>
 </div>
 
-<!-- Bottom Row -->
+<!-- Bottom Row: Attention Required and Rooms Status side by side, Recent Payments below -->
 <div class="row g-2">
     <!-- Attention Required -->
-    <div class="col-lg-4">
+    <div class="col-lg-6">
         <div class="card border-0 shadow-sm rounded-3 h-100">
             <div class="card-body p-3">
                 <h6 class="fw-bold text-dark mb-3" style="font-size:0.8rem;"><i class="fa-solid fa-triangle-exclamation text-warning me-2"></i> Attention Required</h6>
@@ -341,7 +340,7 @@ require_once 'header.php';
                     <div class="d-flex align-items-start">
                         <i class="fa-solid fa-circle-exclamation text-danger mt-1 me-2" style="font-size:0.7rem;"></i>
                         <div>
-                            <div class="fw-bold text-dark" style="font-size: 0.7rem; line-height: 1.2;"><?= $overdueTenantsCount ?> tenants have overdue payments</div>
+                            <div class="fw-bold text-dark" style="font-size: 0.7rem; line-height: 1.2;"><?= $overdueTenantsCount ?> <?= $overdueTenantsCount === 1 ? 'tenant has an overdue payment' : 'tenants have overdue payments' ?></div>
                             <a href="tenants.php" class="text-primary text-decoration-none fw-semibold" style="font-size: 0.65rem;">View Tenants &rarr;</a>
                         </div>
                     </div>
@@ -353,7 +352,7 @@ require_once 'header.php';
                     <div class="d-flex align-items-start">
                         <i class="fa-solid fa-clock text-warning mt-1 me-2" style="font-size:0.7rem;"></i>
                         <div>
-                            <div class="fw-bold text-dark" style="font-size: 0.7rem; line-height: 1.2;"><?= $pendingPaymentsCount ?> payments require verification</div>
+                            <div class="fw-bold text-dark" style="font-size: 0.7rem; line-height: 1.2;"><?= $pendingPaymentsCount ?> <?= (int)$pendingPaymentsCount === 1 ? 'payment requires' : 'payments require' ?> verification</div>
                             <a href="payments.php" class="text-primary text-decoration-none fw-semibold" style="font-size: 0.65rem;">View Payments &rarr;</a>
                         </div>
                     </div>
@@ -365,7 +364,7 @@ require_once 'header.php';
                     <div class="d-flex align-items-start">
                         <i class="fa-solid fa-door-open text-success mt-1 me-2" style="font-size:0.7rem;"></i>
                         <div>
-                            <div class="fw-bold text-dark" style="font-size: 0.7rem; line-height: 1.2;"><?= $roomsWithSpaceCount ?> rooms have available spaces</div>
+                            <div class="fw-bold text-dark" style="font-size: 0.7rem; line-height: 1.2;"><?= $roomsWithSpaceCount ?> <?= $roomsWithSpaceCount === 1 ? 'room has' : 'rooms have' ?> available space</div>
                             <a href="rooms.php" class="text-primary text-decoration-none fw-semibold" style="font-size: 0.65rem;">View Rooms &rarr;</a>
                         </div>
                     </div>
@@ -378,57 +377,9 @@ require_once 'header.php';
             </div>
         </div>
     </div>
-    
-    <!-- Recent Payments -->
-    <div class="col-lg-4">
-        <div class="card border-0 shadow-sm rounded-3 h-100">
-            <div class="card-header bg-white border-0 p-3 pb-0 d-flex justify-content-between align-items-center">
-                <h6 class="fw-bold text-dark mb-0" style="font-size:0.8rem;"><i class="fa-solid fa-money-bill text-primary me-2"></i> Recent Payments</h6>
-                <a href="payments.php" class="text-primary text-decoration-none fw-semibold" style="font-size: 0.65rem;">View All</a>
-            </div>
-            <div class="card-body p-0 mt-2">
-                <div class="table-responsive">
-                    <table class="table table-hover table-compact mb-0 border-top w-100">
-                        <thead class="bg-light text-muted">
-                            <tr>
-                                <th class="ps-3 border-0">Tenant</th>
-                                <th class="border-0">Room</th>
-                                <th class="border-0">Amount</th>
-                                <th class="pe-3 border-0">Status</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php if(count($recentPayments) === 0): ?>
-                                <tr><td colspan="4" class="text-center py-4 text-muted">No recent payments.</td></tr>
-                            <?php endif; ?>
-                            
-                            <?php foreach($recentPayments as $p): 
-                                $statusBadge = $p['status'] == 'verified' ? '<span class="badge bg-success-subtle text-success border border-success-subtle px-1" style="font-size:0.6rem;">Paid</span>' : '<span class="badge bg-warning-subtle text-warning border border-warning-subtle px-1" style="font-size:0.6rem;">Pending</span>';
-                            ?>
-                            <tr>
-                                <td class="ps-3">
-                                    <div class="d-flex align-items-center">
-                                        <?= avatarHtml($p['first_name'] . ' ' . $p['last_name'], 20, 'me-2 shadow-sm', $p['profile_picture'] ?? null, '../') ?>
-                                        <span class="fw-semibold text-dark text-truncate d-inline-block" style="max-width:70px; font-size: 0.75rem;"><?= htmlspecialchars($p['first_name'].' '.$p['last_name']) ?></span>
-                                    </div>
-                                </td>
-                                <td class="text-muted fw-semibold" style="font-size: 0.75rem;"><?= $p['room_number'] ? 'Rm ' . htmlspecialchars($p['room_number']) : '<span class="text-black-50">No room</span>' ?></td>
-                                <td class="fw-bold text-dark" style="font-size: 0.75rem;">₱<?= number_format($p['amount'], 0) ?></td>
-                                <td class="pe-3"><?= $statusBadge ?></td>
-                            </tr>
-                            <?php endforeach; ?>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-            <div class="card-footer bg-white border-top p-2 text-center">
-                <span class="text-muted" style="font-size: 0.65rem;">Showing 1 to <?= min(5, count($recentPayments)) ?> of <?= count($recentPayments) ?></span>
-            </div>
-        </div>
-    </div>
-    
+
     <!-- Rooms Status -->
-    <div class="col-lg-4">
+    <div class="col-lg-6">
         <div class="card border-0 shadow-sm rounded-3 h-100">
             <div class="card-header bg-white border-0 p-3 pb-0 d-flex justify-content-between align-items-center">
                 <h6 class="fw-bold text-dark mb-0" style="font-size:0.8rem;"><i class="fa-solid fa-door-closed text-primary me-2"></i> Rooms Status</h6>
@@ -467,6 +418,68 @@ require_once 'header.php';
                     </div>
                 </div>
                 <?php endforeach; ?>
+            </div>
+        </div>
+    </div>
+
+    <!-- Recent Payments: full width under the two panels above -->
+    <div class="col-12">
+        <div class="card border-0 shadow-sm rounded-3">
+            <div class="card-header bg-white border-0 p-3 pb-0 d-flex justify-content-between align-items-center">
+                <h6 class="fw-bold text-dark mb-0" style="font-size:0.8rem;"><i class="fa-solid fa-money-bill text-primary me-2"></i> Recent Payments</h6>
+                <a href="payments.php" class="text-primary text-decoration-none fw-semibold" style="font-size: 0.7rem;">View All</a>
+            </div>
+            <div class="card-body p-0 mt-2">
+                <div class="table-responsive">
+                    <table class="table table-hover table-compact mb-0 border-top w-100">
+                        <thead class="bg-light text-muted">
+                            <tr>
+                                <th class="ps-3 border-0">Tenant</th>
+                                <th class="border-0">Room</th>
+                                <th class="border-0">Date</th>
+                                <th class="border-0">Method</th>
+                                <th class="border-0">Reference</th>
+                                <th class="border-0 text-end">Amount</th>
+                                <th class="pe-3 border-0 text-end">Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php if(count($recentPayments) === 0): ?>
+                                <tr><td colspan="7" class="text-center py-4 text-muted">No recent payments.</td></tr>
+                            <?php endif; ?>
+
+                            <?php foreach($recentPayments as $p):
+                                if ($p['status'] === 'verified') {
+                                    $statusBadge = '<span class="badge bg-success-subtle text-success border border-success-subtle px-2" style="font-size:0.65rem;">Paid</span>';
+                                } elseif ($p['status'] === 'rejected') {
+                                    $statusBadge = '<span class="badge bg-danger-subtle text-danger border border-danger-subtle px-2" style="font-size:0.65rem;">Rejected</span>';
+                                } else {
+                                    $statusBadge = '<span class="badge bg-warning-subtle text-warning border border-warning-subtle px-2" style="font-size:0.65rem;">Pending</span>';
+                                }
+                                $method = $p['payment_method'] ?? 'gcash';
+                                $methodLabel = stripos($method, 'covered by') === 0 ? $method : ($method === 'cash' ? 'Cash' : 'GCash');
+                            ?>
+                            <tr>
+                                <td class="ps-3">
+                                    <div class="d-flex align-items-center">
+                                        <?= avatarHtml($p['first_name'] . ' ' . $p['last_name'], 24, 'me-2 shadow-sm', $p['profile_picture'] ?? null, '../') ?>
+                                        <span class="fw-semibold text-dark text-truncate d-inline-block" style="max-width:180px; font-size: 0.78rem;"><?= htmlspecialchars($p['first_name'].' '.$p['last_name']) ?></span>
+                                    </div>
+                                </td>
+                                <td class="text-muted fw-semibold" style="font-size: 0.75rem;"><?= $p['room_number'] ? 'Room ' . htmlspecialchars($p['room_number']) : '<span class="text-black-50">No room</span>' ?></td>
+                                <td class="text-muted text-nowrap" style="font-size: 0.75rem;"><?= date('M j, Y', strtotime($p['payment_date'])) ?></td>
+                                <td class="text-muted" style="font-size: 0.75rem;"><?= htmlspecialchars($methodLabel) ?></td>
+                                <td class="text-muted text-truncate" style="font-size: 0.75rem; max-width: 160px;"><?= htmlspecialchars($p['reference_number'] ?? '') ?></td>
+                                <td class="fw-bold text-dark text-end text-nowrap" style="font-size: 0.78rem;">₱<?= number_format($p['amount'], 2) ?></td>
+                                <td class="pe-3 text-end"><?= $statusBadge ?></td>
+                            </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="card-footer bg-white border-top p-2 text-center">
+                <span class="text-muted" style="font-size: 0.7rem;">Latest <?= count($recentPayments) ?> payment<?= count($recentPayments) === 1 ? '' : 's' ?> · <a href="payments.php" class="text-decoration-none">see all on the Payments page</a></span>
             </div>
         </div>
     </div>

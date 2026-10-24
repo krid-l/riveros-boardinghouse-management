@@ -4,13 +4,26 @@ require_once '../includes/auth.php';
 requireAdmin();
 require_once '../includes/avatar.php';
 $current_page = basename($_SERVER['PHP_SELF']);
+// Shown in the top bar (the one page title) and the browser tab; named like the sidebar links.
+$pageTitles = [
+    'dashboard.php'      => 'Dashboard',
+    'rooms.php'          => 'Rooms',
+    'tenants.php'        => 'Tenants',
+    'tenant_details.php' => 'Tenant Details',
+    'payments.php'       => 'Payments',
+    'complaints.php'     => 'Complaints',
+    'reports.php'        => 'Reports & Analytics',
+    'announcements.php'  => 'Announcements',
+    'settings.php'       => 'Settings',
+];
+$pageTitle = $pageTitles[$current_page] ?? ucwords(str_replace(['.php', '_'], ['', ' '], $current_page));
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Admin - Riveros Boarding House</title>
+    <title><?= htmlspecialchars($pageTitle) ?> - Admin - Riveros Boarding House</title>
     <!-- Bootstrap 5 -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <!-- FontAwesome for Professional Icons -->
@@ -63,22 +76,23 @@ $current_page = basename($_SERVER['PHP_SELF']);
         <div class="flex-grow-1 d-flex flex-column h-100 overflow-hidden">
             <!-- Topbar -->
             <div class="topbar p-3 d-flex justify-content-between align-items-center">
-                <div class="d-flex align-items-center">
+                <div class="d-flex align-items-center" style="min-width: 0;">
                     <button class="btn btn-light d-md-none me-3" type="button" data-bs-toggle="offcanvas" data-bs-target="#sidebarMenu">
                         <i class="fa-solid fa-bars"></i>
                     </button>
-                    <h5 class="m-0 fw-bold text-dark d-none d-md-block"><?= ucfirst(str_replace('.php', '', $current_page)) ?></h5>
+                    <!-- The page's only title: the pages themselves don't repeat it. -->
+                    <h5 class="m-0 fw-bold text-dark text-truncate page-title"><?= htmlspecialchars($pageTitle) ?></h5>
                 </div>
                 <div class="d-flex align-items-center">
-                    <button class="btn btn-light rounded-circle position-relative me-3" style="width:40px; height:40px;">
+                    <button class="btn btn-light rounded-circle position-relative me-2 me-md-3 flex-shrink-0" style="width:40px; height:40px;">
                         <i class="fa-solid fa-bell text-muted"></i>
                         <span class="position-absolute top-0 start-100 translate-middle p-1 bg-danger border border-light rounded-circle">
                             <span class="visually-hidden">New alerts</span>
                         </span>
                     </button>
                     <div class="dropdown">
-                        <button class="btn btn-light dropdown-toggle border-0 fw-semibold text-dark" type="button" data-bs-toggle="dropdown">
-                            Manage Account
+                        <button class="btn btn-light dropdown-toggle border-0 fw-semibold text-dark" type="button" data-bs-toggle="dropdown" aria-label="Manage account">
+                            <i class="fa-solid fa-user-gear d-md-none"></i><span class="d-none d-md-inline">Manage Account</span>
                         </button>
                         <ul class="dropdown-menu dropdown-menu-end shadow border-0 mt-2">
                             <li><a class="dropdown-item py-2" href="settings.php"><i class="fa-solid fa-user me-2 text-muted"></i> Profile Settings</a></li>

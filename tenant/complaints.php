@@ -92,9 +92,8 @@ $complaints = $stmt->fetchAll();
 
 <div class="complaints-container">
     
-    <div class="mb-4">
-        <h3 class="fw-bolder mb-1 text-dark">My Complaints & Concerns</h3>
-        <p class="text-muted" style="font-size: 0.85rem;">We're here to help. Submit your concern and we'll take care of it.</p>
+    <div class="mb-3">
+        <p class="text-muted mb-0" style="font-size: 0.85rem;">We're here to help. Submit your concern and we'll take care of it.</p>
     </div>
 
     <!-- Alerts -->

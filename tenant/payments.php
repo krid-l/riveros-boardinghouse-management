@@ -145,9 +145,9 @@ $payments = $stmt->fetchAll();
 </style>
 
 <div class="payment-container">
-    <!-- Header -->
-    <div class="mb-4">
-        <h4 class="fw-bolder mb-0 text-dark" style="font-size: 1.25rem;">Upload GCash Payment</h4>
+    <!-- Header (the page title is in the top bar) -->
+    <div class="mb-3">
+        <p class="text-muted mb-0" style="font-size: 0.85rem;">Pay through GCash (or cash), then send the details here for the admin to verify.</p>
     </div>
 
     <!-- Alerts -->

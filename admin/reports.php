@@ -14,8 +14,8 @@ $roomsData = $pdo->query("
     SELECT r.id, r.room_number, r.capacity, 
            (SELECT COUNT(*) FROM tenants t WHERE t.room_id = r.id AND t.status = 'active') as tenant_count
     FROM rooms r
-    ORDER BY r.room_number ASC
 ")->fetchAll();
+usort($roomsData, fn($a, $b) => strnatcasecmp((string)$a['room_number'], (string)$b['room_number']));   // 1, 2, 10 - not 1, 10, 2
 
 $totalCapacity = 0;
 $totalOccupied = 0;
@@ -178,8 +178,7 @@ require_once 'header.php';
 
 <!-- Header -->
 <div class="mb-3">
-    <h4 class="fw-bold mb-1 text-dark">Reports & Analytics</h4>
-    <p class="text-muted mb-0" style="font-size: 0.75rem;">Overview of your boarding house performance and insights.</p>
+    <p class="text-muted mb-0" style="font-size: 0.8rem;">Overview of your boarding house performance and insights.</p>
 </div>
 
 <!-- Tabs & Actions -->

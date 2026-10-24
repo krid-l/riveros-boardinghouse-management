@@ -101,8 +101,7 @@ $payments = $stmt->fetchAll();
     
     <div class="d-flex justify-content-between align-items-start mb-4">
         <div>
-            <h3 class="fw-bolder mb-1 text-dark">My Digital Receipts</h3>
-            <p class="text-muted" style="font-size: 0.85rem;">View and download your verified payment receipts.</p>
+            <p class="text-muted mb-0" style="font-size: 0.85rem;">View and download your verified payment receipts.</p>
         </div>
         <button class="btn-how-works d-none d-md-flex align-items-center gap-2">
             <i class="fa-regular fa-circle-question"></i> How Receipts Work

@@ -59,7 +59,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'send_
 
 // Fetch Tenant & Room details
 $stmt = $pdo->prepare("
-    SELECT t.*, u.username, u.temp_password, r.room_number, r.price_per_month, u.created_at as account_created
+    SELECT t.*, u.username, u.temp_password, r.room_number, r.price_per_month, r.capacity AS room_capacity, u.created_at as account_created
     FROM tenants t
     JOIN users u ON t.user_id = u.id
     LEFT JOIN rooms r ON t.room_id = r.id
@@ -99,12 +99,12 @@ $totalCharges = array_sum(array_map(fn($c) => (float)$c['amount'], $charges));
 $totalPayments = array_sum(array_map(fn($c) => (float)$c['credited'], $credits));
 
 // Calculated fields for UI
-// rooms.price_per_month is the price of the whole room; this tenant pays an equal share of it.
+// Rent is per bed: the room price divided by its capacity, however many beds are taken.
 $roomPrice = (float)($tenant['price_per_month'] ?? 0);
-$roomOccupants = $tenant['room_id'] ? roomOccupantCount($pdo, (int)$tenant['room_id']) : 0;
-$monthlyRent = $tenant['room_id'] ? rentShare($roomPrice, $roomOccupants) : 0.0;
-$rentSplitNote = $roomOccupants > 1
-    ? 'Share of the ₱' . number_format($roomPrice, 2) . ' room, split ' . $roomOccupants . ' ways'
+$roomCapacity = max(1, (int)($tenant['room_capacity'] ?? 1));
+$monthlyRent = $tenant['room_id'] ? rentShare($roomPrice, $roomCapacity) : 0.0;
+$rentSplitNote = $roomCapacity > 1
+    ? '1 of ' . $roomCapacity . ' beds in the ₱' . number_format($roomPrice, 2) . ' room'
     : '';
 $currentBalance = round((float)($tenant['balance'] ?? 0), 2);
 $depositHeld = tenantDeposit($pdo, $tenant);
@@ -218,7 +218,6 @@ require_once 'header.php';
 
 <div class="d-flex justify-content-between align-items-center mb-3">
     <div>
-        <h4 class="fw-bold mb-1 text-dark">Tenant Details</h4>
         <div class="breadcrumb-sm text-muted">
             <a href="dashboard.php">Dashboard</a> &rsaquo; <a href="tenants.php">Tenants</a> &rsaquo; <?= htmlspecialchars($tenant['first_name'] . ' ' . $tenant['last_name']) ?>
         </div>
