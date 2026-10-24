@@ -178,7 +178,6 @@ require_once 'header.php';
 <!-- Header Section -->
 <div class="row align-items-center mb-4">
     <div class="col-xl-4 col-lg-5 mb-3 mb-lg-0">
-        <h3 class="fw-bold mb-1 text-dark">Manage Tenants</h3>
         <p class="text-muted mb-2" style="font-size: 0.85rem;">Add new tenants and manage existing tenant information.</p>
         <button type="button" class="btn btn-primary shadow-sm fw-semibold px-4" data-bs-toggle="modal" data-bs-target="#addTenantModal">
             <i class="fa-solid fa-user-plus me-2"></i> Add New Tenant

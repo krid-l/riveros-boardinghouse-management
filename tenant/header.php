@@ -20,6 +20,16 @@ if (($currentTenant['status'] ?? 'active') !== 'active') {
 }
 $_SESSION['tenant_id'] = $currentTenant['id'];
 $current_page = basename($_SERVER['PHP_SELF']);
+// Shown in the top bar (the one page title) and the browser tab; named like the sidebar links.
+$pageTitles = [
+    'dashboard.php'     => 'My Space',
+    'payments.php'      => 'Upload Payment',
+    'receipts.php'      => 'Digital Receipts',
+    'announcements.php' => 'Announcements',
+    'complaints.php'    => 'Support / Complaints',
+    'settings.php'      => 'Profile Settings',
+];
+$pageTitle = $pageTitles[$current_page] ?? ucwords(str_replace(['.php', '_'], ['', ' '], $current_page));
 
 // Announcements posted since this tenant last opened the announcements page count as new.
 // Opening that page marks them read; the page keeps the previous visit time so it can still
@@ -43,7 +53,7 @@ $newAnnouncementLabel = $newAnnouncementCount > 9 ? '9+' : (string)$newAnnouncem
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tenant Portal - Riveros Boarding House</title>
+    <title><?= htmlspecialchars($pageTitle) ?> - Tenant Portal - Riveros Boarding House</title>
     <!-- Bootstrap 5 -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <!-- FontAwesome for Professional Icons -->
@@ -97,11 +107,12 @@ $newAnnouncementLabel = $newAnnouncementCount > 9 ? '9+' : (string)$newAnnouncem
         <div class="flex-grow-1 d-flex flex-column h-100 overflow-hidden bg-light">
             <!-- Topbar -->
             <div class="topbar p-3 d-flex justify-content-between align-items-center">
-                <div class="d-flex align-items-center">
+                <div class="d-flex align-items-center" style="min-width: 0;">
                     <button class="btn btn-light d-md-none me-3" type="button" data-bs-toggle="offcanvas" data-bs-target="#sidebarMenu">
                         <i class="fa-solid fa-bars"></i>
                     </button>
-                    <h5 class="m-0 fw-bold text-dark d-none d-md-block"><?= ucfirst(str_replace('.php', '', $current_page)) ?></h5>
+                    <!-- The page's only title: the pages themselves don't repeat it. -->
+                    <h5 class="m-0 fw-bold text-dark text-truncate page-title"><?= htmlspecialchars($pageTitle) ?></h5>
                 </div>
                 <div class="d-flex align-items-center">
                     <a href="announcements.php" class="btn btn-light rounded-circle position-relative me-3 d-inline-flex align-items-center justify-content-center" style="width:40px; height:40px;"

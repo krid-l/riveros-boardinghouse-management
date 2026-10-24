@@ -22,8 +22,7 @@ $isNew = fn(array $a): bool => $announcementsSeenBefore === null
 </style>
 
 <div class="announcements-container pt-3">
-    <div class="mb-4">
-        <h3 class="fw-bolder mb-0 text-dark">Announcements</h3>
+    <div class="mb-3">
         <p class="text-muted mb-0" style="font-size: 0.85rem;">News and reminders from the boarding house management.</p>
     </div>
 

@@ -221,9 +221,8 @@ require_once 'header.php';
 </style>
 
 <!-- Header -->
-<div class="mb-4 pt-2">
-    <h5 class="fw-bold mb-1 text-dark">System Settings</h5>
-    <p class="text-muted mb-0" style="font-size: 0.7rem;">Manage system preferences, administrator account, and application settings.</p>
+<div class="mb-3 pt-2">
+    <p class="text-muted mb-0" style="font-size: 0.8rem;">Manage system preferences, administrator account, and application settings.</p>
 </div>
 
 

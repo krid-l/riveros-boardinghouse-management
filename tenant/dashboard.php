@@ -145,8 +145,7 @@ $balance = $currentTenant['balance'] ?? 0;
 <div class="container-fluid pt-3 pb-5" style="max-width: 800px; margin: 0 auto;">
 <div class="dashboard-header d-flex justify-content-between align-items-center">
     <div>
-        <h3 class="fw-bolder mb-0 text-dark">My Space</h3>
-        <p class="text-muted mb-0" style="font-size: 0.85rem;">Welcome back, <?= htmlspecialchars($currentTenant['first_name'] ?? '') ?>! 👋</p>
+        <p class="text-dark fw-semibold mb-0" style="font-size: 0.95rem;">Welcome back, <?= htmlspecialchars($currentTenant['first_name'] ?? '') ?>! 👋</p>
     </div>
     <a href="payments.php" class="btn btn-primary fw-bold rounded-3 shadow-sm px-3 py-2" style="font-size: 0.85rem;">
         <i class="fa-solid fa-upload me-2"></i> Submit Payment

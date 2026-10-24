@@ -218,7 +218,6 @@ require_once 'header.php';
 
 <div class="d-flex justify-content-between align-items-center mb-3">
     <div>
-        <h4 class="fw-bold mb-1 text-dark">Tenant Details</h4>
         <div class="breadcrumb-sm text-muted">
             <a href="dashboard.php">Dashboard</a> &rsaquo; <a href="tenants.php">Tenants</a> &rsaquo; <?= htmlspecialchars($tenant['first_name'] . ' ' . $tenant['last_name']) ?>
         </div>

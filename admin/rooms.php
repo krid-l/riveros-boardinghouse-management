@@ -154,9 +154,8 @@ require_once 'header.php';
         <?php endif; ?>
 
         <!-- Header -->
-        <div class="d-flex justify-content-between align-items-end mb-4">
+        <div class="d-flex justify-content-between align-items-center mb-4 gap-2 flex-wrap">
             <div>
-                <h3 class="fw-bold mb-1 text-dark">Manage Rooms</h3>
                 <p class="text-muted mb-0">Organize and monitor all rooms in your boarding house.</p>
             </div>
             <div>

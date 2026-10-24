@@ -178,8 +178,7 @@ require_once 'header.php';
 
 <!-- Header -->
 <div class="mb-3">
-    <h4 class="fw-bold mb-1 text-dark">Reports & Analytics</h4>
-    <p class="text-muted mb-0" style="font-size: 0.75rem;">Overview of your boarding house performance and insights.</p>
+    <p class="text-muted mb-0" style="font-size: 0.8rem;">Overview of your boarding house performance and insights.</p>
 </div>
 
 <!-- Tabs & Actions -->

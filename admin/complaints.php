@@ -141,8 +141,7 @@ require_once 'header.php';
 <!-- Header -->
 <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center mb-3 pt-2 gap-2">
     <div>
-        <h5 class="fw-bold mb-1 text-dark">Manage Complaints</h5>
-        <p class="text-muted mb-0" style="font-size: 0.7rem;">View, track and resolve tenant complaints.</p>
+        <p class="text-muted mb-0" style="font-size: 0.8rem;">View, track and resolve tenant complaints.</p>
     </div>
     <div>
         <!-- Tenants handle new complaints -->

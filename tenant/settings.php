@@ -86,7 +86,6 @@ $fullName = htmlspecialchars($currentTenant['first_name'] . ' ' . $currentTenant
 
 <div class="d-flex justify-content-between align-items-end mb-4">
     <div>
-        <h3 class="fw-bold mb-1 text-dark">Profile Settings</h3>
         <p class="text-muted mb-0">Complete your profile information and update your contact details.</p>
     </div>
 </div>

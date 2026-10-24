@@ -348,8 +348,7 @@ require_once 'header.php';
 <!-- Header -->
 <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center mb-3 gap-2">
     <div>
-        <h4 class="fw-bold mb-1 text-dark">Manage Payments</h4>
-        <p class="text-muted mb-0" style="font-size: 0.75rem;">Track and manage all tenant payments and verify manual GCash payments.</p>
+        <p class="text-muted mb-0" style="font-size: 0.8rem;">Track and manage all tenant payments and verify manual GCash payments.</p>
     </div>
     <div class="d-flex gap-2">
         <button type="button" class="btn btn-outline-primary fw-semibold btn-sm px-2 py-1 rounded-2" style="font-size:0.75rem;" data-bs-toggle="modal" data-bs-target="#remindersModal">

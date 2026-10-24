@@ -166,3 +166,8 @@ body {
     user-select: none;
     overflow: hidden;
 }
+
+/* Page title in the top bar: the only title on each page, so it shows on phones too. */
+@media (max-width: 767.98px) {
+    .topbar .page-title { font-size: 1rem; }
+}

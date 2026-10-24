@@ -45,9 +45,8 @@ $announcements = $pdo->query("SELECT * FROM announcements ORDER BY created_at DE
 require_once 'header.php';
 ?>
 
-<div class="d-flex justify-content-between align-items-end mb-4">
+<div class="d-flex justify-content-between align-items-center mb-4 gap-2 flex-wrap">
     <div>
-        <h3 class="fw-bold mb-1 text-dark">Announcements</h3>
         <p class="text-muted mb-0">Manage announcements visible to all tenants.</p>
     </div>
     <button class="btn btn-primary fw-bold px-4" data-bs-toggle="modal" data-bs-target="#addModal">
