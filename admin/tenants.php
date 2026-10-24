@@ -19,6 +19,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         exit;
     }
 }
+// After a failed add, the pop-up opens again with what was typed.
+$addOld = ($_SERVER['REQUEST_METHOD'] === 'POST' && ($action ?? '') === 'add' && !empty($error)) ? $_POST : [];
+// The dashboard's "Add Tenant" button links here with ?add=1.
+$openAddModal = $addOld || queryParam('add') === '1';
 if (empty($success) && !empty($_GET['msg'])) {
     $success = htmlspecialchars($_GET['msg'] ?? '');
 }
@@ -110,8 +114,9 @@ $tenants = $tenantsStmt->fetchAll();
 $notYetDue = chargesNotYetDue($pdo);
 
 // Fetch available rooms for the dropdown (only active tenants take up beds)
-$roomsStmt = $pdo->query("SELECT r.id, r.room_number, r.capacity, r.price_per_month, (SELECT COUNT(*) FROM tenants t WHERE t.room_id = r.id AND t.status = 'active') as occupied FROM rooms r ORDER BY r.room_number ASC");
+$roomsStmt = $pdo->query("SELECT r.id, r.room_number, r.capacity, r.price_per_month, (SELECT COUNT(*) FROM tenants t WHERE t.room_id = r.id AND t.status = 'active') as occupied FROM rooms r");
 $allRooms = $roomsStmt->fetchAll();
+usort($allRooms, fn($a, $b) => strnatcasecmp((string)$a['room_number'], (string)$b['room_number']));   // 1, 2, 10 - not 1, 10, 2
 
 require_once 'header.php';
 ?>
@@ -174,7 +179,10 @@ require_once 'header.php';
 <div class="row align-items-center mb-4">
     <div class="col-xl-4 col-lg-5 mb-3 mb-lg-0">
         <h3 class="fw-bold mb-1 text-dark">Manage Tenants</h3>
-        <p class="text-muted mb-0" style="font-size: 0.85rem;">Add new tenants and manage existing tenant information.</p>
+        <p class="text-muted mb-2" style="font-size: 0.85rem;">Add new tenants and manage existing tenant information.</p>
+        <button type="button" class="btn btn-primary shadow-sm fw-semibold px-4" data-bs-toggle="modal" data-bs-target="#addTenantModal">
+            <i class="fa-solid fa-user-plus me-2"></i> Add New Tenant
+        </button>
     </div>
     
     <!-- Stats Cards in Header -->
@@ -231,79 +239,8 @@ require_once 'header.php';
 <!-- Main Content Grid -->
 <div class="row g-4">
     
-    <!-- Left Column: Add Tenant Form -->
-    <div class="col-lg-4 col-xl-3">
-        <div class="card border-0 shadow-sm rounded-3 h-100">
-            <div class="card-body p-3 form-compact">
-                <div class="d-flex align-items-center mb-4">
-                    <div class="bg-primary bg-opacity-10 text-primary rounded d-flex justify-content-center align-items-center me-3" style="width: 35px; height: 35px;">
-                        <i class="fa-solid fa-user-plus"></i>
-                    </div>
-                    <div>
-                        <h6 class="fw-bold mb-0 text-dark" style="font-size:0.85rem;">Add New Tenant</h6>
-                        <small class="text-muted" style="font-size:0.65rem;">Create a new tenant account.</small>
-                    </div>
-                </div>
-
-                <form method="POST" data-movein-form>
-                    <input type="hidden" name="action" value="add">
-
-                    <div class="mb-2">
-                        <label>First Name</label>
-                        <input type="text" class="form-control" name="first_name" placeholder="e.g., Juan" required>
-                    </div>
-                    <div class="mb-2">
-                        <label>Last Name</label>
-                        <input type="text" class="form-control" name="last_name" placeholder="e.g., Dela Cruz" required>
-                    </div>
-                    <div class="mb-2">
-                        <label>Contact Number</label>
-                        <input type="text" class="form-control" name="contact_number" placeholder="e.g., 0912 345 6789">
-                    </div>
-                    <div class="mb-2">
-                        <label>Occupation</label>
-                        <input type="text" class="form-control" name="occupation" placeholder="e.g., Student">
-                    </div>
-                    <div class="mb-2">
-                        <label>Emergency Contact</label>
-                        <input type="text" class="form-control" name="emergency_contact" placeholder="Name & Number">
-                    </div>
-
-                    <div class="mb-3">
-                        <label>Assign Room <span class="text-muted fw-normal">(Optional)</span></label>
-                        <select class="form-select" name="room_id">
-                            <option value="">Unassigned</option>
-                            <?php foreach($allRooms as $r): ?>
-                                <?php 
-                                    $isFull = $r['occupied'] >= $r['capacity'];
-                                    $label = 'Room ' . htmlspecialchars($r['room_number'] ?? '');
-                                    if ($isFull) {
-                                        $label .= ' - FULL';
-                                    } else {
-                                        $avail = $r['capacity'] - $r['occupied'];
-                                        // Adding this tenant makes one more person to split the room price between.
-                                        $share = $r['price_per_month'] / ($r['occupied'] + 1);
-                                        $label .= " (Avail: $avail | ₱" . number_format($r['price_per_month']) . "/room, ₱" . number_format($share, 2) . " each)";
-                                    }
-                                ?>
-                                <option value="<?= $r['id'] ?>" data-share="<?= $isFull ? '' : round($r['price_per_month'] / ($r['occupied'] + 1), 2) ?>" <?= $isFull ? 'disabled' : '' ?>><?= $label ?></option>
-                            <?php endforeach; ?>
-                        </select>
-                    </div>
-                    <div class="mb-3">
-                        <label>Move-in Date</label>
-                        <input type="date" class="form-control" name="move_in_date" value="<?= date('Y-m-d') ?>">
-                        <small class="text-muted d-block mt-1" style="font-size:0.62rem;">Used when a room is assigned. Day 1–15: full first month. Day 16+: half. Due every 30th.</small>
-                    </div>
-                    <?= moveInPaymentFields('add_movein', true) ?>
-                    <button type="submit" class="btn btn-primary w-100" style="font-size:0.8rem; font-weight:600;"><i class="fa-solid fa-plus me-2"></i>Create Tenant</button>
-                </form>
-            </div>
-        </div>
-    </div>
-    
-    <!-- Right Column: Tenant List -->
-    <div class="col-lg-8 col-xl-9">
+    <!-- Tenant List (full width; the add form is in a pop-up) -->
+    <div class="col-12">
         <div class="card border-0 shadow-sm rounded-3 h-100 d-flex flex-column">
             
             <div class="card-header bg-white border-0 p-3 pb-0 d-flex justify-content-between align-items-center flex-wrap gap-2">
@@ -516,6 +453,85 @@ function moveInPaymentFields(string $id, bool $startHidden = false): string {
                     </div>';
 }
 ?>
+
+<!-- Add Tenant Modal -->
+<div class="modal fade" id="addTenantModal" tabindex="-1">
+    <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+        <div class="modal-content border-0 shadow">
+                <form method="POST" data-movein-form>
+                    <input type="hidden" name="action" value="add">
+                    <div class="modal-header bg-light border-0">
+                        <h6 class="modal-title fw-bold"><i class="fa-solid fa-user-plus text-primary me-2"></i>Add New Tenant</h6>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body p-4 form-compact">
+                    <div class="row g-4">
+                    <div class="col-md-6">
+                    <div class="small fw-bold text-muted text-uppercase mb-2" style="font-size:0.65rem; letter-spacing:0.5px;">Tenant details</div>
+
+                    <div class="mb-2">
+                        <label>First Name</label>
+                        <input type="text" class="form-control" name="first_name" placeholder="e.g., Juan" value="<?= htmlspecialchars($addOld['first_name'] ?? '') ?>" required>
+                    </div>
+                    <div class="mb-2">
+                        <label>Last Name</label>
+                        <input type="text" class="form-control" name="last_name" placeholder="e.g., Dela Cruz" value="<?= htmlspecialchars($addOld['last_name'] ?? '') ?>" required>
+                    </div>
+                    <div class="mb-2">
+                        <label>Contact Number</label>
+                        <input type="text" class="form-control" name="contact_number" placeholder="e.g., 0912 345 6789" value="<?= htmlspecialchars($addOld['contact_number'] ?? '') ?>">
+                    </div>
+                    <div class="mb-2">
+                        <label>Occupation</label>
+                        <input type="text" class="form-control" name="occupation" placeholder="e.g., Student" value="<?= htmlspecialchars($addOld['occupation'] ?? '') ?>">
+                    </div>
+                    <div class="mb-2">
+                        <label>Emergency Contact</label>
+                        <input type="text" class="form-control" name="emergency_contact" placeholder="Name & Number" value="<?= htmlspecialchars($addOld['emergency_contact'] ?? '') ?>">
+                    </div>
+
+                    </div>
+                    <div class="col-md-6">
+                    <div class="small fw-bold text-muted text-uppercase mb-2" style="font-size:0.65rem; letter-spacing:0.5px;">Room &amp; move-in</div>
+                    <div class="mb-3">
+                        <label>Assign Room <span class="text-muted fw-normal">(Optional)</span></label>
+                        <select class="form-select" name="room_id">
+                            <option value="">Unassigned</option>
+                            <?php foreach($allRooms as $r): ?>
+                                <?php
+                                    $isFull = $r['occupied'] >= $r['capacity'];
+                                    $label = 'Room ' . htmlspecialchars($r['room_number'] ?? '');
+                                    if ($isFull) {
+                                        $label .= ' - FULL';
+                                    } else {
+                                        $avail = $r['capacity'] - $r['occupied'];
+                                        // Adding this tenant makes one more person to split the room price between.
+                                        $share = $r['price_per_month'] / ($r['occupied'] + 1);
+                                        $label .= " (Avail: $avail | ₱" . number_format($r['price_per_month']) . "/room, ₱" . number_format($share, 2) . " each)";
+                                    }
+                                ?>
+                                <option value="<?= $r['id'] ?>" <?= (int)($addOld['room_id'] ?? 0) === (int)$r['id'] && !$isFull ? 'selected' : '' ?> data-share="<?= $isFull ? '' : round($r['price_per_month'] / ($r['occupied'] + 1), 2) ?>" <?= $isFull ? 'disabled' : '' ?>><?= $label ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label>Move-in Date</label>
+                        <input type="date" class="form-control" name="move_in_date" value="<?= htmlspecialchars($addOld['move_in_date'] ?? date('Y-m-d')) ?>">
+                        <small class="text-muted d-block mt-1" style="font-size:0.62rem;">Used when a room is assigned. Day 1–15: full first month. Day 16+: half. Due every 30th.</small>
+                    </div>
+                    <?= moveInPaymentFields('add_movein', true) ?>
+                    <small class="text-muted d-block" style="font-size:0.65rem;"><i class="fa-solid fa-key me-1"></i>A username and password are created automatically and shown after saving.</small>
+                    </div>
+                    </div>
+                    </div>
+                    <div class="modal-footer border-0 bg-light">
+                        <button type="button" class="btn btn-light border" data-bs-dismiss="modal" style="font-size:0.8rem;">Cancel</button>
+                        <button type="submit" class="btn btn-primary px-4" style="font-size:0.8rem; font-weight:600;"><i class="fa-solid fa-plus me-2"></i>Create Tenant</button>
+                    </div>
+                </form>
+        </div>
+    </div>
+</div>
 
 <!-- Edit Tenant Modal -->
 <div class="modal fade" id="editTenantModal" tabindex="-1">
@@ -792,6 +808,9 @@ function updateMoveIn(form) {
     const paid = box.querySelector('input[name="movein_paid"]');
     box.querySelector('.movein-details').classList.toggle('d-none', !paid.checked);
 }
+<?php if ($openAddModal): ?>
+document.addEventListener('DOMContentLoaded', () => showModal('addTenantModal'));
+<?php endif; ?>
 document.addEventListener('DOMContentLoaded', function () {
     document.querySelectorAll('form[data-movein-form]').forEach(function (form) {
         form.addEventListener('change', () => updateMoveIn(form));

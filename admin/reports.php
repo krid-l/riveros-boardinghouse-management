@@ -14,8 +14,8 @@ $roomsData = $pdo->query("
     SELECT r.id, r.room_number, r.capacity, 
            (SELECT COUNT(*) FROM tenants t WHERE t.room_id = r.id AND t.status = 'active') as tenant_count
     FROM rooms r
-    ORDER BY r.room_number ASC
 ")->fetchAll();
+usort($roomsData, fn($a, $b) => strnatcasecmp((string)$a['room_number'], (string)$b['room_number']));   // 1, 2, 10 - not 1, 10, 2
 
 $totalCapacity = 0;
 $totalOccupied = 0;
