@@ -191,10 +191,12 @@ $smsLog = $pdo->query("SELECT l.*, t.first_name, t.last_name FROM sms_log l
 $smsPurposeLabels = [
     'payment_verified' => 'Payment verified', 'payment_covered' => 'Paid by roommate', 'move_in_payment' => 'Move-in payment',
     'password_reset' => 'Password reset code', 'registration' => 'Welcome / login details',
-    'payment_rejected' => 'Payment rejected', 'reminder_due' => 'Rent due soon',
+    'payment_rejected' => 'Payment rejected', 'reminder_due' => 'Rent due soon', 'reminder_due_today' => 'Rent due today',
     'reminder_overdue' => 'Rent overdue', 'announcement' => 'Announcement', 'test' => 'Test',
 ];
 $qrUploadedAt = $settingsMap['gcash_qr_uploaded_at'] ?? '';
+require_once '../includes/daily_jobs.php';
+$lastAutoRun = lastDailyRun($pdo);
 
 require_once 'header.php';
 ?>
@@ -407,7 +409,7 @@ require_once 'header.php';
                 <div class="settings-header">
                     <div>
                         <h6 class="card-title-lg"><i class="fa-solid fa-comment-sms icon-header text-primary"></i> SMS Notifications (PhilSMS)</h6>
-                        <div class="card-subtitle-sm">Texts tenants when payments are verified or rejected, rent reminders, and announcements.</div>
+                        <div class="card-subtitle-sm">Texts tenants their login details, payment confirmations, automatic rent reminders and announcements.</div>
                     </div>
                     <?php if ($smsTokenSaved || $smsTokenFromEnv): ?>
                         <span class="badge badge-soft-success align-self-start"><i class="fa-solid fa-circle-check me-1"></i>Set up</span>
@@ -468,6 +470,24 @@ require_once 'header.php';
                             <input type="hidden" name="action" value="sms_balance">
                             <button type="submit" class="btn btn-light border btn-save text-nowrap"><i class="fa-solid fa-coins me-1 text-warning"></i>Check Credits</button>
                         </form>
+                    </div>
+                </div>
+            </div>
+
+            <div class="settings-body border-top">
+                <div class="d-flex gap-3 align-items-start">
+                    <div class="bg-primary bg-opacity-10 text-primary rounded-3 d-flex align-items-center justify-content-center flex-shrink-0" style="width: 36px; height: 36px;"><i class="fa-solid fa-clock-rotate-left"></i></div>
+                    <div style="font-size: 0.78rem;">
+                        <div class="fw-semibold text-dark">Automatic rent reminders</div>
+                        <div class="text-muted">Every day from <?= date('g A', mktime(DAILY_JOBS_HOUR, 0)) ?>, tenants are texted <?= REMINDER_DAYS_BEFORE ?> days before their rent is due, again on the due date, and once a week while it is overdue. Nobody gets the same reminder twice.</div>
+                        <div class="mt-1 <?= $lastAutoRun ? 'text-dark' : 'text-muted' ?>">
+                            <?php if ($lastAutoRun): ?>
+                                Last run: <strong><?= date('M j, Y g:i A', strtotime($lastAutoRun['at'])) ?></strong>
+                                · <?= $lastAutoRun['sent'] ?> sent<?= $lastAutoRun['not_sent'] ? ' · <span class="text-danger">' . $lastAutoRun['not_sent'] . ' not sent</span>' : '' ?>
+                            <?php else: ?>
+                                Hasn't run yet. It starts with the first page opened after <?= date('g A', mktime(DAILY_JOBS_HOUR, 0)) ?>.
+                            <?php endif; ?>
+                        </div>
                     </div>
                 </div>
             </div>

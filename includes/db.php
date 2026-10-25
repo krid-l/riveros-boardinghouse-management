@@ -139,3 +139,7 @@ runMigrations($pdo);
 
 // Post any rent charges that have come due, before any page reads balances.
 runBilling($pdo);
+
+// Once a day, after 8 AM: rent reminders by SMS, without anyone pressing a button.
+require_once __DIR__ . '/daily_jobs.php';
+triggerDailyJobs($pdo);

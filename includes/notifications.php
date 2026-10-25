@@ -20,6 +20,7 @@ const NOTIFICATION_TYPES = [
     'room_maintenance'    => ['fa-screwdriver-wrench', 'secondary'],
     'rent_due'            => ['fa-calendar-day',       'warning'],
     'deposit_request'     => ['fa-vault',              'info'],
+    'reminders_sent'      => ['fa-comment-sms',        'info'],
 ];
 
 /**

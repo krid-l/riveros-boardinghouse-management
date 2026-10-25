@@ -9,6 +9,7 @@ require_once __DIR__ . '/pdf_generator.php';
 require_once __DIR__ . '/notifications.php';
 require_once __DIR__ . '/tenant_profile.php';
 require_once __DIR__ . '/password_reset.php';   // generateTempPassword()
+require_once __DIR__ . '/sms_templates.php';
 
 function postedDate(string $field): string {
     $value = trim($_POST[$field] ?? '');
@@ -89,11 +90,10 @@ function recordMoveInPayment(PDO $pdo, int $tenantId, string $method, string $re
         error_log("Move-in receipt for payment $paymentId failed: " . $e->getMessage());   // the payment itself stands
     }
 
-    $parts = 'advance PHP ' . number_format($due['advance'], 2)
-           . ($due['deposit'] > 0 ? ' + deposit PHP ' . number_format($due['deposit'], 2) : '');
+    $balance = $pdo->prepare("SELECT balance FROM tenants WHERE id = ?");
+    $balance->execute([$tenantId]);
     $sms = sendSMS($pdo, $tenant['contact_number'],
-        smsConfig($pdo)['name'] . ": Hi {$tenant['first_name']}, welcome! We received your move-in payment of PHP "
-        . number_format($due['amount'], 2) . " ($parts). Receipt: RCP-" . str_pad($paymentId, 6, '0', STR_PAD_LEFT) . '.',
+        smsPaymentVerifiedMessage($pdo, $name, $due['amount'], paymentMethodLabel($method), $paidOn, (float)$balance->fetchColumn()),
         'move_in_payment', $tenantId);
 
     return ['id' => $paymentId, 'amount' => $due['amount'], 'advance' => $due['advance'], 'deposit' => $due['deposit'], 'sms' => $sms];
@@ -203,7 +203,8 @@ function handleTenantAction(PDO $pdo): array {
                 $billTenantId = $tenantId;
                 $moveInTenantId = $tenantId;
             }
-            $newTenant = ['id' => $tenantId, 'name' => trim("$firstName $lastName"), 'room_id' => $roomId, 'move_in' => $moveInDate];
+            $newTenant = ['id' => $tenantId, 'name' => trim("$firstName $lastName"), 'room_id' => $roomId, 'move_in' => $moveInDate,
+                          'phone' => $profile['contact_number'], 'username' => $username, 'password' => $rawPassword];
 
             $success = "Tenant added successfully! <br><strong>Username:</strong> " . htmlspecialchars($username) . " <br><strong>Password:</strong> " . htmlspecialchars($rawPassword) . " <br><small>Please save these credentials!</small>";
             if ($moveInDate && $roomId) {
@@ -352,6 +353,19 @@ function handleTenantAction(PDO $pdo): array {
             notifyAdmin($pdo, 'tenant_added', "New tenant registered: {$newTenant['name']}",
                 $roomNo ? "Room $roomNo, moving in " . date('M j, Y', strtotime($newTenant['move_in'])) . '.' : 'No room assigned yet.',
                 "tenant_details.php?id={$newTenant['id']}");
+
+            // Welcome text with their room, what to pay on moving in, and their login. Sent before
+            // the move-in payment's own text below.
+            $due = $newTenant['room_id'] ? moveInAmountDue($pdo, $newTenant['id']) : null;
+            $sms = sendSMS($pdo, $newTenant['phone'],
+                smsRegistrationMessage($pdo, $newTenant['name'], $roomNo !== null && $roomNo !== false ? (string)$roomNo : null, $newTenant['move_in'],
+                                       $due ? $due['advance'] : null, $due ? $due['deposit'] : null, $newTenant['username'], $newTenant['password']),
+                'registration', $newTenant['id']);
+            if ($sms['sent'] > 0) {
+                $success .= ' <br><small><i class="fa-solid fa-comment-sms me-1"></i>The login details were texted to ' . htmlspecialchars($newTenant['phone']) . '.</small>';
+            } elseif ($sms['failed'] > 0) {
+                $success .= ' <br><small class="text-danger">Welcome SMS not sent: ' . htmlspecialchars(smsErrorText($sms)) . '</small>';
+            }
         }
         notifyRoomAvailabilityChanges($pdo, $roomsBefore);
     }

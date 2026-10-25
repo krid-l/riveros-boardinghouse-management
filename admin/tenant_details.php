@@ -7,6 +7,7 @@ require_once '../includes/sms_reminders.php';
 require_once '../includes/password_reset.php';
 require_once '../includes/tenant_profile.php';
 require_once '../includes/uploads.php';
+require_once '../includes/sms_templates.php';
 requireAdmin();
 
 $reminderSuccess = '';
@@ -67,24 +68,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'send_
     } elseif (!smsConfigured($pdo)) {
         $reminderError = 'SMS is not set up yet. Add your PhilSMS API token in Settings.';
     } else {
-        $config  = smsConfig($pdo);
         $billing = tenantBillingStatus($tRow, chargesNotYetDue($pdo, $tenantId));
+        $name    = trim($tRow['first_name'] . ' ' . $tRow['last_name']);
 
         if ($billing['key'] === 'overdue') {
             $since   = oldestUnpaidDueDate($pdo, $tenantId, (float)$tRow['balance']);
             $ref     = 'overdue:' . $tenantId . ':' . date('o-W');
-            $message = sprintf(
-                '%s: Hi %s, you have an overdue rent balance of PHP %s%s. Please settle it via GCash and upload the screenshot in the tenant portal. Thank you!',
-                $config['name'], $tRow['first_name'], number_format($billing['overdue'], 2),
-                $since ? ' (due since ' . date('M j', strtotime($since)) . ')' : ''
-            );
+            $message = smsOverdueMessage($pdo, $name, $billing['overdue'], $since);
         } else {
-            // due or any positive balance — send a general reminder
+            // Not late yet: the bill coming up, or whatever is owed if nothing is scheduled.
+            $due  = upcomingDueDate($pdo, $tenantId) ?? date('Y-m-d');
+            $rent = $pdo->prepare("SELECT SUM(amount) FROM charges WHERE tenant_id = ? AND due_date = ? AND amount > 0");
+            $rent->execute([$tenantId, $due]);
             $ref     = 'due:manual:' . $tenantId . ':' . date('Y-m-d');
-            $message = sprintf(
-                '%s: Hi %s, your rent of PHP %s is due soon. Please pay via GCash and upload the screenshot in the tenant portal. Thank you!',
-                $config['name'], $tRow['first_name'], number_format((float)$tRow['balance'], 2)
-            );
+            $message = smsDueReminderMessage($pdo, $name, (float)$rent->fetchColumn() ?: (float)$tRow['balance'], $due, (float)$tRow['balance']);
         }
 
         $r = sendSMS($pdo, $tRow['contact_number'], $message, 'reminder_' . $billing['key'], $tenantId, $ref);

@@ -9,6 +9,7 @@ require_once '../includes/pagination.php';
 require_once '../includes/uploads.php';
 require_once '../includes/notifications.php';
 require_once '../includes/ui.php';
+require_once '../includes/sms_templates.php';
 
 // --- ACTION HANDLING ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'send_reminders') {
@@ -18,7 +19,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'send_
     if ($r['sent'] + $r['failed'] + $r['skipped'] === 0) {
         $success = "Nobody needs a reminder right now. Everyone with rent due in the next " . REMINDER_DAYS_BEFORE . " days or overdue has already been reminded.";
     } elseif ($r['sent'] > 0 && $r['failed'] + $r['skipped'] === 0) {
-        $success = "Rent reminders sent: {$r['due']} due soon, {$r['overdue']} overdue.";
+        $success = "Rent reminders sent: {$r['due']} due soon or today, {$r['overdue']} overdue.";
     } else {
         $error = "Rent reminders: {$r['sent']} sent, " . ($r['failed'] + $r['skipped']) . " not sent. " . smsErrorText($r);
     }
@@ -31,7 +32,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'send_
     $stmt->execute([$paymentId]);
     $payment = $stmt->fetch();
     
-    $smsName = smsConfig($pdo)['name'];
     if (!$payment || $payment['status'] !== 'pending') {
         $error = "This payment was already processed.";
     } elseif ($action === 'verify') {
@@ -95,7 +95,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'send_
                 $pdo->prepare("UPDATE payments SET receipt_path = ? WHERE id = ?")->execute([$proxyReceiptPath, $newPaymentId]);
 
                 $smsQueue[] = [$bm['contact_number'], (int)$bm['id'], 'payment_covered',
-                    "$smsName: Your rent of PHP " . number_format($s['share'], 2) . " was paid by " . $payment['first_name'] . ". Receipt: RCP-" . str_pad($newPaymentId, 6, '0', STR_PAD_LEFT)];
+                    smsHeader($pdo) . "\n\nHello, $bmFullName! Your rent share of " . smsPeso($s['share']) . ' was paid by ' . $payment['first_name']
+                    . " as part of a payment for your room, and it has been verified.\n\nRemaining Balance: " . smsPeso(max(0, (float)$bm['balance'] - $s['share']))
+                    . "\n\nThank you!"];
             }
 
             // Generate Receipt PDF
@@ -106,8 +108,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'send_
             $pdo->commit();
 
             // SMS only after the money is committed.
+            $remaining = $pdo->prepare("SELECT balance FROM tenants WHERE id = ?");
+            $remaining->execute([$payment['tenant_id']]);
             $smsQueue[] = [$payment['contact_number'], (int)$payment['tenant_id'], 'payment_verified',
-                "$smsName: Your payment of PHP " . number_format($amount, 2) . " has been VERIFIED. Receipt: RCP-" . str_pad($paymentId, 6, '0', STR_PAD_LEFT) . ". Thank you!"];
+                smsPaymentVerifiedMessage($pdo, $fullName, $amount, paymentMethodLabel($payment['payment_method'] ?? 'gcash'),
+                                          $payment['payment_date'], (float)$remaining->fetchColumn())];
             $smsResults = [];
             foreach ($smsQueue as [$to, $tenantId, $purpose, $msg]) {
                 $smsResults[] = sendSMS($pdo, $to, $msg, $purpose, $tenantId);
@@ -130,7 +135,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'send_
         $upd = $pdo->prepare("UPDATE payments SET status = 'rejected' WHERE id = ? AND status = 'pending'");
         $upd->execute([$paymentId]);
         if ($upd->rowCount() === 1) {
-            $msg = "$smsName: Your payment submission of PHP " . number_format($payment['amount'], 2) . " (ref " . $payment['reference_number'] . ") was REJECTED. Please check it and submit again.";
+            $msg = smsPaymentRejectedMessage($pdo, $payment['first_name'] . ' ' . $payment['last_name'], (float)$payment['amount'],
+                                             str_starts_with((string)$payment['reference_number'], 'CASH-') ? '' : (string)$payment['reference_number']);
             $success = "Payment rejected. " . smsOutcomeText(sendSMS($pdo, $payment['contact_number'], $msg, 'payment_rejected', (int)$payment['tenant_id']));
             markNotificationsRead($pdo, "payment_submitted:$paymentId");
             notifyAdmin($pdo, 'payment_rejected', 'Payment rejected: ' . $payment['first_name'] . ' ' . $payment['last_name'],
@@ -724,11 +730,13 @@ $monthLabel = date('F Y');
                                 <span class="text-muted fw-normal small ms-1"><?= htmlspecialchars(($n = normalizePhMobile($r['phone'])) ? formatPhMobile($n) : ($r['phone'] ?: 'no number')) ?></span></span>
                             <?php if ($r['kind'] === 'overdue'): ?>
                                 <span class="badge badge-soft-danger">Overdue · PHP <?= number_format($r['amount'], 2) ?></span>
+                            <?php elseif ($r['kind'] === 'due_today'): ?>
+                                <span class="badge badge-soft-warning">Due today · PHP <?= number_format($r['amount'], 2) ?></span>
                             <?php else: ?>
                                 <span class="badge badge-soft-warning">Due soon · PHP <?= number_format($r['amount'], 2) ?></span>
                             <?php endif; ?>
                         </div>
-                        <div class="text-muted small"><?= htmlspecialchars($r['message']) ?></div>
+                        <div class="text-muted small" style="white-space: pre-line;"><?= htmlspecialchars($r['message']) ?></div>
                         <?php if (!normalizePhMobile($r['phone'])): ?>
                             <div class="text-danger small mt-1"><i class="fa-solid fa-circle-exclamation me-1"></i>Can't be texted: add a valid mobile number to this tenant.</div>
                         <?php endif; ?>
