@@ -3,6 +3,7 @@ require_once '../includes/db.php';
 require_once '../includes/auth.php';
 requireAdmin();
 require_once '../includes/pagination.php';
+require_once '../includes/ui.php';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'update_complaint') {
     $complaintId = (int)$_POST['complaint_id'];
@@ -63,6 +64,8 @@ if ($filterStatus === 'resolved') {
     $where[] = COMPLAINT_PENDING_SQL;
 } elseif ($filterStatus === 'in progress') {
     $where[] = COMPLAINT_PROGRESS_SQL;
+} elseif ($filterStatus === 'unresolved') {
+    $where[] = "c.status <> 'resolved'";   // pending or in progress (the dashboard's "Unresolved Complaints")
 }
 $whereSql = $where ? 'WHERE ' . implode(' AND ', $where) : '';
 
@@ -155,69 +158,17 @@ require_once 'header.php';
     </div>
 <?php endif; ?>
 
-<!-- Top Stats Row -->
-<div class="row g-2 mb-3">
-    <!-- Total Complaints -->
-    <div class="col-sm-6 col-xl-3">
-        <div class="card metric-card border-0 shadow-sm h-100 rounded-3 p-1">
-            <div class="card-body p-2 d-flex align-items-center">
-                <div class="icon-box-lg bg-primary bg-opacity-10 text-primary me-2 flex-shrink-0">
-                    <i class="fa-solid fa-comment-dots"></i>
-                </div>
-                <div>
-                    <div class="card-title-sm">Total Complaints</div>
-                    <h5 class="fw-bold mb-0 text-dark"><?= $totalComplaints ?></h5>
-                    <div class="trend-text text-muted mt-1">All time</div>
-                </div>
-            </div>
-        </div>
-    </div>
-    <!-- Pending -->
-    <div class="col-sm-6 col-xl-3">
-        <div class="card metric-card border-0 shadow-sm h-100 rounded-3 p-1">
-            <div class="card-body p-2 d-flex align-items-center">
-                <div class="icon-box-lg bg-warning bg-opacity-10 text-warning me-2 flex-shrink-0">
-                    <i class="fa-solid fa-clock"></i>
-                </div>
-                <div>
-                    <div class="card-title-sm">Open</div>
-                    <h5 class="fw-bold mb-0 text-dark"><?= $openCount ?></h5>
-                    <div class="trend-text text-muted mt-1">Needs attention</div>
-                </div>
-            </div>
-        </div>
-    </div>
-    <!-- In Progress -->
-    <div class="col-sm-6 col-xl-3">
-        <div class="card metric-card border-0 shadow-sm h-100 rounded-3 p-1">
-            <div class="card-body p-2 d-flex align-items-center">
-                <div class="icon-box-lg bg-danger bg-opacity-10 text-danger me-2 flex-shrink-0">
-                    <i class="fa-solid fa-circle-exclamation"></i>
-                </div>
-                <div>
-                    <div class="card-title-sm">In Progress</div>
-                    <h5 class="fw-bold mb-0 text-dark"><?= $inProgressCount ?></h5>
-                    <div class="trend-text text-muted mt-1">Being handled</div>
-                </div>
-            </div>
-        </div>
-    </div>
-    <!-- Resolved -->
-    <div class="col-sm-6 col-xl-3">
-        <div class="card metric-card border-0 shadow-sm h-100 rounded-3 p-1">
-            <div class="card-body p-2 d-flex align-items-center">
-                <div class="icon-box-lg bg-success bg-opacity-10 text-success me-2 flex-shrink-0">
-                    <i class="fa-solid fa-circle-check"></i>
-                </div>
-                <div>
-                    <div class="card-title-sm">Resolved</div>
-                    <h5 class="fw-bold mb-0 text-dark"><?= $resolvedCount ?></h5>
-                    <div class="trend-text text-muted mt-1">This month</div>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
+<!-- Top Stats Row: each card filters the list below -->
+<?= statCards([
+    ['label' => 'Total Complaints', 'value' => $totalComplaints, 'sub' => ($pendingCount + $inProgressCount) . ' unresolved',
+     'icon' => 'fa-solid fa-comment-dots', 'color' => 'primary', 'href' => 'complaints.php', 'active' => $filterStatus === 'all', 'aria' => 'Show all complaints'],
+    ['label' => 'Pending', 'value' => $pendingCount, 'sub' => 'Waiting for a reply', 'subClass' => $pendingCount ? 'text-warning' : 'text-muted',
+     'icon' => 'fa-solid fa-clock', 'color' => 'warning', 'href' => 'complaints.php?status=pending', 'active' => $filterStatus === 'pending', 'aria' => 'Show pending complaints'],
+    ['label' => 'In Progress', 'value' => $inProgressCount, 'sub' => 'Replied, still open',
+     'icon' => 'fa-solid fa-spinner', 'color' => 'info', 'href' => 'complaints.php?status=' . urlencode('in progress'), 'active' => $filterStatus === 'in progress', 'aria' => 'Show complaints in progress'],
+    ['label' => 'Resolved', 'value' => $resolvedCount, 'sub' => $totalComplaints ? round($resolvedCount / $totalComplaints * 100) . '% of all complaints' : 'None yet', 'subClass' => 'text-success',
+     'icon' => 'fa-solid fa-circle-check', 'color' => 'success', 'href' => 'complaints.php?status=resolved', 'active' => $filterStatus === 'resolved', 'aria' => 'Show resolved complaints'],
+]) ?>
 
 <!-- Main Content Grid -->
 <div class="row g-2">
@@ -232,6 +183,7 @@ require_once 'header.php';
             </div>
             <select name="status" class="form-select form-select-sm border rounded-2 shadow-none text-muted" style="width:110px; font-size:0.7rem;" onchange="this.form.submit()">
                 <option value="all" <?= $filterStatus === 'all' ? 'selected' : '' ?>>All Status</option>
+                <option value="unresolved" <?= $filterStatus === 'unresolved' ? 'selected' : '' ?>>Unresolved</option>
                 <option value="pending" <?= $filterStatus === 'pending' ? 'selected' : '' ?>>Pending</option>
                 <option value="in progress" <?= $filterStatus === 'in progress' ? 'selected' : '' ?>>In Progress</option>
                 <option value="resolved" <?= $filterStatus === 'resolved' ? 'selected' : '' ?>>Resolved</option>

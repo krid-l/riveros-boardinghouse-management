@@ -4,6 +4,8 @@ require_once '../includes/auth.php';
 require_once '../includes/billing.php';
 require_once '../includes/tenant_actions.php';
 require_once '../includes/pagination.php';
+require_once '../includes/sms_reminders.php';   // REMINDER_DAYS_BEFORE, for "due soon"
+require_once '../includes/ui.php';
 requireAdmin();
 
 $error = '';
@@ -30,8 +32,20 @@ if (empty($success) && !empty($_GET['msg'])) {
 // Fetch stats
 $totalTenants = $pdo->query("SELECT COUNT(*) FROM tenants WHERE status = 'active'")->fetchColumn();
 $occupiedRooms = $pdo->query("SELECT COUNT(DISTINCT room_id) FROM tenants WHERE room_id IS NOT NULL AND status = 'active'")->fetchColumn();
-// Includes deactivated tenants who still owe money: it's still money owed to the house.
-$totalOutstanding = $pdo->query("SELECT SUM(CASE WHEN balance > 0 THEN balance ELSE 0 END) FROM tenants")->fetchColumn() ?: 0;
+
+// Active tenants by billing state, for the summary cards (each one filters the list).
+$tenantCounts = ['paid' => 0, 'due' => 0, 'overdue' => 0];
+$tenantAmounts = ['due' => 0.0, 'overdue' => 0.0];
+$cardNotYetDue = chargesNotYetDue($pdo);
+foreach ($pdo->query("SELECT id, balance, status FROM tenants WHERE status = 'active'")->fetchAll() as $t) {
+    $billing = tenantBillingStatus($t, $cardNotYetDue);
+    $tenantCounts[$billing['key']]++;
+    if ($billing['key'] === 'overdue') {
+        $tenantAmounts['overdue'] += $billing['balance'];
+    } elseif ($billing['key'] === 'due') {
+        $tenantAmounts['due'] += $billing['balance'];
+    }
+}
 
 // Total paid this month
 $monthStart = date('Y-m-01');
@@ -49,7 +63,7 @@ $filterStatus = queryParam('status', 'all') ?: 'all';
 // Deactivated tenants are hidden by default: they are former tenants and just clutter the
 // list. The "Show deactivated" button brings them back with ?deactivated=1, and picking
 // Deactivated from the status dropdown obviously has to show them too.
-$showDeactivated = queryParam('deactivated') === '1' || $filterStatus === 'deactivated';
+$showDeactivated = queryParam('deactivated') === '1' || $filterStatus === 'deactivated' || $filterStatus === 'unpaid';
 
 // not_yet_due is the part of a tenant's balance that isn't past its due date yet. It is what
 // tenantBillingStatus() uses to tell "Unpaid" from "Overdue", expressed here so the same
@@ -83,6 +97,15 @@ switch ($filterStatus) {
         $where[] = "x.status = 'active' AND x.balance > 0 AND (x.balance - x.not_yet_due) > 0.005"; break;
     case 'due':
         $where[] = "x.status = 'active' AND x.balance > 0 AND (x.balance - x.not_yet_due) <= 0.005"; break;
+    case 'due_soon':
+        // Nothing late yet, and a bill falls due within the reminder window.
+        $where[] = "x.status = 'active' AND x.balance > 0 AND (x.balance - x.not_yet_due) <= 0.005
+                    AND EXISTS (SELECT 1 FROM charges c WHERE c.tenant_id = x.id AND c.amount > 0 AND c.due_date BETWEEN ? AND ?)";
+        array_push($params, date('Y-m-d'), date('Y-m-d', strtotime('+' . REMINDER_DAYS_BEFORE . ' days')));
+        break;
+    case 'unpaid':
+        // Anyone who owes money, moved-out tenants included (the dashboard's "Total Unpaid Rent").
+        $where[] = "x.balance > 0"; break;
 }
 if (!$showDeactivated) {
     $where[] = "x.status <> 'deactivated'";
@@ -121,6 +144,7 @@ usort($allRooms, fn($a, $b) => strnatcasecmp((string)$a['room_number'], (string)
 require_once 'header.php';
 ?>
 
+<?php if (!empty($error) || !empty($success)): ?>
 <div class="container-fluid mb-3">
     <?php if (!empty($error)): ?>
         <div class="alert alert-danger alert-dismissible fade show shadow-sm border-0" role="alert" style="font-size: 0.85rem;">
@@ -135,6 +159,7 @@ require_once 'header.php';
         </div>
     <?php endif; ?>
 </div>
+<?php endif; ?>
 
 <style>
     .compact-table th {
@@ -179,64 +204,24 @@ require_once 'header.php';
 </style>
 
 <!-- Header Section -->
-<div class="row align-items-center mb-4">
-    <div class="col-xl-4 col-lg-5 mb-3 mb-lg-0">
-        <p class="text-muted mb-2" style="font-size: 0.85rem;">Add new tenants and manage existing tenant information.</p>
-        <button type="button" class="btn btn-primary shadow-sm fw-semibold px-4" data-bs-toggle="modal" data-bs-target="#addTenantModal">
-            <i class="fa-solid fa-user-plus me-2"></i> Add New Tenant
-        </button>
-    </div>
-    
-    <!-- Stats Cards in Header -->
-    <div class="col-xl-8 col-lg-7">
-        <div class="card border-0 shadow-sm rounded-3">
-            <div class="card-body p-0">
-                <div class="row g-0">
-                    <!-- Metric 1 -->
-                    <div class="col-6 col-md-3 p-2 d-flex align-items-center border-end border-light">
-                        <div class="bg-primary bg-opacity-10 text-primary rounded d-flex justify-content-center align-items-center me-2 me-xl-3 flex-shrink-0" style="width: 35px; height: 35px;">
-                            <i class="fa-solid fa-users"></i>
-                        </div>
-                        <div>
-                            <h5 class="mb-0 fw-bold text-dark fs-6"><?= $totalTenants ?></h5>
-                            <small class="text-muted" style="font-size:0.6rem; font-weight:600;">Total Tenants</small>
-                        </div>
-                    </div>
-                    <!-- Metric 2 -->
-                    <div class="col-6 col-md-3 p-2 d-flex align-items-center border-end border-light">
-                        <div class="bg-success bg-opacity-10 text-success rounded d-flex justify-content-center align-items-center me-2 me-xl-3 flex-shrink-0" style="width: 35px; height: 35px;">
-                            <i class="fa-solid fa-bed"></i>
-                        </div>
-                        <div>
-                            <h5 class="mb-0 fw-bold text-dark fs-6"><?= $occupiedRooms ?></h5>
-                            <small class="text-muted" style="font-size:0.6rem; font-weight:600;">Occupied Rooms</small>
-                        </div>
-                    </div>
-                    <!-- Metric 3 -->
-                    <div class="col-6 col-md-3 p-2 d-flex align-items-center border-end border-light">
-                        <div class="bg-danger bg-opacity-10 text-danger rounded d-flex justify-content-center align-items-center me-2 me-xl-3 flex-shrink-0" style="width: 35px; height: 35px;">
-                            <i class="fa-solid fa-wallet"></i>
-                        </div>
-                        <div>
-                            <h5 class="mb-0 fw-bold text-dark fs-6">₱<?= number_format($totalOutstanding, 2) ?></h5>
-                            <small class="text-muted" style="font-size:0.6rem; font-weight:600;">Total Unpaid Rent</small>
-                        </div>
-                    </div>
-                    <!-- Metric 4 -->
-                    <div class="col-6 col-md-3 p-2 d-flex align-items-center">
-                        <div class="bg-success bg-opacity-10 text-success rounded d-flex justify-content-center align-items-center me-2 me-xl-3 flex-shrink-0" style="width: 35px; height: 35px;">
-                            <i class="fa-solid fa-money-bill-trend-up"></i>
-                        </div>
-                        <div>
-                            <h5 class="mb-0 fw-bold text-dark fs-6">₱<?= number_format($totalPaidThisMonth, 2) ?></h5>
-                            <small class="text-muted" style="font-size:0.6rem; font-weight:600;">Paid (This Month)</small>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
+<div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+    <p class="text-muted mb-0" style="font-size: 0.85rem;">Add new tenants and manage existing tenant information.</p>
+    <button type="button" class="btn btn-primary shadow-sm fw-semibold px-4" data-bs-toggle="modal" data-bs-target="#addTenantModal">
+        <i class="fa-solid fa-user-plus me-2"></i> Add New Tenant
+    </button>
 </div>
+
+<!-- Summary cards: each one filters the list below -->
+<?= statCards([
+    ['label' => 'Active Tenants', 'value' => (int)$totalTenants, 'sub' => "In $occupiedRooms " . ((int)$occupiedRooms === 1 ? 'room' : 'rooms'),
+     'icon' => 'fa-solid fa-users', 'color' => 'primary', 'href' => 'tenants.php', 'active' => $filterStatus === 'all', 'aria' => 'Show all tenants'],
+    ['label' => 'Paid', 'value' => $tenantCounts['paid'], 'sub' => peso((float)$totalPaidThisMonth) . ' paid this month', 'subClass' => 'text-success',
+     'icon' => 'fa-solid fa-circle-check', 'color' => 'success', 'href' => 'tenants.php?status=paid', 'active' => $filterStatus === 'paid', 'aria' => 'Show tenants who are paid up'],
+    ['label' => 'Unpaid', 'value' => $tenantCounts['due'], 'sub' => peso($tenantAmounts['due']) . ' not yet due', 'subClass' => 'text-warning',
+     'icon' => 'fa-regular fa-clock', 'color' => 'warning', 'href' => 'tenants.php?status=due', 'active' => $filterStatus === 'due', 'aria' => 'Show tenants with rent not yet due'],
+    ['label' => 'Overdue', 'value' => $tenantCounts['overdue'], 'sub' => peso($tenantAmounts['overdue']) . ' owed', 'subClass' => $tenantCounts['overdue'] ? 'text-danger' : 'text-muted',
+     'icon' => 'fa-solid fa-triangle-exclamation', 'color' => 'danger', 'href' => 'tenants.php?status=overdue', 'active' => $filterStatus === 'overdue', 'aria' => 'Show overdue tenants'],
+]) ?>
 
 <!-- Main Content Grid -->
 <div class="row g-4">
@@ -268,7 +253,9 @@ require_once 'header.php';
                         <option value="all" <?= $filterStatus === 'all' ? 'selected' : '' ?>>All Status</option>
                         <option value="paid" <?= $filterStatus === 'paid' ? 'selected' : '' ?>>Paid</option>
                         <option value="due" <?= $filterStatus === 'due' ? 'selected' : '' ?>>Unpaid</option>
+                        <option value="due_soon" <?= $filterStatus === 'due_soon' ? 'selected' : '' ?>>Due in <?= REMINDER_DAYS_BEFORE ?> days</option>
                         <option value="overdue" <?= $filterStatus === 'overdue' ? 'selected' : '' ?>>Overdue</option>
+                        <option value="unpaid" <?= $filterStatus === 'unpaid' ? 'selected' : '' ?>>All unpaid</option>
                         <option value="deactivated" <?= $filterStatus === 'deactivated' ? 'selected' : '' ?>>Deactivated</option>
                     </select>
 

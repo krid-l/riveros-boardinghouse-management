@@ -3,6 +3,8 @@ require_once '../includes/db.php';
 require_once '../includes/auth.php';
 require_once '../includes/billing.php';
 require_once '../includes/tenant_actions.php';
+require_once '../includes/ui.php';
+require_once '../includes/pagination.php';
 requireAdmin();
 
 $error = '';
@@ -106,21 +108,36 @@ $totalRooms = count($rooms);
 $totalCapacity = 0;
 $potentialValue = 0;   // if every bed were taken
 $currentValue = 0;     // from the beds taken now
-$occupiedRooms = 0;
+$occupiedRooms = 0;      // full rooms
+$roomsWithSpace = 0;     // can take someone now (not under maintenance)
+$freeBeds = 0;
+$maintenanceRooms = 0;
 
-foreach ($rooms as $r) {
+foreach ($rooms as &$r) {
     $totalCapacity += $r['capacity'];
     $potentialValue += $r['price_per_month'];
     $occCount = isset($tenantsByRoom[$r['id']]) ? count($tenantsByRoom[$r['id']]) : 0;
     $currentValue += rentShare((float)$r['price_per_month'], (int)$r['capacity']) * min($occCount, max(1, (int)$r['capacity']));
-    if ($occCount >= $r['capacity'] && $r['capacity'] > 0) {
+    if ($r['status'] === 'maintenance') {
+        $maintenanceRooms++;   // set by hand; never changed here
+        continue;
+    }
+    // Occupied / vacant follows who lives there.
+    $isFull = $occCount >= $r['capacity'] && $r['capacity'] > 0;
+    $derived = $isFull ? 'occupied' : 'vacant';
+    if ($r['status'] !== $derived) {
+        $pdo->prepare("UPDATE rooms SET status = ? WHERE id = ?")->execute([$derived, $r['id']]);
+        $r['status'] = $derived;
+    }
+    if ($isFull) {
         $occupiedRooms++;
-        if ($r['status'] !== 'occupied') {
-            $pdo->prepare("UPDATE rooms SET status = 'occupied' WHERE id = ?")->execute([$r['id']]);
-            $r['status'] = 'occupied';
-        }
+    } else {
+        $roomsWithSpace++;
+        $freeBeds += (int)$r['capacity'] - $occCount;
     }
 }
+unset($r);
+$showFilter = in_array(queryParam('show'), ['available', 'space', 'partial', 'occupied', 'maintenance'], true) ? queryParam('show') : 'all';
 
 require_once 'header.php';
 ?>
@@ -181,62 +198,17 @@ require_once 'header.php';
             </div>
         </div>
 
-        <!-- Stats Row -->
-        <div class="row g-3 mb-4">
-            <div class="col-6 col-xl-3">
-                <div class="card border-0 shadow-sm h-100">
-                    <div class="card-body d-flex align-items-center p-3">
-                        <div class="bg-primary bg-opacity-10 text-primary rounded p-3 me-3 d-flex justify-content-center align-items-center" style="width:45px; height:45px;">
-                            <i class="fa-solid fa-bed fa-lg"></i>
-                        </div>
-                        <div>
-                            <h4 class="fw-bold mb-0 text-dark fs-5"><?= $totalRooms ?></h4>
-                            <small class="text-muted fw-semibold" style="font-size:0.75rem;">Total Rooms</small>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            <div class="col-6 col-xl-3">
-                <div class="card border-0 shadow-sm h-100">
-                    <div class="card-body d-flex align-items-center p-3">
-                        <div class="bg-success bg-opacity-10 text-success rounded p-3 me-3 d-flex justify-content-center align-items-center" style="width:45px; height:45px;">
-                            <i class="fa-solid fa-users fa-lg"></i>
-                        </div>
-                        <div>
-                            <h4 class="fw-bold mb-0 text-dark fs-5"><?= $totalCapacity ?></h4>
-                            <small class="text-muted fw-semibold" style="font-size:0.75rem;">Total Capacity</small>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            <div class="col-6 col-xl-3">
-                <div class="card border-0 shadow-sm h-100">
-                    <div class="card-body d-flex align-items-center p-3">
-                        <div class="bg-warning bg-opacity-10 text-warning rounded p-3 me-3 d-flex justify-content-center align-items-center" style="width:45px; height:45px;">
-                            <i class="fa-solid fa-peso-sign fa-lg"></i>
-                        </div>
-                        <div class="flex-grow-1" style="min-width:0;">
-                            <h4 class="fw-bold mb-0 text-dark fs-6 text-nowrap">₱<?= number_format($currentValue, 2) ?></h4>
-                            <small class="text-muted fw-semibold d-block" style="font-size:0.72rem;">Monthly Income Now</small>
-                            <div class="text-muted text-nowrap" style="font-size:0.62rem;">₱<?= number_format($potentialValue) ?> if full</div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            <div class="col-6 col-xl-3">
-                <div class="card border-0 shadow-sm h-100">
-                    <div class="card-body d-flex align-items-center p-3">
-                        <div class="bg-secondary bg-opacity-10 text-secondary rounded p-3 me-3 d-flex justify-content-center align-items-center" style="width:45px; height:45px;">
-                            <i class="fa-solid fa-door-closed fa-lg"></i>
-                        </div>
-                        <div>
-                            <h4 class="fw-bold mb-0 text-dark fs-5"><?= $occupiedRooms ?></h4>
-                            <small class="text-muted fw-semibold" style="font-size:0.75rem;">Occupied Rooms</small>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
+        <!-- Stats Row: each card filters the list below -->
+        <?= statCards([
+            ['label' => 'Total Rooms', 'value' => $totalRooms, 'sub' => "$totalCapacity beds" . ($maintenanceRooms ? " · $maintenanceRooms under maintenance" : ''),
+             'icon' => 'fa-solid fa-door-open', 'color' => 'primary', 'href' => 'rooms.php', 'active' => $showFilter === 'all', 'aria' => 'Show all rooms'],
+            ['label' => 'With Free Beds', 'value' => $roomsWithSpace, 'sub' => $freeBeds . ' free ' . ($freeBeds === 1 ? 'bed' : 'beds'), 'subClass' => 'text-success',
+             'icon' => 'fa-solid fa-bed', 'color' => 'success', 'href' => 'rooms.php?show=space', 'active' => $showFilter === 'space', 'aria' => 'Show rooms with free beds'],
+            ['label' => 'Full Rooms', 'value' => $occupiedRooms, 'sub' => 'Every bed taken',
+             'icon' => 'fa-solid fa-door-closed', 'color' => 'secondary', 'href' => 'rooms.php?show=occupied', 'active' => $showFilter === 'occupied', 'aria' => 'Show full rooms'],
+            ['label' => 'Monthly Income Now', 'value' => peso((float)$currentValue), 'sub' => peso((float)$potentialValue) . ' if every bed is taken',
+             'icon' => 'fa-solid fa-peso-sign', 'color' => 'warning', 'href' => 'reports.php?tab=financial', 'aria' => 'Open the financial report'],
+        ]) ?>
 
         <!-- Filters -->
         <div class="d-flex flex-column flex-md-row gap-3 mb-4">
@@ -246,7 +218,8 @@ require_once 'header.php';
             </div>
             <select class="form-select bg-white border-0 shadow-sm w-auto fw-semibold text-dark" id="statusFilter" onchange="applyRoomFilters()">
                 <option value="all">All Status</option>
-                <option value="available">Available</option>
+                <option value="space">With free beds</option>
+                <option value="available">Available (empty)</option>
                 <option value="partial">Partial</option>
                 <option value="occupied">Occupied (full)</option>
                 <option value="maintenance">Maintenance</option>
@@ -728,7 +701,9 @@ function applyRoomFilters() {
     const status = document.getElementById('statusFilter').value;
     let shown = 0;
     document.querySelectorAll('.room-row').forEach(row => {
-        const ok = row.dataset.search.includes(query) && (status === 'all' || row.dataset.status === status);
+        const statusOk = status === 'all' || row.dataset.status === status
+            || (status === 'space' && (row.dataset.status === 'available' || row.dataset.status === 'partial'));
+        const ok = row.dataset.search.includes(query) && statusOk;
         row.style.display = ok ? '' : 'none';
         if (ok) shown++;
     });
@@ -758,6 +733,12 @@ function sortRooms(how) {
     try { localStorage.setItem('roomSort', how); } catch (e) {}
 }
 document.addEventListener('DOMContentLoaded', () => {
+    // The summary cards and the dashboard link here with ?show=space etc.
+    const show = <?= json_encode($showFilter) ?>;
+    if (show !== 'all') {
+        document.getElementById('statusFilter').value = show;
+        applyRoomFilters();
+    }
     let saved = 'number';
     try { saved = localStorage.getItem('roomSort') || 'number'; } catch (e) {}
     if (saved !== 'number') sortRooms(saved);

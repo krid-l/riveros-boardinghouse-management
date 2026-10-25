@@ -8,6 +8,7 @@ require_once '../includes/billing.php';
 require_once '../includes/pagination.php';
 require_once '../includes/uploads.php';
 require_once '../includes/notifications.php';
+require_once '../includes/ui.php';
 
 // --- ACTION HANDLING ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'send_reminders') {
@@ -280,13 +281,6 @@ require_once 'header.php';
 
 <style>
     body { background-color: #f8fafc; }
-    .metric-card { transition: transform 0.2s; border: 1px solid #f1f5f9; cursor: pointer; }
-    .metric-card:hover { transform: translateY(-2px); box-shadow: 0 5px 10px -3px rgba(0,0,0,0.05); border-color: #bfdbfe; }
-    .metric-card .view-hint { font-size: 0.6rem; color: #94a3b8; font-weight: 600; }
-    .metric-card:hover .view-hint { color: #2563eb; }
-    .metric-card .view-hint { line-height: 1.2; vertical-align: baseline; }
-    .metric-card:has(.stretched-link:focus-visible) { outline: 2px solid #2563eb; outline-offset: 2px; }
-    .metric-card .stretched-link:focus-visible { box-shadow: none; }
     .stat-table { font-size: 0.78rem; }
     .stat-table th { font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.4px; color: #64748b; white-space: nowrap; }
     
@@ -371,73 +365,20 @@ require_once 'header.php';
     </div>
 </div>
 
-<!-- Top Stats Row -->
-<div class="row g-2 mb-3">
-    <!-- Total Collected -->
-    <div class="col-sm-6 col-xl-3">
-        <div class="card metric-card border-0 shadow-sm h-100 rounded-3 p-1">
-            <div class="card-body p-2 d-flex align-items-center">
-                <div class="icon-box-lg bg-primary bg-opacity-10 text-primary me-2 flex-shrink-0">
-                    <i class="fa-solid fa-wallet"></i>
-                </div>
-                <div>
-                    <div class="card-title-sm">Total Collected (This Month)</div>
-                    <h5 class="fw-bold mb-0 text-dark">₱<?= number_format($totalCollected, 2) ?></h5>
-                    <div class="trend-text <?= $totalCollected >= $lastMonthCollected ? 'text-success' : 'text-danger' ?> mt-1"><?= $collectedTrend ?></div>
-                    <button type="button" class="view-hint btn btn-link p-0 mt-1 text-decoration-none stretched-link" data-bs-toggle="modal" data-bs-target="#statCollectedModal" aria-label="Show how this month's collections break down">View details <i class="fa-solid fa-chevron-right" style="font-size:0.5rem;"></i></button>
-                </div>
-            </div>
-        </div>
-    </div>
-    <!-- Due Soon -->
-    <div class="col-sm-6 col-xl-3">
-        <div class="card metric-card border-0 shadow-sm h-100 rounded-3 p-1">
-            <div class="card-body p-2 d-flex align-items-center">
-                <div class="icon-box-lg bg-warning bg-opacity-10 text-warning me-2 flex-shrink-0">
-                    <i class="fa-regular fa-clock"></i>
-                </div>
-                <div>
-                    <div class="card-title-sm">Due Soon</div>
-                    <h5 class="fw-bold mb-0 text-dark">₱<?= number_format($dueSoonAmount, 2) ?></h5>
-                    <div class="trend-text text-warning mt-1"><?= $dueSoonCount ?> tenants · due <?= date('M j', strtotime(billingDueDate(date('Y-m')))) ?></div>
-                    <button type="button" class="view-hint btn btn-link p-0 mt-1 text-decoration-none stretched-link" data-bs-toggle="modal" data-bs-target="#statDueModal" aria-label="Show who has rent coming due">View details <i class="fa-solid fa-chevron-right" style="font-size:0.5rem;"></i></button>
-                </div>
-            </div>
-        </div>
-    </div>
-    <!-- Overdue -->
-    <div class="col-sm-6 col-xl-3">
-        <div class="card metric-card border-0 shadow-sm h-100 rounded-3 p-1">
-            <div class="card-body p-2 d-flex align-items-center">
-                <div class="icon-box-lg bg-danger bg-opacity-10 text-danger me-2 flex-shrink-0">
-                    <i class="fa-solid fa-triangle-exclamation"></i>
-                </div>
-                <div>
-                    <div class="card-title-sm">Overdue</div>
-                    <h5 class="fw-bold mb-0 text-dark">₱<?= number_format($actualOverdueAmount, 2) ?></h5>
-                    <div class="trend-text text-danger mt-1"><?= $actualOverdueCount ?> tenants</div>
-                    <button type="button" class="view-hint btn btn-link p-0 mt-1 text-decoration-none stretched-link" data-bs-toggle="modal" data-bs-target="#statOverdueModal" aria-label="Show who is overdue">View details <i class="fa-solid fa-chevron-right" style="font-size:0.5rem;"></i></button>
-                </div>
-            </div>
-        </div>
-    </div>
-    <!-- Paid Payments -->
-    <div class="col-sm-6 col-xl-3">
-        <div class="card metric-card border-0 shadow-sm h-100 rounded-3 p-1">
-            <div class="card-body p-2 d-flex align-items-center">
-                <div class="icon-box-lg bg-success bg-opacity-10 text-success me-2 flex-shrink-0">
-                    <i class="fa-regular fa-circle-check"></i>
-                </div>
-                <div>
-                    <div class="card-title-sm">Paid Payments</div>
-                    <h5 class="fw-bold mb-0 text-dark"><?= $paidCount ?></h5>
-                    <div class="trend-text text-success mt-1"><span class="dot bg-success"></span> This month</div>
-                    <button type="button" class="view-hint btn btn-link p-0 mt-1 text-decoration-none stretched-link" data-bs-toggle="modal" data-bs-target="#statPaidModal" aria-label="Show this month's paid payments">View details <i class="fa-solid fa-chevron-right" style="font-size:0.5rem;"></i></button>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
+<!-- Top Stats Row: each card opens the list behind its figure -->
+<?= statCards([
+    ['label' => 'Collected (This Month)', 'value' => peso((float)$totalCollected), 'sub' => $collectedTrend,
+     'subClass' => $totalCollected >= $lastMonthCollected ? 'text-success' : 'text-danger',
+     'icon' => 'fa-solid fa-wallet', 'color' => 'primary', 'modal' => 'statCollectedModal', 'aria' => "Show how this month's collections break down"],
+    ['label' => 'Due Soon', 'value' => peso((float)$dueSoonAmount),
+     'sub' => $dueSoonCount . ' ' . ($dueSoonCount == 1 ? 'tenant' : 'tenants') . ' · due ' . date('M j', strtotime(billingDueDate(date('Y-m')))), 'subClass' => 'text-warning',
+     'icon' => 'fa-regular fa-clock', 'color' => 'warning', 'modal' => 'statDueModal', 'aria' => 'Show who has rent coming due'],
+    ['label' => 'Overdue', 'value' => peso((float)$actualOverdueAmount),
+     'sub' => $actualOverdueCount . ' ' . ($actualOverdueCount == 1 ? 'tenant' : 'tenants'), 'subClass' => $actualOverdueCount ? 'text-danger' : 'text-muted',
+     'icon' => 'fa-solid fa-triangle-exclamation', 'color' => 'danger', 'modal' => 'statOverdueModal', 'aria' => 'Show who is overdue'],
+    ['label' => 'Paid Payments', 'value' => $paidCount, 'sub' => 'This month', 'subClass' => 'text-success',
+     'icon' => 'fa-regular fa-circle-check', 'color' => 'success', 'modal' => 'statPaidModal', 'aria' => "Show this month's paid payments"],
+]) ?>
 
 <!-- Main Content Grid -->
 <div class="row g-2">

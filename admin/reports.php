@@ -3,6 +3,7 @@ require_once '../includes/db.php';
 require_once '../includes/auth.php';
 require_once '../includes/billing.php';
 require_once '../includes/pagination.php';
+require_once '../includes/ui.php';
 requireAdmin();
 
 // --- DATA FETCHING ---
@@ -205,14 +206,18 @@ require_once 'header.php';
 <!-- TAB: OVERVIEW (Default) -->
 <!-- ============================================== -->
 <div id="tab-overview" class="tab-pane <?= $activeTab === 'overview' ? '' : 'd-none' ?>">
-    <!-- Top KPIs -->
-    <div class="row row-cols-2 row-cols-md-3 row-cols-xl-5 g-2 mb-3">
-        <div class="col"><div class="metric-card h-100 p-2 d-flex align-items-center shadow-sm"><div class="icon-box-lg bg-primary bg-opacity-10 text-primary me-2 flex-shrink-0"><i class="fa-solid fa-user-group"></i></div><div><div class="card-title-sm">Total Tenants</div><h5 class="fw-bold mb-0 text-dark"><?= $totalTenants ?></h5><div class="trend-text text-muted mt-1">Currently staying</div></div></div></div>
-        <div class="col"><div class="metric-card h-100 p-2 d-flex align-items-center shadow-sm"><div class="icon-box-lg bg-info bg-opacity-10 text-info me-2 flex-shrink-0"><i class="fa-solid fa-door-open"></i></div><div><div class="card-title-sm">Total Rooms</div><h5 class="fw-bold mb-0 text-dark"><?= $totalRooms ?></h5><div class="trend-text text-muted mt-1">No change</div></div></div></div>
-        <div class="col"><div class="metric-card h-100 p-2 d-flex align-items-center shadow-sm"><div class="icon-box-lg bg-success bg-opacity-10 text-success me-2 flex-shrink-0"><i class="fa-solid fa-bed"></i></div><div><div class="card-title-sm">Bed Occupancy Rate</div><h5 class="fw-bold mb-0 text-dark"><?= number_format($bedOccupancyRate, 1) ?>%</h5><div class="trend-text text-muted mt-1"><?= $totalOccupied ?> of <?= $totalCapacity ?> beds</div></div></div></div>
-        <div class="col"><div class="metric-card h-100 p-2 d-flex align-items-center shadow-sm"><div class="icon-box-lg bg-primary bg-opacity-10 text-primary me-2 flex-shrink-0"><i class="fa-solid fa-wallet"></i></div><div><div class="card-title-sm">Total Revenue</div><h5 class="fw-bold mb-0 text-dark">₱<?= number_format($totalRevenue, 2) ?></h5><div class="trend-text text-muted mt-1">All time</div></div></div></div>
-        <div class="col"><div class="metric-card h-100 p-2 d-flex align-items-center shadow-sm"><div class="icon-box-lg bg-warning bg-opacity-10 text-warning me-2 flex-shrink-0"><i class="fa-solid fa-chart-pie"></i></div><div><div class="card-title-sm">Total Unpaid Rent</div><h5 class="fw-bold mb-0 text-danger">₱<?= number_format($outstandingBalance, 2) ?></h5><div class="trend-text text-muted mt-1">Incl. moved-out tenants</div></div></div></div>
-    </div>
+    <!-- Top KPIs: same cards as the other pages; each opens the report or list behind it -->
+    <?= statCards([
+        ['label' => 'Total Tenants', 'value' => (int)$totalTenants, 'sub' => 'Currently staying',
+         'icon' => 'fa-solid fa-user-group', 'color' => 'primary', 'href' => 'reports.php?tab=tenant', 'aria' => 'Open the tenant report'],
+        ['label' => 'Bed Occupancy Rate', 'value' => number_format($bedOccupancyRate, 1) . '%',
+         'sub' => "$totalOccupied of $totalCapacity beds · $totalRooms " . ((int)$totalRooms === 1 ? 'room' : 'rooms'),
+         'icon' => 'fa-solid fa-bed', 'color' => 'success', 'href' => 'reports.php?tab=occupancy', 'aria' => 'Open the occupancy report'],
+        ['label' => 'Total Revenue', 'value' => peso((float)$totalRevenue), 'sub' => 'All time, verified payments', 'subClass' => 'text-success',
+         'icon' => 'fa-solid fa-wallet', 'color' => 'info', 'href' => 'reports.php?tab=financial', 'aria' => 'Open the financial report'],
+        ['label' => 'Total Unpaid Rent', 'value' => peso((float)$outstandingBalance), 'sub' => 'Incl. moved-out tenants', 'subClass' => $outstandingBalance > 0 ? 'text-danger' : 'text-muted',
+         'icon' => 'fa-solid fa-coins', 'color' => 'warning', 'href' => 'tenants.php?status=unpaid', 'aria' => 'View tenants with unpaid rent'],
+    ]) ?>
 
     <!-- Middle Row 1: Charts Overview -->
     <div class="row g-2 mb-3">
