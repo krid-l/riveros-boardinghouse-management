@@ -69,6 +69,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $success = 'Payment settings and GCash QR code saved successfully.';
             }
         }
+    } elseif ($action === 'update_recovery') {
+        // Where a "Forgot password?" code for this admin is texted.
+        $mobile = trim((string)($_POST['recovery_mobile'] ?? ''));
+        if ($mobile !== '' && !normalizePhMobile($mobile)) {
+            $error = 'Enter a Philippine mobile number, like 0917 123 4567.';
+        } else {
+            $pdo->prepare("UPDATE users SET recovery_mobile = ? WHERE id = ?")->execute([$mobile !== '' ? $mobile : null, $_SESSION['user_id']]);
+            $success = $mobile !== ''
+                ? 'Recovery mobile number saved. "Forgot password?" codes will be texted to it.'
+                : 'Recovery mobile number removed.';
+        }
+    } elseif ($action === 'update_login_bg') {
+        // Photo behind the login page. Kept with the other site images (the "qr" folder, which
+        // already exists as a storage bucket on the deployed site).
+        $upload = isset($_FILES['login_bg']) ? storeUploadedImage($_FILES['login_bg'], 'qr') : ['path' => null, 'error' => null];
+        if ($upload['error']) {
+            $error = $upload['error'];
+        } elseif ($upload['path']) {
+            deleteLocalUpload(readSetting($pdo, 'login_bg_path'));
+            updateSetting($pdo, 'login_bg_path', $upload['path']);
+            $success = 'Login page background updated.';
+        } else {
+            $error = 'Choose an image to upload.';
+        }
+    } elseif ($action === 'delete_login_bg') {
+        deleteLocalUpload(readSetting($pdo, 'login_bg_path'));
+        updateSetting($pdo, 'login_bg_path', '');
+        $success = 'Login page background removed; the default design is back.';
     } elseif ($action === 'delete_qr') {
         deleteLocalUpload(readSetting($pdo, 'gcash_qr_path'));
         updateSetting($pdo, 'gcash_qr_path', '');
@@ -150,6 +178,7 @@ $s = function($key) use ($settingsMap) {
 
 // GCash QR code: a Supabase URL when deployed, an uploads/ path when run locally.
 $qrSrc = uploadSrc($settingsMap['gcash_qr_path'] ?? '', '../');
+$loginBgSrc = uploadSrc($settingsMap['login_bg_path'] ?? '', '../');
 
 // SMS: whether a token is saved (the token itself never goes back to the browser), and the
 // latest texts, so the admin can see what went out and why anything didn't.
@@ -161,6 +190,7 @@ $smsLog = $pdo->query("SELECT l.*, t.first_name, t.last_name FROM sms_log l
                        ORDER BY l.created_at DESC, l.id DESC LIMIT 15")->fetchAll();
 $smsPurposeLabels = [
     'payment_verified' => 'Payment verified', 'payment_covered' => 'Paid by roommate', 'move_in_payment' => 'Move-in payment',
+    'password_reset' => 'Password reset code', 'registration' => 'Welcome / login details',
     'payment_rejected' => 'Payment rejected', 'reminder_due' => 'Rent due soon',
     'reminder_overdue' => 'Rent overdue', 'announcement' => 'Announcement', 'test' => 'Test',
 ];
@@ -288,6 +318,19 @@ require_once 'header.php';
                                 <button type="submit" class="btn btn-primary btn-save shadow-sm w-auto"><i class="fa-solid fa-lock me-2" style="font-size:0.6rem;"></i>Update Password</button>
                             </div>
                         </div>
+                    </div>
+                </div>
+            </form>
+            <form method="POST" class="settings-body border-top">
+                <input type="hidden" name="action" value="update_recovery">
+                <div class="row g-2 align-items-end">
+                    <div class="col-md-7">
+                        <label class="form-label">Recovery Mobile Number</label>
+                        <input type="text" name="recovery_mobile" class="form-control" value="<?= htmlspecialchars($user['recovery_mobile'] ?? '') ?>" placeholder="e.g., 0917 123 4567">
+                        <div class="form-text">If you forget your password, a reset code is texted here (needs SMS set up).</div>
+                    </div>
+                    <div class="col-md-5 text-md-end">
+                        <button type="submit" class="btn btn-outline-primary btn-save"><i class="fa-solid fa-mobile-screen me-1"></i>Save Number</button>
                     </div>
                 </div>
             </form>
@@ -502,6 +545,37 @@ require_once 'header.php';
             </form>
         </div>
         
+        <!-- Login Page -->
+        <div class="settings-card shadow-sm" id="login-page">
+            <form method="POST" enctype="multipart/form-data">
+                <input type="hidden" name="action" value="update_login_bg">
+                <div class="settings-header">
+                    <div>
+                        <h6 class="card-title-lg"><i class="fa-regular fa-image icon-header text-primary"></i> Login Page</h6>
+                        <div class="card-subtitle-sm">The photo shown behind the login form, e.g. your boarding house.</div>
+                    </div>
+                </div>
+                <div class="settings-body pt-2">
+                    <div class="rounded-3 border mb-2 d-flex align-items-center justify-content-center bg-light" style="height: 130px; overflow: hidden;">
+                        <?php if ($loginBgSrc): ?>
+                            <img src="<?= htmlspecialchars($loginBgSrc) ?>" alt="Login page background" style="width: 100%; height: 100%; object-fit: cover;">
+                        <?php else: ?>
+                            <span class="text-muted small"><i class="fa-regular fa-image me-1"></i>Default design (no photo uploaded)</span>
+                        <?php endif; ?>
+                    </div>
+                    <input type="file" name="login_bg" class="form-control mb-1" accept="image/png,image/jpeg,image/webp" required>
+                    <div class="form-text mb-2">JPG, PNG or WebP, up to 5MB. A wide photo works best.</div>
+                    <button type="submit" class="btn btn-primary btn-save shadow-sm w-100"><i class="fa-solid fa-upload me-2" style="font-size:0.65rem;"></i>Upload Background</button>
+                </div>
+            </form>
+            <?php if ($loginBgSrc): ?>
+            <form method="POST" class="px-4 pb-3 text-center" onsubmit="return confirm('Remove the login background photo?');">
+                <input type="hidden" name="action" value="delete_login_bg">
+                <button type="submit" class="btn btn-link text-danger text-decoration-none p-0" style="font-size:0.75rem;">Remove photo</button>
+            </form>
+            <?php endif; ?>
+        </div>
+
         <!-- Account Information -->
         <div class="settings-card shadow-sm">
             <div class="settings-header">
@@ -515,15 +589,17 @@ require_once 'header.php';
                     <span class="text-dark">Administrator</span>
                 </div>
                 <div class="info-row">
+                    <span class="text-muted fw-semibold">Account Created</span>
+                    <span class="text-dark"><?= !empty($user['created_at']) ? date('M j, Y', strtotime($user['created_at'])) : '—' ?></span>
+                </div>
+                <div class="info-row">
                     <span class="text-muted fw-semibold">Last Login</span>
-                    <span class="text-dark">Aug 26, 2025 10:30 AM</span>
+                    <span class="text-dark"><?= !empty($user['last_login_at']) ? date('M j, Y g:i A', strtotime($user['last_login_at'])) : '—' ?></span>
                 </div>
-                <div class="info-row mb-4">
-                    <span class="text-muted fw-semibold">Account Status</span>
-                    <span class="badge-active px-2 py-1">Active</span>
+                <div class="info-row">
+                    <span class="text-muted fw-semibold">Recovery Mobile</span>
+                    <span class="text-dark"><?= ($rm = normalizePhMobile($user['recovery_mobile'] ?? '')) ? formatPhMobile($rm) : '<span class="text-muted">Not set</span>' ?></span>
                 </div>
-                
-                <button class="btn btn-outline-danger shadow-none w-100 py-2 rounded-2 fw-semibold" style="font-size:0.7rem; border-color: #fca5a5; color: #ef4444;"><i class="fa-regular fa-trash-can me-2"></i>Deactivate Account</button>
             </div>
         </div>
         

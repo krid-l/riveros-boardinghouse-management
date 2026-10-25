@@ -9,7 +9,7 @@ require_once __DIR__ . '/billing.php';
 require_once __DIR__ . '/sql_compat.php';
 require_once __DIR__ . '/sms.php';
 
-const SCHEMA_VERSION = '7';
+const SCHEMA_VERSION = '8';
 
 function runMigrations(PDO $pdo): void {
     try {
@@ -43,6 +43,7 @@ function runMigrations(PDO $pdo): void {
         migrateToV5($pdo);
         migrateToV6($pdo);
         migrateToV7($pdo);
+        migrateToV8($pdo);
 
         $pdo->prepare("INSERT INTO settings (setting_key, setting_value) VALUES ('schema_version', ?)
                        " . sqlUpsert(['setting_key'], ['setting_value']))
@@ -85,6 +86,47 @@ function migrateBaseSchema(PDO $pdo): void {
 // v6: payments without a screenshot. Cash payments, and the advance and deposit the admin
 // records at move-in, have no GCash screenshot; databases created from the first schema
 // refused to store them.
+// v8: password reset codes (Forgot password), the admin's notifications, and tenants' requests
+// to have their deposit pay for their last month. Times in these tables are written by PHP
+// (Manila time), not the database clock, which is UTC on the deployed database.
+function migrateToV8(PDO $pdo): void {
+    // An admin's mobile number, for texting them a password reset code.
+    ensureColumn($pdo, 'users', 'recovery_mobile', 'VARCHAR(20)');
+    // Shown under Settings -> Account Information.
+    ensureColumn($pdo, 'users', 'last_login_at', 'TIMESTAMP NULL DEFAULT NULL');
+    $pdo->exec("CREATE TABLE IF NOT EXISTS password_resets (
+        id " . sqlSerialPk() . ",
+        user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        code_hash VARCHAR(255) NOT NULL,
+        attempts INT NOT NULL DEFAULT 0,
+        expires_at TIMESTAMP NULL DEFAULT NULL,
+        used_at TIMESTAMP NULL DEFAULT NULL,
+        created_at TIMESTAMP NULL DEFAULT NULL
+    )");
+    $pdo->exec("CREATE TABLE IF NOT EXISTS notifications (
+        id " . sqlSerialPk() . ",
+        type VARCHAR(40) NOT NULL,
+        title VARCHAR(150) NOT NULL,
+        message VARCHAR(255),
+        link VARCHAR(255),
+        ref VARCHAR(100),
+        is_read BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMP NULL DEFAULT NULL
+    )");
+    if (!indexExists($pdo, 'notifications', 'idx_notifications_ref')) {
+        $pdo->exec("CREATE INDEX idx_notifications_ref ON notifications (ref)");
+    }
+    $pdo->exec("CREATE TABLE IF NOT EXISTS deposit_requests (
+        id " . sqlSerialPk() . ",
+        tenant_id INT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        billing_month VARCHAR(7) NOT NULL,
+        status VARCHAR(12) NOT NULL DEFAULT 'pending',
+        note VARCHAR(255),
+        created_at TIMESTAMP NULL DEFAULT NULL,
+        decided_at TIMESTAMP NULL DEFAULT NULL
+    )");
+}
+
 // v7: rent per bed. A tenant now pays price / capacity, however many beds are taken, instead of
 // an equal split of the price among whoever lives there. Re-price the month in progress and the
 // deposits to match; months that already fell due keep what they were billed.

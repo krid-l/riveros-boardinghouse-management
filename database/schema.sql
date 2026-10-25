@@ -9,6 +9,8 @@ CREATE TABLE IF NOT EXISTS users (
     username VARCHAR(50) UNIQUE NOT NULL,
     password_hash VARCHAR(255) NOT NULL,
     temp_password VARCHAR(50),                        -- shown to the admin until the tenant changes it
+    recovery_mobile VARCHAR(20),                      -- admins: where a password reset code is texted
+    last_login_at TIMESTAMP NULL DEFAULT NULL,
     role VARCHAR(20) CHECK (role IN ('admin', 'tenant')) NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -112,6 +114,41 @@ CREATE TABLE IF NOT EXISTS sms_log (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_sms_log_ref ON sms_log (ref);
+
+-- Forgot password: one-time codes texted to the account's mobile number.
+CREATE TABLE IF NOT EXISTS password_resets (
+    id SERIAL PRIMARY KEY,
+    user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    code_hash VARCHAR(255) NOT NULL,
+    attempts INT NOT NULL DEFAULT 0,
+    expires_at TIMESTAMP NULL DEFAULT NULL,
+    used_at TIMESTAMP NULL DEFAULT NULL,
+    created_at TIMESTAMP NULL DEFAULT NULL
+);
+
+-- The admin's notification bell.
+CREATE TABLE IF NOT EXISTS notifications (
+    id SERIAL PRIMARY KEY,
+    type VARCHAR(40) NOT NULL,
+    title VARCHAR(150) NOT NULL,
+    message VARCHAR(255),
+    link VARCHAR(255),
+    ref VARCHAR(100),                                 -- stops the same notice being raised twice
+    is_read BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMP NULL DEFAULT NULL
+);
+
+-- A tenant asking for their deposit to pay for their last month; the admin approves it.
+CREATE TABLE IF NOT EXISTS deposit_requests (
+    id SERIAL PRIMARY KEY,
+    tenant_id INT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    billing_month VARCHAR(7) NOT NULL,
+    status VARCHAR(12) NOT NULL DEFAULT 'pending',   -- 'pending' | 'approved' | 'declined'
+    note VARCHAR(255),
+    created_at TIMESTAMP NULL DEFAULT NULL,
+    decided_at TIMESTAMP NULL DEFAULT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_notifications_ref ON notifications (ref);
 
 CREATE TABLE IF NOT EXISTS settings (
     setting_key VARCHAR(50) PRIMARY KEY,

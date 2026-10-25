@@ -4,6 +4,7 @@ require_once '../includes/auth.php';
 require_once '../includes/billing.php';
 require_once '../includes/sms.php';
 require_once '../includes/sms_reminders.php';
+require_once '../includes/password_reset.php';
 requireAdmin();
 
 $reminderSuccess = '';
@@ -13,6 +14,28 @@ if (!isset($_GET['id']) || !is_numeric($_GET['id'])) {
     die("Invalid Tenant ID.");
 }
 $tenantId = (int)$_GET['id'];
+
+// Reset Password: a new temporary password, shown here and texted to the tenant when SMS is set
+// up. For a tenant who forgot theirs and can't get a code by SMS.
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'reset_password' && (int)($_POST['tenant_id'] ?? 0) === $tenantId) {
+    $tStmt = $pdo->prepare("SELECT t.user_id, t.first_name, t.contact_number, t.status, u.username FROM tenants t JOIN users u ON u.id = t.user_id WHERE t.id = ?");
+    $tStmt->execute([$tenantId]);
+    $tRow = $tStmt->fetch();
+    if (!$tRow) {
+        $reminderError = 'Tenant not found.';
+    } else {
+        $newPassword = generateTempPassword();
+        $pdo->prepare("UPDATE users SET password_hash = ?, temp_password = ? WHERE id = ?")
+            ->execute([password_hash($newPassword, PASSWORD_DEFAULT), $newPassword, $tRow['user_id']]);
+        $reminderSuccess = "Password reset. New temporary password: $newPassword";
+        if ($tRow['status'] === 'active' && smsConfigured($pdo) && normalizePhMobile($tRow['contact_number'])) {
+            $r = sendSMS($pdo, $tRow['contact_number'],
+                smsConfig($pdo)['name'] . ": Hi {$tRow['first_name']}, your password was reset by the admin. Username: {$tRow['username']} Temporary password: $newPassword Please change it after you log in.",
+                'password_reset', $tenantId);
+            $reminderSuccess .= $r['sent'] > 0 ? ' (texted to the tenant).' : '. ' . smsOutcomeText($r);
+        }
+    }
+}
 
 // Handle Send Reminder action before any output
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'send_reminder' && (int)($_POST['tenant_id'] ?? 0) === $tenantId) {
@@ -541,6 +564,13 @@ require_once 'header.php';
                     <button type="submit" class="btn btn-outline-primary btn-sm text-start w-100" style="font-size:0.7rem;"
                         <?= (!smsConfigured($pdo) || (float)($tenant['balance'] ?? 0) <= 0 || $tenant['status'] !== 'active') ? 'disabled title="' . (!smsConfigured($pdo) ? 'SMS not set up' : ((float)($tenant['balance'] ?? 0) <= 0 ? 'No outstanding balance' : 'Tenant is not active')) . '"' : '' ?>>
                         <i class="fa-regular fa-envelope me-2"></i>Send Reminder
+                    </button>
+                </form>
+                <form method="POST" onsubmit="return confirm('Give this tenant a new temporary password? Their current password stops working.');">
+                    <input type="hidden" name="action" value="reset_password">
+                    <input type="hidden" name="tenant_id" value="<?= $tenantId ?>">
+                    <button type="submit" class="btn btn-outline-secondary btn-sm text-start w-100" style="font-size:0.7rem;">
+                        <i class="fa-solid fa-key me-2"></i>Reset Password
                     </button>
                 </form>
             </div>
