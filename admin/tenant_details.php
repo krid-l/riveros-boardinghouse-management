@@ -6,6 +6,7 @@ require_once '../includes/sms.php';
 require_once '../includes/sms_reminders.php';
 require_once '../includes/password_reset.php';
 require_once '../includes/tenant_profile.php';
+require_once '../includes/uploads.php';
 requireAdmin();
 
 $reminderSuccess = '';
@@ -536,7 +537,7 @@ require_once 'header.php';
                         <div class="fw-bold text-dark mb-1" style="font-size:0.6rem;">Receipt No.<br>R-<?= str_pad($p['id'], 6, '0', STR_PAD_LEFT) ?></div>
                         <div class="text-muted" style="font-size:0.55rem;">Date<br><span class="text-dark fw-semibold"><?= date('M j, Y', strtotime($p['payment_date'])) ?></span></div>
                         <div class="text-muted mt-1" style="font-size:0.55rem;">Amount<br><span class="text-dark fw-bold">₱<?= number_format($p['amount'], 2) ?></span></div>
-                        <a href="../<?= htmlspecialchars($p['receipt_path'] ?? '') ?>" target="_blank" class="btn btn-outline-primary btn-sm w-100 mt-2 py-0" style="font-size:0.6rem;">View Receipt</a>
+                        <a href="<?= htmlspecialchars(uploadSrc($p['receipt_path'] ?? '', '../')) ?>" target="_blank" class="btn btn-outline-primary btn-sm w-100 mt-2 py-0" style="font-size:0.6rem;">View Receipt</a>
                     </div>
                     <?php endforeach; ?>
                 <?php endif; ?>

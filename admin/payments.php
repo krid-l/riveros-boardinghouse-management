@@ -225,7 +225,6 @@ foreach ($monthPayments as $mp) {
 }
 arsort($collectedByMethod);
 uksort($collectedByRoom, 'strnatcasecmp');
-$chartTotal = max(1, $paidCount + $dueSoonCount + $actualOverdueCount + $pendingCount);
 
 // --- PAYMENTS LIST ---
 // Filtering and paging happen in SQL. The page used to send every payment row and let
@@ -302,40 +301,22 @@ require_once 'header.php';
     
     .trend-text { font-size: 0.65rem; font-weight: 500; }
     
-    .table-compact th { font-size: 0.55rem; text-transform: uppercase; color: #64748b; font-weight: 600; padding: 0.6rem 0.5rem; letter-spacing: 0.5px; }
-    .table-compact td { font-size: 0.65rem; vertical-align: middle; padding: 0.5rem 0.5rem; border-bottom: 1px solid #f1f5f9; }
-    .table-compact tbody tr:hover { background-color: #f8fafc; }
-    
-    .chart-container-donut { position: relative; height: 120px; width: 120px; }
-    .donut-center-text {
-        position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-        text-align: center;
-    }
-    
-    .screenshot-thumb {
-        width: 28px; height: 32px;
-        background-color: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 4px;
-        position: relative; display: inline-block;
-    }
-    .screenshot-verified {
-        position: absolute; bottom: -4px; right: -4px;
-        width: 12px; height: 12px; background-color: #22c55e; color: white;
-        border-radius: 50%; font-size: 0.4rem; display: flex; align-items: center; justify-content: center;
-        border: 1px solid white;
-    }
-    
-    .status-double {
-        display: flex; flex-direction: column; align-items: flex-start;
-    }
-    
-    .info-box { background-color: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 0.75rem; }
-    .recent-activity-item { padding: 0.5rem 0; border-bottom: 1px solid #f1f5f9; }
-    .recent-activity-item:last-child { border-bottom: none; }
-    
+    .table-compact th { font-size: 0.6rem; text-transform: uppercase; color: #64748b; font-weight: 600; padding: 0.6rem 0.5rem; letter-spacing: 0.5px; }
+    .table-compact td { font-size: 0.72rem; vertical-align: middle; padding: 0.5rem 0.5rem; border-bottom: 1px solid #f1f5f9; }
+
+    /* Payments list */
+    .payments-table { font-size: 0.78rem; }
+    .payments-table thead th { font-size: 0.64rem; text-transform: uppercase; letter-spacing: 0.5px; color: #64748b; font-weight: 700; background: #f8fafc; border-bottom: 1px solid #e2e8f0; padding: 0.65rem 0.6rem; white-space: nowrap; }
+    .payments-table td { padding: 0.6rem; border-bottom: 1px solid #f1f5f9; }
+    .payments-table tbody tr:hover { background-color: #f8fafc; }
+    .payments-table .cell-sub { font-size: 0.68rem; color: #94a3b8; }
+    .method-pill { display: inline-flex; align-items: center; border-radius: 999px; padding: 0.2rem 0.6rem; font-size: 0.7rem; font-weight: 600; }
+    .ref-no { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.74rem; color: #334155; }
+    .screenshot-thumb { width: 32px; height: 40px; display: inline-block; background-color: #f1f5f9; background-size: cover; background-position: center; border: 1px solid #e2e8f0; border-radius: 6px; vertical-align: middle; }
+    .screenshot-thumb:hover { outline: 2px solid #93c5fd; }
+
     .dot { width: 5px; height: 5px; border-radius: 50%; display: inline-block; margin-right: 5px; }
-    
-    /* GCash logo imitation */
-    .gcash-logo { color: #005ce6; font-weight: 800; font-style: italic; letter-spacing: -0.5px; font-size: 0.7rem; }
+
 </style>
 
 <!-- Alerts -->
@@ -380,229 +361,148 @@ require_once 'header.php';
      'icon' => 'fa-regular fa-circle-check', 'color' => 'success', 'modal' => 'statPaidModal', 'aria' => "Show this month's paid payments"],
 ]) ?>
 
-<!-- Main Content Grid -->
-<div class="row g-2">
-    
-    <!-- Left Column: Table -->
-    <div class="col-lg-8">
-                <!-- Filter Bar -->
-        <form method="GET" id="filterForm" class="d-flex flex-wrap gap-2 mb-2 align-items-center bg-white p-2 rounded-3 shadow-sm border-0">
-            <div class="input-group input-group-sm rounded-2 border flex-grow-1 bg-white" style="max-width:300px;">
-                <span class="input-group-text bg-transparent border-0 pe-1"><i class="fa-solid fa-magnifying-glass text-muted" style="font-size:0.65rem;"></i></span>
-                <input type="text" name="q" id="searchInput" value="<?= htmlspecialchars($filterSearch) ?>" class="form-control border-0 shadow-none px-1" placeholder="Search tenant name or reference..." style="font-size:0.7rem;">
-            </div>
-            <select name="status" class="form-select form-select-sm border rounded-2 shadow-none text-muted" style="width:110px; font-size:0.7rem;" onchange="this.form.submit()">
-                <option value="all" <?= $filterStatus === 'all' ? 'selected' : '' ?>>All Status</option>
-                <option value="pending" <?= $filterStatus === 'pending' ? 'selected' : '' ?>>Pending</option>
-                <option value="verified" <?= $filterStatus === 'verified' ? 'selected' : '' ?>>Verified</option>
-                <option value="unpaid" <?= $filterStatus === 'unpaid' ? 'selected' : '' ?>>Unpaid</option>
-            </select>
-            <div class="input-group input-group-sm rounded-2 border bg-white" style="width:140px;">
-                <input type="date" name="date" value="<?= htmlspecialchars($filterDate) ?>" class="form-control border-0 shadow-none px-2 text-muted" style="font-size:0.7rem;" onchange="this.form.submit()">
-            </div>
-            <button type="submit" class="btn btn-sm btn-primary rounded-2 px-2 py-1" style="font-size:0.65rem;"><i class="fa-solid fa-magnifying-glass me-1"></i> Search</button>
-            <a href="payments.php" class="btn btn-link btn-sm text-primary text-decoration-none fw-semibold ms-auto" style="font-size:0.65rem;"><i class="fa-solid fa-rotate-right me-1"></i> Clear Filters</a>
-        </form>
-        
-        <div class="card border-0 shadow-sm rounded-3">
-            <div class="card-header bg-white border-0 p-3 pb-0">
-                <h6 class="fw-bold text-dark mb-0" style="font-size:0.75rem;"><i class="fa-solid fa-list text-primary me-2"></i> Payments List</h6>
-            </div>
-            <div class="card-body p-0 mt-2 overflow-auto">
-                <table id="paymentsTable" class="table table-compact mb-0">
-                    <thead class="bg-light">
-                        <tr>
-                            <th class="ps-3 border-0">Date</th>
-                            <th class="border-0">Tenant</th>
-                            <th class="border-0">Room</th>
-                            <th class="border-0">Amount</th>
-                            <th class="border-0">Payment Method</th>
-                            <th class="border-0">Reference</th>
-                            <th class="border-0">Status</th>
-                            <th class="border-0 text-center">Screenshot</th>
-                            <th class="border-0 text-end pe-3">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php if(count($payments) === 0): ?>
-                            <tr><td colspan="9" class="text-center py-5 text-muted">No payments found.</td></tr>
-                        <?php endif; ?>
-                        
-                        <?php foreach($payments as $p): 
-                            $date = date('M d, Y', strtotime($p['payment_date']));
-                            $time = date('h:i A', strtotime($p['created_at'] ?? $p['payment_date']));
-                            $isVerified = $p['status'] == 'verified';
-                            
-                            $statusTextTop = $isVerified ? 'Paid' : 'Pending';
-                            $statusTextBot = $isVerified ? 'Verified' : 'Unpaid';
-                            $statusColor = $isVerified ? 'success' : 'warning';
-                        ?>
-                        <tr class="payment-row" data-date="<?= date('Y-m-d', strtotime($p['payment_date'])) ?>">
-                            <td class="ps-3">
-                                <div class="text-dark fw-semibold" style="font-size:0.65rem;"><?= $date ?></div>
-                                <div class="text-muted" style="font-size:0.55rem;"><?= $time ?></div>
-                            </td>
-                            <td>
-                                <div class="d-flex align-items-center">
-                                    <?= avatarHtml($p['first_name'] . ' ' . $p['last_name'], 22, 'me-2 shadow-sm', $p['profile_picture'] ?? null, '../') ?>
-                                    <div>
-                                        <div class="fw-bold text-dark" style="font-size:0.65rem; line-height:1.1;"><?= htmlspecialchars($p['first_name'].' '.$p['last_name']) ?></div>
-                                        <div class="text-muted" style="font-size:0.55rem;"><?= htmlspecialchars($p['contact_number'] ?? '') ?></div>
-                                    </div>
-                                </div>
-                            </td>
-                            <td class="text-muted fw-semibold" style="font-size:0.65rem;"><?= $p['room_number'] ? 'Rm ' . htmlspecialchars($p['room_number']) : '<span class="text-black-50">No room</span>' ?></td>
-                            <td class="fw-bold text-dark" style="font-size:0.65rem;">₱<?= number_format($p['amount'], 2) ?></td>
-                            <td>
-                                <div class="d-flex flex-column">
-                                    <?php if (($p['payment_method'] ?? 'gcash') === 'cash'): ?>
-                                        <span class="fw-bold text-success" style="font-size:0.7rem;"><i class="fa-solid fa-money-bill-wave me-1"></i>Cash</span>
-                                        <span class="text-muted" style="font-size:0.55rem;">In person</span>
-                                    <?php elseif (stripos($p['payment_method'] ?? '', 'covered by') === 0): ?>
-                                        <span class="fw-semibold text-muted" style="font-size:0.65rem;"><?= htmlspecialchars($p['payment_method']) ?></span>
-                                    <?php else: ?>
-                                        <span class="gcash-logo"><i class="fa-solid fa-g text-primary"></i>Cash</span>
-                                        <span class="text-muted" style="font-size:0.55rem;">Manual</span>
-                                    <?php endif; ?>
-                                </div>
-                            </td>
-                            <td class="text-muted" style="font-size:0.65rem;"><?= htmlspecialchars($p['reference_number'] ?: 'N/A') ?></td>
-                            <td>
-                                <div class="status-double">
-                                    <span class="badge bg-<?= $statusColor ?>-subtle text-<?= $statusColor ?> border border-<?= $statusColor ?>-subtle px-1 py-0 mb-1 rounded-1" style="font-size:0.5rem;"><?= $statusTextTop ?></span>
-                                    <span class="text-muted" style="font-size:0.55rem;"><?= $statusTextBot ?></span>
-                                </div>
-                            </td>
-                            <td class="text-center">
-                                <?php if(!empty($p['screenshot_path'])): 
-                                    $imgPath = $p['screenshot_path'];
-                                    $isUrl = str_starts_with($imgPath, 'http');
-                                    $imgSrc = $isUrl ? htmlspecialchars($imgPath) : '../' . htmlspecialchars($imgPath);
-                                ?>
-                                    <a href="<?= $imgSrc ?>" target="_blank" title="View Full Image">
-                                        <div class="screenshot-thumb" style="background-image: url('<?= $imgSrc ?>'); background-size: cover; background-position: center; cursor: pointer;">
-                                            <?php if($isVerified): ?><div class="screenshot-verified"><i class="fa-solid fa-check"></i></div><?php endif; ?>
-                                        </div>
-                                    </a>
-                                <?php else: ?>
-                                    <span class="text-muted" style="font-size:0.6rem;">None</span>
-                                <?php endif; ?>
-                            </td>
-                            <td class="text-end pe-3">
-                                <?php if ($p['status'] === 'pending'): ?>
-                                    <form method="POST" class="d-inline">
-                                        <input type="hidden" name="payment_id" value="<?= $p['id'] ?>">
-                                        <input type="hidden" name="action" value="verify">
-                                        <button type="submit" class="btn btn-sm btn-success rounded-2 px-1 py-0 me-1" title="Verify Payment" onclick="return confirm('Verify this payment?');"><i class="fa-solid fa-check" style="font-size:0.6rem;"></i></button>
-                                    </form>
-                                    <form method="POST" class="d-inline">
-                                        <input type="hidden" name="payment_id" value="<?= $p['id'] ?>">
-                                        <input type="hidden" name="action" value="reject">
-                                        <button type="submit" class="btn btn-sm btn-danger rounded-2 px-1 py-0" title="Reject Payment" onclick="return confirm('Reject this payment?');"><i class="fa-solid fa-xmark" style="font-size:0.6rem;"></i></button>
-                                    </form>
-                                <?php else: ?>
-                                    <span class="text-muted" style="font-size:0.65rem;">Done</span>
-                                <?php endif; ?>
-                            </td>
-                        </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
-            </div>
-            <div class="card-footer bg-white border-top p-2 d-flex justify-content-between align-items-center flex-wrap gap-2">
-                <span class="text-muted" style="font-size:0.65rem;"><?= paginationSummary($pager, 'payments') ?></span>
-                <nav>
-                    <ul class="pagination pagination-sm mb-0 shadow-sm" style="font-size:0.65rem;"><?= paginationControls($pager) ?></ul>
-                </nav>
-            </div>
+<!-- Payments list: the full width of the page -->
+<div class="card border-0 shadow-sm rounded-3">
+    <div class="card-header bg-white border-0 p-3 pb-2 d-flex flex-wrap justify-content-between align-items-center gap-2">
+        <div>
+            <h6 class="fw-bold text-dark mb-0" style="font-size:0.85rem;"><i class="fa-solid fa-list text-primary me-2"></i>Payments List</h6>
+            <small class="text-muted" style="font-size:0.7rem;">GCash payments are made outside the system: check the reference number and screenshot, then verify or reject.</small>
         </div>
+        <?php if ($pendingCount > 0 && $filterStatus !== 'pending'): ?>
+            <a href="payments.php?status=pending" class="badge rounded-pill bg-warning-subtle text-warning-emphasis border border-warning-subtle text-decoration-none px-3 py-2" style="font-size:0.72rem;">
+                <i class="fa-solid fa-hourglass-half me-1"></i><?= $pendingCount ?> waiting for verification
+            </a>
+        <?php endif; ?>
     </div>
-    
-    <!-- Right Column: Sidebar -->
-    <div class="col-lg-4">
-        
-        <!-- Payment Overview Donut -->
-        <div class="card border-0 shadow-sm rounded-3 mb-2">
-            <div class="card-body p-3">
-                <h6 class="fw-bold text-dark mb-3" style="font-size:0.75rem;">Payment Overview (This Month)</h6>
-                
-                <div class="d-flex align-items-center justify-content-between mb-2">
-                    <div class="chart-container-donut ms-2">
-                        <canvas id="paymentStatusChart"></canvas>
-                        <div class="donut-center-text">
-                            <div class="text-muted" style="font-size:0.5rem; font-weight:600;">Total</div>
-                            <div class="fw-bold text-dark" style="font-size:1rem; line-height:1;"><?= $paidCount + $dueSoonCount + $actualOverdueCount + $pendingCount ?></div>
-                            <div class="text-muted" style="font-size:0.5rem;">Items</div>
-                        </div>
-                    </div>
-                    
-                    <div class="ps-3 pe-2 flex-grow-1">
-                        <div class="d-flex justify-content-between align-items-center mb-1">
-                            <span class="fw-bold text-dark" style="font-size:0.65rem;"><span class="dot bg-success"></span> Paid</span>
-                            <span class="text-muted" style="font-size:0.6rem;"><?= $paidCount ?> (<?= round($paidCount / $chartTotal * 100) ?>%)</span>
-                        </div>
-                        <div class="d-flex justify-content-between align-items-center mb-1">
-                            <span class="fw-bold text-dark" style="font-size:0.65rem;"><span class="dot bg-warning"></span> Due Soon</span>
-                            <span class="text-muted" style="font-size:0.6rem;"><?= $dueSoonCount ?> (<?= round($dueSoonCount / $chartTotal * 100) ?>%)</span>
-                        </div>
-                        <div class="d-flex justify-content-between align-items-center mb-1">
-                            <span class="fw-bold text-dark" style="font-size:0.65rem;"><span class="dot bg-danger"></span> Overdue</span>
-                            <span class="text-muted" style="font-size:0.6rem;"><?= $actualOverdueCount ?> (<?= round($actualOverdueCount / $chartTotal * 100) ?>%)</span>
-                        </div>
-                        <div class="d-flex justify-content-between align-items-center">
-                            <span class="fw-bold text-dark" style="font-size:0.65rem;"><span class="dot bg-secondary"></span> Pending</span>
-                            <span class="text-muted" style="font-size:0.6rem;"><?= $pendingCount ?> (<?= round($pendingCount / $chartTotal * 100) ?>%)</span>
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="text-center mt-3 pt-2 border-top">
-                    <a href="#" class="text-primary text-decoration-none fw-semibold" style="font-size: 0.65rem;">View Full Report &rarr;</a>
-                </div>
-            </div>
+
+    <!-- Filter Bar -->
+    <form method="GET" id="filterForm" class="d-flex flex-wrap gap-2 px-3 pb-3 align-items-center border-bottom">
+        <div class="input-group input-group-sm rounded-2 border bg-white flex-grow-1" style="max-width:320px;">
+            <span class="input-group-text bg-transparent border-0 pe-1"><i class="fa-solid fa-magnifying-glass text-muted" style="font-size:0.7rem;"></i></span>
+            <input type="text" name="q" id="searchInput" value="<?= htmlspecialchars($filterSearch) ?>" class="form-control border-0 shadow-none px-1" placeholder="Search tenant name or reference..." style="font-size:0.75rem;">
         </div>
-        
-        <!-- Info Box -->
-        <div class="info-box mb-2">
-            <h6 class="fw-bold text-dark mb-1" style="font-size:0.7rem;">About Manual GCash Payments</h6>
-            <div class="d-flex align-items-start text-muted mt-1" style="font-size:0.6rem;">
-                <i class="fa-solid fa-circle-info text-primary mt-1 me-2" style="font-size:0.6rem;"></i>
-                <span>Tenants pay through GCash outside the system. Ask them to enter the reference number and upload a screenshot as proof of payment.</span>
-            </div>
-        </div>
-        
-        
-        
+        <select name="status" class="form-select form-select-sm border rounded-2 shadow-none" style="width:150px; font-size:0.75rem;" onchange="this.form.submit()" aria-label="Status">
+            <option value="all" <?= $filterStatus === 'all' ? 'selected' : '' ?>>All statuses</option>
+            <option value="pending" <?= $filterStatus === 'pending' ? 'selected' : '' ?>>Pending</option>
+            <option value="verified" <?= $filterStatus === 'verified' ? 'selected' : '' ?>>Verified</option>
+            <option value="rejected" <?= $filterStatus === 'rejected' ? 'selected' : '' ?>>Rejected</option>
+        </select>
+        <input type="date" name="date" value="<?= htmlspecialchars($filterDate) ?>" class="form-control form-control-sm border rounded-2 shadow-none" style="width:150px; font-size:0.75rem;" onchange="this.form.submit()" aria-label="Payment date">
+        <button type="submit" class="btn btn-sm btn-primary rounded-2 px-3" style="font-size:0.72rem;"><i class="fa-solid fa-magnifying-glass me-1"></i> Search</button>
+        <?php if ($filterSearch !== '' || $filterStatus !== 'all' || $filterDate !== ''): ?>
+            <a href="payments.php" class="btn btn-link btn-sm text-decoration-none fw-semibold ms-auto" style="font-size:0.72rem;"><i class="fa-solid fa-rotate-right me-1"></i> Clear filters</a>
+        <?php endif; ?>
+    </form>
+
+    <div class="table-responsive">
+        <table id="paymentsTable" class="table payments-table align-middle mb-0">
+            <thead>
+                <tr>
+                    <th class="ps-3">Date</th>
+                    <th>Tenant</th>
+                    <th>Room</th>
+                    <th class="text-end">Amount</th>
+                    <th>Method</th>
+                    <th>Reference No.</th>
+                    <th class="text-center">Proof</th>
+                    <th>Status</th>
+                    <th class="text-end pe-3">Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php if (count($payments) === 0): ?>
+                    <tr><td colspan="9" class="text-center py-5 text-muted">No payments found.</td></tr>
+                <?php endif; ?>
+
+                <?php foreach ($payments as $p):
+                    $method = $p['payment_method'] ?? 'gcash';
+                    $isCovered = stripos($method, 'covered by') === 0;
+                    $ref = (string)($p['reference_number'] ?? '');
+                    [$statusText, $statusColor, $statusIcon] = match ($p['status']) {
+                        'verified' => ['Verified', 'success', 'fa-circle-check'],
+                        'rejected' => ['Rejected', 'danger', 'fa-circle-xmark'],
+                        default    => ['Pending', 'warning', 'fa-hourglass-half'],
+                    };
+                    $proof = uploadSrc($p['screenshot_path'] ?? '', '../');
+                    $receipt = uploadSrc($p['receipt_path'] ?? '', '../');
+                ?>
+                <tr class="payment-row">
+                    <td class="ps-3 text-nowrap">
+                        <div class="fw-semibold text-dark"><?= date('M j, Y', strtotime($p['payment_date'])) ?></div>
+                        <div class="cell-sub"><?= date('l', strtotime($p['payment_date'])) ?></div>
+                    </td>
+                    <td>
+                        <a href="tenant_details.php?id=<?= (int)$p['tenant_id'] ?>" class="d-flex align-items-center text-decoration-none">
+                            <?= avatarHtml($p['first_name'] . ' ' . $p['last_name'], 28, 'me-2 shadow-sm', $p['profile_picture'] ?? null, '../') ?>
+                            <span>
+                                <span class="d-block fw-bold text-dark text-nowrap"><?= htmlspecialchars($p['first_name'] . ' ' . $p['last_name']) ?></span>
+                                <span class="d-block cell-sub text-nowrap"><?= htmlspecialchars($p['contact_number'] ?? '') ?></span>
+                            </span>
+                        </a>
+                    </td>
+                    <td class="text-nowrap"><?= $p['room_number'] ? 'Room ' . htmlspecialchars($p['room_number']) : '<span class="text-muted fst-italic">Moved out</span>' ?></td>
+                    <td class="text-end text-nowrap">
+                        <div class="fw-bold text-dark">₱<?= number_format((float)$p['amount'], 2) ?></div>
+                        <?php if (!empty($p['pay_for_room'])): ?><div class="cell-sub">Whole room</div><?php endif; ?>
+                    </td>
+                    <td class="text-nowrap">
+                        <?php if ($isCovered): ?>
+                            <span class="method-pill bg-light text-muted" title="Part of a roommate's payment"><i class="fa-solid fa-people-arrows me-1"></i><?= htmlspecialchars($method) ?></span>
+                        <?php elseif ($method === 'cash'): ?>
+                            <span class="method-pill bg-success-subtle text-success"><i class="fa-solid fa-money-bill-wave me-1"></i>Cash</span>
+                        <?php else: ?>
+                            <span class="method-pill bg-primary-subtle text-primary"><i class="fa-solid fa-mobile-screen me-1"></i>GCash</span>
+                        <?php endif; ?>
+                    </td>
+                    <td class="text-nowrap">
+                        <?php if ($ref === '' || str_starts_with($ref, 'CASH-')): ?>
+                            <span class="text-muted">—</span>
+                        <?php elseif ($ref === 'MOVE-IN'): ?>
+                            <span class="text-muted">Move-in</span>
+                        <?php else: ?>
+                            <span class="ref-no"><?= htmlspecialchars($ref) ?></span>
+                        <?php endif; ?>
+                    </td>
+                    <td class="text-center">
+                        <?php if ($proof): ?>
+                            <a href="<?= htmlspecialchars($proof) ?>" target="_blank" rel="noopener" title="Open the screenshot" class="d-inline-block">
+                                <span class="screenshot-thumb" style="background-image: url('<?= htmlspecialchars($proof, ENT_QUOTES) ?>');"></span>
+                            </a>
+                        <?php else: ?>
+                            <span class="text-muted">—</span>
+                        <?php endif; ?>
+                    </td>
+                    <td><span class="badge rounded-pill bg-<?= $statusColor ?>-subtle text-<?= $statusColor ?> border border-<?= $statusColor ?>-subtle px-2 py-1"><i class="fa-solid <?= $statusIcon ?> me-1"></i><?= $statusText ?></span></td>
+                    <td class="text-end pe-3 text-nowrap">
+                        <?php if ($p['status'] === 'pending'): ?>
+                            <form method="POST" class="d-inline">
+                                <input type="hidden" name="payment_id" value="<?= (int)$p['id'] ?>">
+                                <input type="hidden" name="action" value="verify">
+                                <button type="submit" class="btn btn-sm btn-success px-2 py-1" onclick="return confirm('Verify this payment of ₱<?= number_format((float)$p['amount'], 2) ?>?');"><i class="fa-solid fa-check me-1"></i>Verify</button>
+                            </form>
+                            <form method="POST" class="d-inline">
+                                <input type="hidden" name="payment_id" value="<?= (int)$p['id'] ?>">
+                                <input type="hidden" name="action" value="reject">
+                                <button type="submit" class="btn btn-sm btn-outline-danger px-2 py-1" title="Reject" aria-label="Reject" onclick="return confirm('Reject this payment?');"><i class="fa-solid fa-xmark"></i></button>
+                            </form>
+                        <?php elseif ($receipt): ?>
+                            <a href="<?= htmlspecialchars($receipt) ?>" target="_blank" rel="noopener" class="btn btn-sm btn-light border px-2 py-1"><i class="fa-solid fa-receipt me-1 text-primary"></i>Receipt</a>
+                        <?php else: ?>
+                            <span class="text-muted">—</span>
+                        <?php endif; ?>
+                    </td>
+                </tr>
+                <?php endforeach; ?>
+            </tbody>
+        </table>
+    </div>
+    <div class="card-footer bg-white border-top p-2 px-3 d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <span class="text-muted" style="font-size:0.72rem;"><?= paginationSummary($pager, 'payments') ?></span>
+        <nav>
+            <ul class="pagination pagination-sm mb-0"><?= paginationControls($pager) ?></ul>
+        </nav>
     </div>
 </div>
-
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<script>
-document.addEventListener("DOMContentLoaded", function() {
-    // Payment Donut Chart
-    const payCtx = document.getElementById('paymentStatusChart').getContext('2d');
-    new Chart(payCtx, {
-        type: 'doughnut',
-        data: {
-            labels: ['Paid', 'Due Soon', 'Overdue', 'Pending'],
-            datasets: [{
-                data: [<?= $paidCount ?>, <?= $dueSoonCount ?>, <?= $actualOverdueCount ?>, <?= $pendingCount ?>],
-                backgroundColor: ['#22c55e', '#f59e0b', '#ef4444', '#64748b'],
-                borderWidth: 0,
-                cutout: '80%'
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: { display: false },
-                tooltip: { enabled: true }
-            }
-        }
-    });
-});
-</script>
 
 <script>
 // Typing in the search box submits the form after a short pause, so the server can filter.

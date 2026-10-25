@@ -1,6 +1,7 @@
 <?php
 require_once 'header.php';
 require_once '../includes/pagination.php';
+require_once '../includes/uploads.php';
 
 // The totals cover every receipt this tenant has ever had, so they are counted in SQL
 // rather than by loading the whole history into the page.
@@ -231,10 +232,10 @@ $payments = $stmt->fetchAll();
                 <div class="mt-auto pt-2">
                     <?php if ($isVerified && !empty($p['receipt_path'])): ?>
                         <div class="d-flex gap-2">
-                            <a href="../<?= htmlspecialchars($p['receipt_path'] ?? '') ?>" target="_blank" class="btn-view-receipt flex-grow-1 justify-content-center">
+                            <a href="<?= htmlspecialchars(uploadSrc($p['receipt_path'] ?? '', '../')) ?>" target="_blank" class="btn-view-receipt flex-grow-1 justify-content-center">
                                 <i class="fa-regular fa-file-lines text-primary"></i> View Receipt
                             </a>
-                            <a href="../<?= htmlspecialchars($p['receipt_path'] ?? '') ?>" download class="btn-download">
+                            <a href="<?= htmlspecialchars(uploadSrc($p['receipt_path'] ?? '', '../')) ?>" download class="btn-download">
                                 <i class="fa-solid fa-download"></i>
                             </a>
                         </div>
