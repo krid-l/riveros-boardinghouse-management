@@ -114,6 +114,11 @@ CREATE TABLE IF NOT EXISTS complaints (
     admin_response TEXT,
     status VARCHAR(20) DEFAULT 'open',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NULL DEFAULT NULL,
+    responded_at TIMESTAMP NULL DEFAULT NULL,         -- first reply from the admin
+    resolved_at TIMESTAMP NULL DEFAULT NULL,
+    priority VARCHAR(10) NOT NULL DEFAULT 'normal',   -- 'low' | 'normal' | 'high', set by the admin
+    photo_path VARCHAR(255),                          -- optional photo from the tenant
     CONSTRAINT chk_complaints_status CHECK (status IN ('open', 'resolved')),
     FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
 ) ENGINE=InnoDB;

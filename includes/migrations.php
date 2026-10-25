@@ -9,7 +9,7 @@ require_once __DIR__ . '/billing.php';
 require_once __DIR__ . '/sql_compat.php';
 require_once __DIR__ . '/sms.php';
 
-const SCHEMA_VERSION = '9';
+const SCHEMA_VERSION = '10';
 
 function runMigrations(PDO $pdo): void {
     try {
@@ -45,6 +45,7 @@ function runMigrations(PDO $pdo): void {
         migrateToV7($pdo);
         migrateToV8($pdo);
         migrateToV9($pdo);
+        migrateToV10($pdo);
 
         $pdo->prepare("INSERT INTO settings (setting_key, setting_value) VALUES ('schema_version', ?)
                        " . sqlUpsert(['setting_key'], ['setting_value']))
@@ -139,6 +140,17 @@ function migrateToV9(PDO $pdo): void {
     ensureColumn($pdo, 'tenants', 'emergency_phone', 'VARCHAR(20)');
     $pdo->exec("UPDATE tenants SET emergency_name = emergency_contact
                 WHERE emergency_name IS NULL AND emergency_contact IS NOT NULL AND emergency_contact <> ''");
+}
+
+// v10: complaints keep when they were last updated, first answered and resolved (for the
+// response-time figures), and a priority the admin sets. The status stays 'open' or 'resolved'
+// (both schemas check that); Pending / In Progress is whether the admin has replied yet.
+function migrateToV10(PDO $pdo): void {
+    ensureColumn($pdo, 'complaints', 'updated_at', 'TIMESTAMP NULL DEFAULT NULL');
+    ensureColumn($pdo, 'complaints', 'responded_at', 'TIMESTAMP NULL DEFAULT NULL');
+    ensureColumn($pdo, 'complaints', 'resolved_at', 'TIMESTAMP NULL DEFAULT NULL');
+    ensureColumn($pdo, 'complaints', 'priority', "VARCHAR(10) NOT NULL DEFAULT 'normal'");
+    ensureColumn($pdo, 'complaints', 'photo_path', 'VARCHAR(255)');
 }
 
 // v7: rent per bed. A tenant now pays price / capacity, however many beds are taken, instead of

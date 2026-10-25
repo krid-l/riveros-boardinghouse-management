@@ -97,7 +97,11 @@ CREATE TABLE IF NOT EXISTS complaints (
     admin_response TEXT,
     status VARCHAR(20) CHECK (status IN ('open', 'resolved')) DEFAULT 'open',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    responded_at TIMESTAMP NULL DEFAULT NULL,         -- first reply from the admin
+    resolved_at TIMESTAMP NULL DEFAULT NULL,
+    priority VARCHAR(10) NOT NULL DEFAULT 'normal',   -- 'low' | 'normal' | 'high', set by the admin
+    photo_path VARCHAR(255)                           -- optional photo from the tenant
 );
 
 CREATE TABLE IF NOT EXISTS announcements (
