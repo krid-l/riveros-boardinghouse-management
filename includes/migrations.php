@@ -9,7 +9,7 @@ require_once __DIR__ . '/billing.php';
 require_once __DIR__ . '/sql_compat.php';
 require_once __DIR__ . '/sms.php';
 
-const SCHEMA_VERSION = '11';
+const SCHEMA_VERSION = '12';
 
 function runMigrations(PDO $pdo): void {
     try {
@@ -47,6 +47,7 @@ function runMigrations(PDO $pdo): void {
         migrateToV9($pdo);
         migrateToV10($pdo);
         migrateToV11($pdo);
+        migrateToV12($pdo);
 
         $pdo->prepare("INSERT INTO settings (setting_key, setting_value) VALUES ('schema_version', ?)
                        " . sqlUpsert(['setting_key'], ['setting_value']))
@@ -165,6 +166,25 @@ function migrateToV11(PDO $pdo): void {
         row_count INT NOT NULL DEFAULT 0,
         created_at TIMESTAMP NULL DEFAULT NULL
     )");
+}
+
+// v12: no sample data. The settings the database started with (an example address, phone
+// number and GCash account) are cleared where they were never changed, so tenants and receipts
+// don't show made-up details; settings nothing reads are dropped. Also the admin's notes on a
+// tenant (the Notes card on the tenant's page).
+function migrateToV12(PDO $pdo): void {
+    ensureColumn($pdo, 'tenants', 'admin_notes', 'TEXT');
+    $samples = [
+        ['address', '123 National Highway%'],
+        ['contact_number', '032 123 4567'],
+        ['gcash_name', 'Boarding House'],
+        ['gcash_number', '0917 123 4567'],
+    ];
+    $clear = $pdo->prepare("UPDATE settings SET setting_value = '' WHERE setting_key = ? AND setting_value LIKE ?");
+    foreach ($samples as $sample) {
+        $clear->execute($sample);
+    }
+    $pdo->exec("DELETE FROM settings WHERE setting_key IN ('rent_due_date', 'currency', 'date_format', 'time_zone', 'sms_provider')");
 }
 
 // v7: rent per bed. A tenant now pays price / capacity, however many beds are taken, instead of

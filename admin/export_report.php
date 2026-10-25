@@ -24,7 +24,10 @@ if ($from > $to) {
 }
 
 $report = buildReport($pdo, $type, $from, $to);
-$houseName = (string)($pdo->query("SELECT setting_value FROM settings WHERE setting_key = 'boarding_house_name'")->fetchColumn() ?: 'Riveros Boarding House');
+$business = $pdo->query("SELECT setting_key, setting_value FROM settings WHERE setting_key IN ('boarding_house_name', 'address', 'contact_number')")->fetchAll(PDO::FETCH_KEY_PAIR);
+$houseName = trim((string)($business['boarding_house_name'] ?? '')) ?: 'Riveros Boarding House';
+// "Address · Contact number", whichever of the two are filled in under Settings.
+$houseDetails = implode(' · ', array_filter([trim(preg_replace('/\s+/', ' ', (string)($business['address'] ?? ''))), trim((string)($business['contact_number'] ?? ''))]));
 
 if (empty($_GET['again'])) {
     $pdo->prepare("INSERT INTO report_exports (report_type, format, date_from, date_to, row_count, created_at) VALUES (?, ?, ?, ?, ?, ?)")
@@ -33,7 +36,7 @@ if (empty($_GET['again'])) {
 
 $filename = reportFileName($report, $from, $to, $format);
 if ($format === 'pdf') {
-    outputReportPdf($report, $filename, $houseName);
+    outputReportPdf($report, $filename, $houseName, $houseDetails);
 } else {
     outputReportCsv($report, $filename, $houseName);
 }

@@ -55,6 +55,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'edit_
     }
 }
 
+// The admin's own notes on the tenant (only the admin sees them).
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_notes' && (int)($_POST['tenant_id'] ?? 0) === $tenantId) {
+    $notes = trim((string)($_POST['admin_notes'] ?? ''));
+    $pdo->prepare("UPDATE tenants SET admin_notes = ? WHERE id = ?")->execute([$notes === '' ? null : mb_substr($notes, 0, 5000), $tenantId]);
+    $reminderSuccess = 'Notes saved.';
+}
+
 // The tenant asked to use their deposit for their last month: approve or decline it.
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'deposit_decide' && (int)($_POST['tenant_id'] ?? 0) === $tenantId) {
     $approve = ($_POST['decision'] ?? '') === 'approve';
@@ -360,9 +367,6 @@ require_once 'header.php';
     <li class="nav-item" role="presentation">
         <button class="nav-link custom-tab me-2" id="ledger-tab" data-bs-toggle="tab" data-bs-target="#ledger" type="button" role="tab"><i class="fa-solid fa-book me-2"></i>Ledger</button>
     </li>
-    <li class="nav-item" role="presentation">
-        <button class="nav-link custom-tab" id="documents-tab" data-bs-toggle="tab" data-bs-target="#documents" type="button" role="tab"><i class="fa-regular fa-file-lines me-2"></i>Documents</button>
-    </li>
 </ul>
 
 <style>
@@ -558,7 +562,7 @@ require_once 'header.php';
                             </div>
                         </div>
                         <div class="text-end">
-                            <div class="text-muted" style="font-size:0.6rem; margin-bottom:2px;"><?= date('M j, Y h:i A', strtotime($p['created_at'] ?? $p['payment_date'])) ?></div>
+                            <div class="text-muted" style="font-size:0.6rem; margin-bottom:2px;"><?= date('M j, Y', strtotime($p['payment_date'])) ?></div>
                             <div class="fw-bold <?= $isVerified ? 'text-success' : 'text-warning' ?>" style="font-size:0.75rem;">₱<?= number_format($p['amount'], 2) ?></div>
                         </div>
                         <div><?= $badge ?></div>
@@ -619,29 +623,59 @@ require_once 'header.php';
             </div>
         </div>
         
-        <!-- Payment Method -->
+        <!-- How this tenant pays -->
+        <?php
+        $methodCounts = [];
+        foreach ($payments as $p) {
+            if ($p['status'] !== 'verified' || !empty($p['covered_by_payment_id'])) continue;
+            $label = paymentMethodLabel($p['payment_method'] ?? 'gcash');
+            $methodCounts[$label] = ($methodCounts[$label] ?? 0) + 1;
+        }
+        arsort($methodCounts);
+        $lastPaid = null;
+        foreach ($payments as $p) {
+            if ($p['status'] === 'verified') { $lastPaid = $p; break; }
+        }
+        ?>
         <div class="section-card shadow-sm">
             <div class="section-header"><h6 class="section-title"><i class="fa-solid fa-wallet text-muted me-2"></i>Payment Method</h6></div>
-            <div class="p-3">
-                <div class="d-flex justify-content-between align-items-center mb-2" style="font-size:0.7rem;">
-                    <span class="text-muted">Preferred Method</span>
-                    <span class="fw-bold text-primary"><i class="fa-solid fa-g me-1"></i>GCash (Manual)</span>
-                </div>
-                <div class="mt-3">
-                    <div class="fw-bold text-dark mb-1" style="font-size:0.7rem;">Instructions</div>
-                    <p class="text-muted mb-0" style="font-size:0.65rem;">Pay via GCash to 09XXXXXXXXX.<br>Enter the reference number and upload a screenshot as proof of payment.</p>
-                </div>
+            <div class="p-3" style="font-size:0.7rem;">
+                <?php if (!$methodCounts): ?>
+                    <span class="text-muted">No verified payments yet.</span>
+                <?php else: ?>
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <span class="text-muted">Usually pays by</span>
+                        <span class="fw-bold text-primary"><?= htmlspecialchars(array_key_first($methodCounts)) ?></span>
+                    </div>
+                    <?php foreach ($methodCounts as $label => $n): ?>
+                    <div class="d-flex justify-content-between mb-1"><span class="text-muted"><?= htmlspecialchars($label) ?></span><span><?= $n ?> <?= $n === 1 ? 'payment' : 'payments' ?></span></div>
+                    <?php endforeach; ?>
+                    <?php if ($lastPaid): ?>
+                    <div class="d-flex justify-content-between mt-2 pt-2 border-top"><span class="text-muted">Last payment</span><span class="fw-semibold">₱<?= number_format((float)$lastPaid['amount'], 2) ?> · <?= date('M j, Y', strtotime($lastPaid['payment_date'])) ?></span></div>
+                    <?php endif; ?>
+                <?php endif; ?>
             </div>
         </div>
-        
-        <!-- Notes -->
-        <div class="section-card shadow-sm">
+
+        <!-- Notes: the admin's own, not shown to the tenant -->
+        <div class="section-card shadow-sm" id="notes">
             <div class="section-header">
                 <h6 class="section-title"><i class="fa-regular fa-note-sticky text-muted me-2"></i>Notes</h6>
-                <button class="btn btn-sm btn-outline-primary py-0 px-2" style="font-size:0.6rem;">Add Note</button>
+                <button type="button" class="btn btn-sm btn-outline-primary py-0 px-2" style="font-size:0.6rem;" onclick="document.getElementById('notesView').classList.add('d-none'); document.getElementById('notesForm').classList.remove('d-none'); document.getElementById('notesText').focus();"><?= trim((string)($tenant['admin_notes'] ?? '')) !== '' ? 'Edit' : 'Add Note' ?></button>
             </div>
-            <div class="p-3 text-muted" style="font-size:0.65rem;">
-                No notes available.
+            <div class="p-3" style="font-size:0.7rem;">
+                <div id="notesView" class="<?= trim((string)($tenant['admin_notes'] ?? '')) !== '' ? 'text-dark' : 'text-muted' ?>">
+                    <?= trim((string)($tenant['admin_notes'] ?? '')) !== '' ? nl2br(htmlspecialchars($tenant['admin_notes'])) : 'No notes yet. Only you can see notes.' ?>
+                </div>
+                <form method="POST" id="notesForm" class="d-none m-0">
+                    <input type="hidden" name="action" value="save_notes">
+                    <input type="hidden" name="tenant_id" value="<?= $tenantId ?>">
+                    <textarea name="admin_notes" id="notesText" class="form-control form-control-sm mb-2" rows="4" maxlength="5000" placeholder="e.g., Pays on the 5th every month; parents in Davao."><?= htmlspecialchars($tenant['admin_notes'] ?? '') ?></textarea>
+                    <div class="d-flex gap-2 justify-content-end">
+                        <button type="button" class="btn btn-sm btn-light border" onclick="document.getElementById('notesForm').classList.add('d-none'); document.getElementById('notesView').classList.remove('d-none');">Cancel</button>
+                        <button type="submit" class="btn btn-sm btn-primary">Save notes</button>
+                    </div>
+                </form>
             </div>
         </div>
         
@@ -695,7 +729,7 @@ require_once 'header.php';
                             <tr><td colspan="5" class="text-center py-4 text-muted" style="font-size:0.75rem;">No transactions recorded.</td></tr>
                         <?php else: foreach($payments as $p): ?>
                             <tr>
-                                <td class="fw-semibold text-dark" style="font-size:0.7rem;"><?= date('M d, Y h:i A', strtotime($p['payment_date'])) ?></td>
+                                <td class="fw-semibold text-dark" style="font-size:0.7rem;"><?= date('M j, Y', strtotime($p['payment_date'])) ?></td>
                                 <td class="text-muted" style="font-size:0.7rem;"><?= htmlspecialchars($p['reference_number'] ?? '') ?></td>
                                 <td class="text-muted" style="font-size:0.7rem;"><?= htmlspecialchars(ucfirst($p['payment_method'])) ?></td>
                                 <td class="fw-bold text-dark" style="font-size:0.7rem;">PHP <?= number_format($p['amount'], 2) ?></td>
@@ -785,18 +819,6 @@ require_once 'header.php';
                     </tbody>
                 </table>
             </div>
-        </div>
-    </div>
-
-    <!-- DOCUMENTS TAB -->
-    <div class="tab-pane fade" id="documents" role="tabpanel" aria-labelledby="documents-tab">
-        <div class="section-card shadow-sm p-4 text-center">
-            <div class="bg-light rounded-circle d-inline-flex justify-content-center align-items-center mb-3" style="width: 60px; height: 60px;">
-                <i class="fa-solid fa-folder-open fa-2x text-muted"></i>
-            </div>
-            <h6 class="fw-bold text-dark">No Documents Uploaded</h6>
-            <p class="text-muted mb-3" style="font-size:0.75rem;">Upload lease agreements, IDs, or other tenant-related documents here.</p>
-            <button class="btn btn-primary btn-sm"><i class="fa-solid fa-upload me-1"></i> Upload Document</button>
         </div>
     </div>
 

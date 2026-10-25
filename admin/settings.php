@@ -156,12 +156,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         updateSetting($pdo, 'address', $_POST['address'] ?? '');
         updateSetting($pdo, 'contact_number', $_POST['contact_number'] ?? '');
         $success = 'Business information updated successfully.';
-    } elseif ($action === 'update_prefs') {
-        updateSetting($pdo, 'rent_due_date', $_POST['rent_due_date'] ?? '');
-        updateSetting($pdo, 'currency', $_POST['currency'] ?? '');
-        updateSetting($pdo, 'date_format', $_POST['date_format'] ?? '');
-        updateSetting($pdo, 'time_zone', $_POST['time_zone'] ?? '');
-        $success = 'System preferences updated successfully.';
     }
 }
 
@@ -356,11 +350,11 @@ require_once 'header.php';
                     <div class="row g-3 mb-3">
                         <div class="col-md-4">
                             <label class="form-label">GCash Registered Name</label>
-                            <input type="text" class="form-control" name="gcash_name" value="<?= $s('gcash_name') ?>">
+                            <input type="text" class="form-control" name="gcash_name" value="<?= $s('gcash_name') ?>" placeholder="e.g., Juan D.">
                         </div>
                         <div class="col-md-4">
                             <label class="form-label">GCash Mobile Number</label>
-                            <input type="text" class="form-control" name="gcash_number" value="<?= $s('gcash_number') ?>">
+                            <input type="text" class="form-control" name="gcash_number" value="<?= $s('gcash_number') ?>" placeholder="e.g., 0917 123 4567">
                         </div>
                         <div class="col-md-4">
                             <label class="form-label">GCash QR Code (Optional)</label>
@@ -404,8 +398,13 @@ require_once 'header.php';
                     
                     <div class="d-flex justify-content-between align-items-center border-top pt-3 mt-1">
                         <div class="d-flex align-items-center">
+                            <?php if (trim((string)($settingsMap['gcash_number'] ?? '')) !== ''): ?>
                             <span class="badge-active me-2"><i class="fa-solid fa-circle-check me-1"></i> Active</span>
-                            <span class="text-muted" style="font-size:0.65rem;">Tenants can view this payment information.</span>
+                            <span class="text-muted" style="font-size:0.65rem;">Tenants see this on their payment page.</span>
+                            <?php else: ?>
+                            <span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle me-2">Not set</span>
+                            <span class="text-muted" style="font-size:0.65rem;">Add your GCash number so tenants know where to pay.</span>
+                            <?php endif; ?>
                         </div>
                         <button type="submit" class="btn btn-primary btn-save shadow-sm"><i class="fa-regular fa-floppy-disk me-2" style="font-size:0.65rem;"></i>Save Payment Settings</button>
                     </div>
@@ -555,7 +554,7 @@ require_once 'header.php';
                 <div class="settings-header">
                     <div>
                         <h6 class="card-title-lg"><i class="fa-regular fa-building icon-header text-primary"></i> Business Information</h6>
-                        <div class="card-subtitle-sm">Update your boarding house details.</div>
+                        <div class="card-subtitle-sm">Shown on receipts, exported reports and text messages.</div>
                     </div>
                 </div>
                 <div class="settings-body pt-2">
@@ -565,11 +564,11 @@ require_once 'header.php';
                     </div>
                     <div class="mb-2">
                         <label class="form-label">Address</label>
-                        <textarea name="address" class="form-control" rows="2"><?= $s('address') ?></textarea>
+                        <textarea name="address" class="form-control" rows="2" placeholder="Street, barangay, town / city, province"><?= $s('address') ?></textarea>
                     </div>
                     <div class="mb-3">
                         <label class="form-label">Contact Number</label>
-                        <input type="text" name="contact_number" class="form-control" value="<?= $s('contact_number') ?>">
+                        <input type="text" name="contact_number" class="form-control" value="<?= $s('contact_number') ?>" placeholder="e.g., 0917 123 4567">
                     </div>
                     <button type="submit" class="btn btn-primary btn-save shadow-sm w-100"><i class="fa-regular fa-floppy-disk me-2" style="font-size:0.65rem;"></i>Update Information</button>
                 </div>

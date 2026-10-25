@@ -583,7 +583,7 @@ require_once 'header.php';
                         $sText = $isVerified ? 'Verified' : 'Pending Verification';
                     ?>
                     <tr>
-                        <td class="ps-3 text-dark fw-semibold" style="font-size:0.65rem;"><?= date('M d, Y h:i A', strtotime($p['created_at'] ?? $p['payment_date'])) ?></td>
+                        <td class="ps-3 text-dark fw-semibold" style="font-size:0.65rem;"><?= date('M j, Y', strtotime($p['payment_date'])) ?></td>
                         <td class="text-dark fw-semibold" style="font-size:0.65rem;"><?= htmlspecialchars($p['first_name'].' '.$p['last_name']) ?> (Rm <?= htmlspecialchars($p['room_number'] ?? '?') ?>)</td>
                         <td class="text-muted" style="font-size:0.65rem;"><?= htmlspecialchars($p['reference_number'] ?: 'N/A') ?></td>
                         <td class="text-center"><span class="badge bg-<?= $sClass ?>-subtle text-<?= $sClass ?> rounded-pill px-2" style="font-size:0.55rem;"><?= $sText ?></span></td>

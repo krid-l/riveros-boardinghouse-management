@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS tenants (
     date_of_birth DATE,
     profile_picture TEXT,
     announcements_seen_at TIMESTAMP NULL DEFAULT NULL,
+    admin_notes TEXT,                                 -- the admin's notes on the tenant
     status VARCHAR(20) NOT NULL DEFAULT 'active',     -- 'active' | 'deactivated'
     move_in_date DATE,                                -- set when the tenant first gets a room
     deactivated_at DATE,
@@ -184,17 +185,12 @@ ON CONFLICT (username) DO NOTHING;
 -- Default settings
 INSERT INTO settings (setting_key, setting_value) VALUES
     ('boarding_house_name', 'RIVEROS BOARDING HOUSE'),
-    ('address', E'123 National Highway, Brgy. Poblacion,\nCity of Naga, Cebu 6000'),
-    ('contact_number', '032 123 4567'),
-    ('gcash_name', 'Boarding House'),
-    ('gcash_number', '0917 123 4567'),
+    ('address', ''),
+    ('contact_number', ''),
+    ('gcash_name', ''),
+    ('gcash_number', ''),
     ('gcash_instructions', 'Pay via GCash and send the reference number and screenshot through the payment submission form. Thank you!'),
-    ('sms_provider', 'PhilSMS'),
     ('sms_api_key', ''),
     ('sms_sender_id', 'PhilSMS'),
-    ('rent_due_date', '30th'),
-    ('currency', 'Philippine Peso (PHP)'),
-    ('date_format', 'Aug 31, 2025 (MMM DD, YYYY)'),
-    ('time_zone', '(UTC+08:00) Asia/Manila'),
     ('schema_version', '2')
 ON CONFLICT (setting_key) DO NOTHING;

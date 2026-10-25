@@ -84,6 +84,38 @@ function storeUploadedImage(array $file, string $folder): array {
 }
 
 /**
+ * Copy a file the app made itself (a receipt PDF) to Supabase Storage when the app is deployed,
+ * where it survives redeploys; the container's own disk on Railway does not.
+ *
+ * @return ?string the public URL, or null when Supabase isn't set up or the upload failed
+ *                 (the caller then keeps the local copy)
+ */
+function storeGeneratedFile(string $localPath, string $bucket, string $mimeType): ?string {
+    $supabaseUrl = getenv('SUPABASE_URL') ?: (function_exists('appConfig') ? appConfig('supabase_url', '') : '');
+    $supabaseKey = getenv('SUPABASE_SERVICE_KEY') ?: (function_exists('appConfig') ? appConfig('supabase_service_key', '') : '');
+    if (!$supabaseUrl || !$supabaseKey || !is_file($localPath)) {
+        return null;
+    }
+    $name = basename($localPath);
+    $ch = curl_init("$supabaseUrl/storage/v1/object/$bucket/$name");
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => file_get_contents($localPath),
+        CURLOPT_HTTPHEADER => ["Authorization: Bearer $supabaseKey", "Content-Type: $mimeType"],
+        CURLOPT_TIMEOUT => 20,
+    ]);
+    curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+    if ($httpCode !== 200) {
+        error_log("Could not copy $name to Supabase Storage (HTTP $httpCode); keeping the local file.");
+        return null;
+    }
+    return "$supabaseUrl/storage/v1/object/public/$bucket/$name";
+}
+
+/**
  * Turn a stored path into something a page can put in src="".
  * Supabase paths are already absolute URLs; local ones are relative to the project root.
  *

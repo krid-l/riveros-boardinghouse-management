@@ -198,7 +198,7 @@ function outputReportCsv(array $report, string $filename, string $houseName): vo
 }
 
 /** A landscape A4 PDF: title, period, the table (header repeated on each page) and the totals. */
-function outputReportPdf(array $report, string $filename, string $houseName): void {
+function outputReportPdf(array $report, string $filename, string $houseName, string $houseDetails = ''): void {
     if (!class_exists('FPDF')) {
         require_once __DIR__ . '/fpdf/fpdf.php';
     }
@@ -226,6 +226,12 @@ function outputReportPdf(array $report, string $filename, string $houseName): vo
     $pdf->SetFont('Arial', 'B', 15);
     $pdf->SetTextColor(15, 23, 42);
     $pdf->Cell(0, 8, $text(strtoupper($houseName)), 0, 1);
+    if ($houseDetails !== '') {
+        $pdf->SetFont('Arial', '', 8);
+        $pdf->SetTextColor(100, 116, 139);
+        $pdf->Cell(0, 4, $text($houseDetails), 0, 1);
+        $pdf->SetTextColor(15, 23, 42);
+    }
     $pdf->SetFont('Arial', 'B', 12);
     $pdf->Cell(0, 7, $text($report['title']), 0, 1);
     $pdf->SetFont('Arial', '', 9);

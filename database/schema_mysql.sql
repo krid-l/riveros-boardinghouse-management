@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS tenants (
     date_of_birth DATE,
     profile_picture VARCHAR(255),
     announcements_seen_at TIMESTAMP NULL DEFAULT NULL,   -- last visit to the announcements page
+    admin_notes TEXT,                                 -- the admin's notes on the tenant
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
     FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE SET NULL
 ) ENGINE=InnoDB;
@@ -206,16 +207,11 @@ ON DUPLICATE KEY UPDATE username = username;
 -- Settings the admin pages read. Values are editable from Admin -> Settings.
 INSERT INTO settings (setting_key, setting_value) VALUES
     ('boarding_house_name', 'RIVEROS BOARDING HOUSE'),
-    ('address', '123 National Highway, Brgy. Poblacion, City of Naga, Cebu 6000'),
-    ('contact_number', '032 123 4567'),
-    ('gcash_name', 'Boarding House'),
-    ('gcash_number', '0917 123 4567'),
+    ('address', ''),
+    ('contact_number', ''),
+    ('gcash_name', ''),
+    ('gcash_number', ''),
     ('gcash_instructions', 'Pay via GCash and send the reference number and screenshot through the payment submission form. Thank you!'),
-    ('sms_provider', 'PhilSMS'),
     ('sms_api_key', ''),
-    ('sms_sender_id', 'PhilSMS'),
-    ('rent_due_date', '30th'),
-    ('currency', 'Philippine Peso (PHP)'),
-    ('date_format', 'Aug 31, 2025 (MMM DD, YYYY)'),
-    ('time_zone', '(UTC+08:00) Asia/Manila')
+    ('sms_sender_id', 'PhilSMS')
 ON DUPLICATE KEY UPDATE setting_key = setting_key;

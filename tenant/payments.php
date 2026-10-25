@@ -6,8 +6,10 @@ require_once '../includes/notifications.php';
 
 // Fetch settings (for GCash)
 $settings = $pdo->query("SELECT setting_key, setting_value FROM settings")->fetchAll(PDO::FETCH_KEY_PAIR);
-$gcashNumber = $settings['gcash_number'] ?? '0917 123 4567';
-$gcashName = $settings['gcash_name'] ?? 'Boarding House';
+// Empty until the admin fills in Settings -> GCash Payment Information.
+$gcashNumber = trim((string)($settings['gcash_number'] ?? ''));
+$gcashName = trim((string)($settings['gcash_name'] ?? ''));
+$notSet = '<span class="text-muted fw-normal" style="font-size:0.8rem;">Not set yet. Please ask the admin.</span>';
 // QR code the admin uploaded in Settings -> GCash Payment Information (may not be set).
 $gcashQr = uploadSrc($settings['gcash_qr_path'] ?? '', '../');
 
@@ -214,11 +216,15 @@ $payments = $stmt->fetchAll();
                         </div>
                         <div class="d-flex align-items-center gap-2 mb-2">
                             <i class="fa-solid fa-phone text-dark"></i>
+                            <?php if ($gcashNumber !== ''): ?>
                             <h4 class="fw-bold text-dark mb-0 me-1"><?= htmlspecialchars($gcashNumber) ?></h4>
                             <i class="fa-regular fa-copy text-primary" style="cursor:pointer;" onclick="navigator.clipboard.writeText('<?= htmlspecialchars($gcashNumber) ?>'); alert('Number Copied!');"></i>
+                            <?php else: ?>
+                            <?= $notSet ?>
+                            <?php endif; ?>
                         </div>
                         <div>
-                            <div class="fw-bold text-dark" style="font-size: 0.85rem; line-height: 1.2;"><?= htmlspecialchars($gcashName) ?></div>
+                            <div class="fw-bold text-dark" style="font-size: 0.85rem; line-height: 1.2;"><?= $gcashName !== '' ? htmlspecialchars($gcashName) : '-' ?></div>
                             <div class="text-muted" style="font-size: 0.7rem;">Account Name</div>
                         </div>
                     </div>
@@ -404,7 +410,7 @@ $payments = $stmt->fetchAll();
                     <div class="mt-1"><span style="width:6px; height:6px; background:<?= $dotColor ?>; border-radius:50%; display:block;"></span></div>
                     <div>
                         <div class="fw-bold text-dark" style="font-size: 0.8rem;"><?= date('M d, Y', strtotime($p['payment_date'])) ?></div>
-                        <div class="text-muted" style="font-size: 0.7rem;"><?= date('h:i A', strtotime($p['created_at'] ?? $p['payment_date'])) ?></div>
+                        <div class="text-muted" style="font-size: 0.7rem;"><?= date('l', strtotime($p['payment_date'])) ?></div>
                     </div>
                 </div>
                 

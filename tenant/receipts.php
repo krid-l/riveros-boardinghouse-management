@@ -195,7 +195,7 @@ $payments = $stmt->fetchAll();
                 
                 <div>
                     <div class="rc-date"><?= date('M d, Y', strtotime($p['payment_date'])) ?></div>
-                    <div class="rc-time"><?= date('h:i A', strtotime($p['created_at'] ?? $p['payment_date'])) ?></div>
+                    <div class="rc-time"><?= date('l', strtotime($p['payment_date'])) ?></div>
                 </div>
             </div>
 

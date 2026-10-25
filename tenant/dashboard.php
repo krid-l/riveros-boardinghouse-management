@@ -48,8 +48,10 @@ $announcements = $pdo->query("SELECT * FROM announcements ORDER BY created_at DE
 
 // Fetch settings (for GCash)
 $settings = $pdo->query("SELECT setting_key, setting_value FROM settings")->fetchAll(PDO::FETCH_KEY_PAIR);
-$gcashNumber = $settings['gcash_number'] ?? '0917 123 4567';
-$gcashName = $settings['gcash_name'] ?? 'Boarding House';
+// Empty until the admin fills in Settings -> GCash Payment Information.
+$gcashNumber = trim((string)($settings['gcash_number'] ?? ''));
+$gcashName = trim((string)($settings['gcash_name'] ?? ''));
+$notSet = '<span class="text-muted fw-normal" style="font-size:0.8rem;">Not set yet. Please ask the admin.</span>';
 // QR code the admin uploaded in Settings -> GCash Payment Information (may not be set).
 require_once '../includes/uploads.php';
 $gcashQr = uploadSrc($settings['gcash_qr_path'] ?? '', '../');
@@ -327,7 +329,7 @@ $balance = $currentTenant['balance'] ?? 0;
                 <tr>
                     <td>
                         <div class="fw-bold text-dark"><?= date('M d, Y', strtotime($p['payment_date'])) ?></div>
-                        <div class="text-muted" style="font-size: 0.7rem;"><?= date('h:i A', strtotime($p['created_at'] ?? $p['payment_date'])) ?></div>
+                        <div class="text-muted" style="font-size: 0.7rem;"><?= date('l', strtotime($p['payment_date'])) ?></div>
                     </td>
                     <td>
                         <div class="fw-bold text-dark font-monospace"><?= htmlspecialchars($p['reference_number'] ?? '') ?></div>
@@ -364,19 +366,21 @@ $balance = $currentTenant['balance'] ?? 0;
                 <div class="text-muted" style="font-size: 0.75rem;">Send your payment to the number below and upload your proof of payment.</div>
             </div>
         </div>
+        <?php if ($gcashNumber !== ''): ?>
         <button class="btn btn-sm btn-white border shadow-sm fw-bold text-primary d-flex align-items-center gap-2" onclick="navigator.clipboard.writeText('<?= htmlspecialchars($gcashNumber) ?>'); alert('Copied!');">
             <i class="fa-regular fa-copy"></i> Copy
         </button>
+        <?php endif; ?>
     </div>
     
     <div class="d-flex justify-content-between align-items-center border-top pt-3">
         <div>
             <div class="text-muted text-uppercase fw-bold mb-1" style="font-size: 0.65rem; letter-spacing: 0.5px;">GCash Number</div>
-            <h4 class="fw-bolder text-primary mb-0"><?= htmlspecialchars($gcashNumber) ?></h4>
+            <h4 class="fw-bolder text-primary mb-0"><?= $gcashNumber !== '' ? htmlspecialchars($gcashNumber) : $notSet ?></h4>
         </div>
         <div class="border-start ps-4">
             <div class="text-muted text-uppercase fw-bold mb-1" style="font-size: 0.65rem; letter-spacing: 0.5px;">Account Name</div>
-            <h6 class="fw-bolder text-dark mb-0"><?= htmlspecialchars($gcashName) ?></h6>
+            <h6 class="fw-bolder text-dark mb-0"><?= $gcashName !== '' ? htmlspecialchars($gcashName) : $notSet ?></h6>
         </div>
     </div>
 
