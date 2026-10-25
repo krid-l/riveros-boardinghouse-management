@@ -462,3 +462,14 @@ function paymentMethodLabel(?string $method): string {
     if ($method === '' || $method === 'gcash') return 'GCash';
     return $method;
 }
+
+const MIN_PAYMENT_DEFAULT = 2000.0;
+
+/**
+ * The smallest payment a tenant may submit (Settings -> GCash Payment Information).
+ * A balance smaller than this can still be paid off in full.
+ */
+function minimumPayment(PDO $pdo): float {
+    $value = $pdo->query("SELECT setting_value FROM settings WHERE setting_key = 'min_payment_amount'")->fetchColumn();
+    return $value === false || $value === '' || !is_numeric($value) ? MIN_PAYMENT_DEFAULT : max(0.0, round((float)$value, 2));
+}

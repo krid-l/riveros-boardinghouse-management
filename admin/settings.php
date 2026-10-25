@@ -54,6 +54,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         updateSetting($pdo, 'gcash_name', $_POST['gcash_name'] ?? '');
         updateSetting($pdo, 'gcash_number', $_POST['gcash_number'] ?? '');
         updateSetting($pdo, 'gcash_instructions', $_POST['gcash_instructions'] ?? '');
+        $minPay = $_POST['min_payment_amount'] ?? '';
+        if (is_numeric($minPay) && (float)$minPay >= 0) {
+            updateSetting($pdo, 'min_payment_amount', (string)round((float)$minPay, 2));
+        }
         $success = 'Payment settings saved successfully.';
 
         // GCash QR code image. Tenants see it on the payment page.
@@ -386,9 +390,16 @@ require_once 'header.php';
                         </div>
                     </div>
                     
-                    <div class="mb-3">
-                        <label class="form-label">Payment Instructions (Shown to Tenants)</label>
-                        <textarea class="form-control" name="gcash_instructions" rows="2"><?= $s('gcash_instructions') ?></textarea>
+                    <div class="row g-3 mb-3">
+                        <div class="col-md-8">
+                            <label class="form-label">Payment Instructions (Shown to Tenants)</label>
+                            <textarea class="form-control" name="gcash_instructions" rows="2" placeholder="e.g., Send the exact amount, then upload the screenshot with the reference number showing."><?= $s('gcash_instructions') ?></textarea>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">Minimum Payment (PHP)</label>
+                            <input type="number" class="form-control" name="min_payment_amount" min="0" step="0.01" value="<?= htmlspecialchars((string)minimumPayment($pdo)) ?>">
+                            <div class="form-text">Tenants can't submit less, unless what they owe is less.</div>
+                        </div>
                     </div>
                     
                     <div class="d-flex justify-content-between align-items-center border-top pt-3 mt-1">

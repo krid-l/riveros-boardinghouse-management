@@ -13,6 +13,8 @@ $gcashQr = uploadSrc($settings['gcash_qr_path'] ?? '', '../');
 
 $myBalance = round((float)($currentTenant['balance'] ?? 0), 2);
 $myExpected = max($myBalance, 0);
+$minPayment = minimumPayment($pdo);
+$gcashInstructions = trim((string)($settings['gcash_instructions'] ?? ''));
 
 // Paying for the whole room covers every active roommate who still owes.
 $roomExpected = $myExpected;
@@ -52,7 +54,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $payment_method = ($_POST['payment_method'] ?? 'gcash') === 'cash' ? 'cash' : 'gcash';
     $reference_number = trim($_POST['reference_number'] ?? '');
     $payForRoom = isset($_POST['pay_for_room']) && $roomExpected > $myExpected;
-    $expectedAmount = $payForRoom ? $roomExpected : $myExpected;
+    $owed = $payForRoom ? $roomExpected : $myExpected;
+    // At least the minimum; a smaller balance can be paid off in full.
+    $smallest = min($minPayment, $owed);
     $dateObj = DateTime::createFromFormat('Y-m-d', $payment_date);
 
     if (empty($reference_number) && $payment_method === 'cash') {
@@ -64,8 +68,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $error = "You have no outstanding balance to pay.";
     } elseif (hasPendingPayment($pdo, $currentTenant)) {
         $error = "A payment for your balance is already awaiting verification. Please wait for the admin to review it.";
-    } elseif (abs($amount - $expectedAmount) > 0.009) {
-        $error = "Partial or incorrect payments are not allowed. You must pay the exact amount of PHP " . number_format($expectedAmount, 2);
+    } elseif ($amount <= 0) {
+        $error = "Please enter the amount you paid.";
+    } elseif ($amount + 0.009 < $smallest) {
+        $error = $smallest < $minPayment
+            ? "Please pay your full balance of PHP " . number_format($owed, 2) . "."
+            : "The minimum payment is PHP " . number_format($minPayment, 2) . ".";
+    } elseif ($amount > 1000000) {
+        $error = "Please check the amount: that is more than a payment can be.";
     } elseif (!$dateObj || $dateObj->format('Y-m-d') !== $payment_date || $payment_date > date('Y-m-d')) {
         $error = "Please enter a valid payment date (not in the future).";
     } elseif ($payment_method === 'gcash' && $reference_number === '') {
@@ -113,6 +123,7 @@ $payments = $stmt->fetchAll();
 <style>
 /* Custom Styles for Payment Screen */
 .payment-container { max-width: 550px; margin: 0 auto; padding-bottom: 3rem; }
+.amount-guide { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 0.55rem 0.75rem; font-size: 0.75rem; }
 .gcash-card { background: #f0f7ff; border-radius: 16px; padding: 1.25rem; display: flex; justify-content: space-between; align-items: stretch; gap: 1rem; margin-bottom: 0.5rem; }
 @media (max-width: 575.98px) {
     .gcash-card { flex-direction: column; align-items: flex-start; }
@@ -229,28 +240,40 @@ $payments = $stmt->fetchAll();
                 </div>
                 
                 <div class="info-text mb-4">
-                    <i class="fa-solid fa-circle-info text-primary"></i> After sending payment, fill in the details and upload your proof.
+                    <i class="fa-solid fa-circle-info text-primary"></i>
+                    <?= $gcashInstructions !== '' ? nl2br(htmlspecialchars($gcashInstructions)) : 'After sending payment, fill in the details and upload your proof.' ?>
                 </div>
             </div>
 
             <div class="mb-3">
-                <div class="d-flex justify-content-between align-items-center mb-1">
-                    <label class="form-label-custom mb-0">Amount (PHP) <span class="required-ast">*</span></label>
-                    
+                <div class="d-flex justify-content-between align-items-center mb-1 flex-wrap gap-1">
+                    <label class="form-label-custom mb-0" for="amountInput">Amount you paid (PHP) <span class="required-ast">*</span></label>
+
                     <?php if (!empty($currentTenant['room_id']) && $roomTotalBalance > $myBalance): ?>
                     <div class="form-check form-switch mb-0">
-                        <input class="form-check-input" type="checkbox" role="switch" id="payForRoom" name="pay_for_room" value="1" onchange="updateAmount()">
+                        <input class="form-check-input" type="checkbox" role="switch" id="payForRoom" name="pay_for_room" value="1" onchange="updateAmountHint()" <?= !empty($_POST['pay_for_room']) && !empty($error) ? 'checked' : '' ?>>
                         <label class="form-check-label text-muted" for="payForRoom" style="font-size: 0.75rem; font-weight: 600;">Pay for entire room</label>
                     </div>
                     <?php endif; ?>
                 </div>
-                
-                <input type="number" step="0.01" name="amount" id="amountInput" class="form-control form-control-custom fw-semibold bg-light" value="<?= htmlspecialchars($myExpected) ?>" readonly required>
-                <div class="text-muted mt-1" style="font-size: 0.65rem;"><i class="fa-solid fa-circle-info me-1 text-primary"></i> Partial payments are disabled. You must pay the exact balance.</div>
-                
+
+                <!-- Typed by the tenant: what they actually sent, not filled in for them. -->
+                <input type="number" step="0.01" name="amount" id="amountInput" class="form-control form-control-custom fw-semibold"
+                       inputmode="decimal" placeholder="Enter the amount you sent" min="<?= min($minPayment, $myExpected) ?>"
+                       value="<?= htmlspecialchars(!empty($error) ? (string)($_POST['amount'] ?? '') : '') ?>" required>
+
+                <div class="amount-guide mt-2" id="amountGuide">
+                    <div class="d-flex justify-content-between"><span class="text-muted" id="owedLabel">Your balance</span><strong id="owedValue">PHP <?= number_format($myExpected, 2) ?></strong></div>
+                    <div class="d-flex justify-content-between"><span class="text-muted">Minimum payment</span><strong id="minValue">PHP <?= number_format(min($minPayment, $myExpected), 2) ?></strong></div>
+                    <div class="text-muted mt-1" style="font-size: 0.65rem;" id="amountNote">
+                        You can pay PHP <?= number_format($minPayment, 2) ?> or more at a time<?= $myExpected < $minPayment ? ', or your full balance if it is less' : '' ?>. Anything above your balance is kept as credit for your next bill.
+                    </div>
+                </div>
+                <div class="invalid-feedback d-block d-none" id="amountError"></div>
+
                 <div class="alert alert-info border-0 p-2 mt-2 mb-0 d-flex align-items-center" style="font-size: 0.7rem; background-color:#e0f2fe; color:#0284c7;">
                     <i class="fa-regular fa-calendar-check me-2 fs-6"></i>
-                    <div>You are paying your rent for the billing cycle: <strong class="ms-1"><?= htmlspecialchars($billingPeriodStr) ?></strong></div>
+                    <div>Billing cycle: <strong class="ms-1"><?= htmlspecialchars($billingPeriodStr) ?></strong></div>
                 </div>
                 <?php if ($billing['overdue'] > 0): ?>
                 <div class="alert alert-danger border-0 p-2 mt-2 mb-0" style="font-size: 0.7rem;">
@@ -258,22 +281,44 @@ $payments = $stmt->fetchAll();
                 </div>
                 <?php endif; ?>
             </div>
-            
+
             <script>
-            function updateAmount() {
-                const payForRoom = document.getElementById('payForRoom');
-                const amountInput = document.getElementById('amountInput');
-                const myBal = <?= $myExpected ?>;
-                const roomBal = <?= $roomExpected ?>;
-                
-                if (payForRoom && payForRoom.checked) {
-                    amountInput.value = roomBal.toFixed(2);
-                } else {
-                    amountInput.value = myBal.toFixed(2);
-                }
+            // What is owed and the smallest accepted amount, for the tenant alone or for the whole room.
+            // The amount itself is never filled in: the tenant types what they actually sent.
+            const PAY = { mine: <?= json_encode($myExpected) ?>, room: <?= json_encode($roomExpected) ?>, min: <?= json_encode($minPayment) ?> };
+            function peso(n) { return 'PHP ' + Number(n).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+            function updateAmountHint() {
+                const room = document.getElementById('payForRoom');
+                const owed = room && room.checked ? PAY.room : PAY.mine;
+                const smallest = Math.min(PAY.min, owed);
+                document.getElementById('owedLabel').textContent = room && room.checked ? 'Balance of the whole room' : 'Your balance';
+                document.getElementById('owedValue').textContent = peso(owed);
+                document.getElementById('minValue').textContent = peso(smallest);
+                document.getElementById('amountInput').min = smallest;
+                checkAmount();
             }
+            function checkAmount() {
+                const input = document.getElementById('amountInput');
+                const box = document.getElementById('amountError');
+                const room = document.getElementById('payForRoom');
+                const owed = room && room.checked ? PAY.room : PAY.mine;
+                const smallest = Math.min(PAY.min, owed);
+                const value = parseFloat(input.value);
+                let msg = '';
+                if (input.value !== '' && !(value + 0.009 >= smallest)) {
+                    msg = smallest < PAY.min ? 'Please pay your full balance of ' + peso(owed) + '.' : 'The minimum payment is ' + peso(PAY.min) + '.';
+                }
+                box.textContent = msg;
+                box.classList.toggle('d-none', msg === '');
+                input.classList.toggle('is-invalid', msg !== '');
+                input.setCustomValidity(msg);
+            }
+            document.addEventListener('DOMContentLoaded', () => {
+                document.getElementById('amountInput').addEventListener('input', checkAmount);
+                updateAmountHint();
+            });
             </script>
-            
+
             <div class="row g-3 mb-3">
                 <div class="col-6">
                     <label class="form-label-custom">Payment Date <span class="required-ast">*</span></label>
