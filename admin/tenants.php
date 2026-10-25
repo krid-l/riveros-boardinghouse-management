@@ -23,7 +23,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 }
 // After a failed add, the pop-up opens again with what was typed.
 $addOld = ($_SERVER['REQUEST_METHOD'] === 'POST' && ($action ?? '') === 'add' && !empty($error)) ? $_POST : [];
-// The dashboard's "Add Tenant" button links here with ?add=1.
+// The dashboard's "Add Tenant" button links here with ?add=1 (and a room's details with &room=id).
 $openAddModal = $addOld || queryParam('add') === '1';
 if (empty($success) && !empty($_GET['msg'])) {
     $success = htmlspecialchars($_GET['msg'] ?? '');
@@ -137,7 +137,8 @@ $tenants = $tenantsStmt->fetchAll();
 $notYetDue = chargesNotYetDue($pdo);
 
 // Fetch available rooms for the dropdown (only active tenants take up beds)
-$roomsStmt = $pdo->query("SELECT r.id, r.room_number, r.capacity, r.price_per_month, (SELECT COUNT(*) FROM tenants t WHERE t.room_id = r.id AND t.status = 'active') as occupied FROM rooms r");
+// Rooms under maintenance aren't offered at all.
+$roomsStmt = $pdo->query("SELECT r.id, r.room_number, r.capacity, r.price_per_month, (SELECT COUNT(*) FROM tenants t WHERE t.room_id = r.id AND t.status = 'active') as occupied FROM rooms r WHERE r.status <> 'maintenance'");
 $allRooms = $roomsStmt->fetchAll();
 usort($allRooms, fn($a, $b) => strnatcasecmp((string)$a['room_number'], (string)$b['room_number']));   // 1, 2, 10 - not 1, 10, 2
 
@@ -499,7 +500,7 @@ function moveInPaymentFields(string $id, bool $startHidden = false): string {
                                         $label .= " (Avail: $avail | ₱" . number_format($share, 2) . " per tenant)";
                                     }
                                 ?>
-                                <option value="<?= $r['id'] ?>" <?= (int)($addOld['room_id'] ?? 0) === (int)$r['id'] && !$isFull ? 'selected' : '' ?> data-share="<?= $isFull ? '' : rentShare((float)$r['price_per_month'], (int)$r['capacity']) ?>" <?= $isFull ? 'disabled' : '' ?>><?= $label ?></option>
+                                <option value="<?= $r['id'] ?>" <?= (int)($addOld['room_id'] ?? queryParam('room', '0')) === (int)$r['id'] && !$isFull ? 'selected' : '' ?> data-share="<?= $isFull ? '' : rentShare((float)$r['price_per_month'], (int)$r['capacity']) ?>" <?= $isFull ? 'disabled' : '' ?>><?= $label ?></option>
                             <?php endforeach; ?>
                         </select>
                     </div>

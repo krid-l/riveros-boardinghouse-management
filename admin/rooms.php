@@ -159,13 +159,15 @@ require_once 'header.php';
     .tenant-item:hover {
         background-color: #f1f5f9;
     }
-    .right-panel-scroll::-webkit-scrollbar {
-        width: 6px;
-    }
-    .right-panel-scroll::-webkit-scrollbar-thumb {
-        background-color: #cbd5e1;
-        border-radius: 10px;
-    }
+    /* Room details pop-up: only the clicked room's block is shown */
+    .room-detail { display: none; }
+    .room-detail.is-open { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; }
+    .room-fact { background: #f8fafc; border: 1px solid #eef2f7; border-radius: 10px; padding: 0.6rem 0.75rem; height: 100%; }
+    .room-fact-label { font-size: 0.62rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; color: #64748b; }
+    .room-fact-value { font-size: 0.95rem; font-weight: 700; color: #0f172a; white-space: nowrap; }
+    .room-fact-sub { font-size: 0.65rem; color: #94a3b8; }
+    .room-tenant { padding: 0.55rem 0.6rem; border: 1px solid #f1f5f9; border-radius: 10px; margin-bottom: 0.4rem; }
+    .room-tenant:hover { background: #f8fafc; }
 </style>
 
 <div class="d-flex w-100 h-100 bg-transparent">
@@ -268,7 +270,7 @@ require_once 'header.php';
                                 } else {
                                     $badgeClass = 'badge-soft-warning'; $badgeText = 'Available'; $statusKey = 'available';
                                 }
-                                $isActive = $selectedRoom ? $selectedRoom === (int)$r['id'] : $index === 0;
+                                $isActive = $selectedRoom === (int)$r['id'];
                                 $names = array_map(fn($t) => $t['first_name'], $roomTenants);
                             ?>
                             <tr class="room-row <?= $isActive ? 'active' : '' ?>" id="row-<?= $r['id'] ?>" onclick="selectRoom(<?= $r['id'] ?>)"
@@ -322,105 +324,93 @@ require_once 'header.php';
 
     </div>
 
-    <!-- ==================== RIGHT PANEL (Details) ==================== -->
-    <div class="bg-white border-start h-100 right-panel-scroll shadow-sm d-none d-lg-block" id="rightDetailsContainer" style="width: 360px; min-width: 360px; overflow-y: auto;">
-        
-        <?php if (count($rooms) === 0): ?>
-            <div class="d-flex h-100 justify-content-center align-items-center p-4 text-muted">
-                Select a room to view details.
-            </div>
-        <?php endif; ?>
+</div>
 
-        <?php foreach ($rooms as $index => $r): ?>
-            <?php
-                // Only the open room's panel is built; the others are a link away (?room=id).
-                $isOpenPanel = $selectedRoom ? $selectedRoom === (int)$r['id'] : $index === 0;
-                if (!$isOpenPanel) continue;
-
-                $roomTenants = $tenantsByRoom[$r['id']] ?? []; 
-                $occCount = count($roomTenants);
-                $occPct = $r['capacity'] > 0 ? min(100, round(($occCount / $r['capacity']) * 100)) : 0;
-                
-                if ($r['status'] == 'maintenance') {
-                    $badgeClass = 'badge-soft-danger';
-                    $badgeText = 'Maintenance';
-                } elseif ($occCount >= $r['capacity'] && $r['capacity'] > 0) {
-                    $badgeClass = 'badge-soft-success';
-                    $badgeText = 'Occupied';
-                } elseif ($occCount > 0) {
-                    $badgeClass = 'badge-soft-info';
-                    $badgeText = 'Partial';
-                } else {
-                    $badgeClass = 'badge-soft-warning';
-                    $badgeText = 'Available';
-                }
-            ?>
-            <div class="room-details-panel d-flex flex-column h-100 p-3" id="panel-<?= $r['id'] ?>">
-                
-                <!-- Panel Header -->
-                <div class="d-flex justify-content-between align-items-start mb-3">
-                    <div class="d-flex align-items-center">
-                        <div class="bg-primary bg-opacity-10 text-primary rounded-circle d-flex justify-content-center align-items-center me-2" style="width: 38px; height: 38px;">
-                            <i class="fa-solid fa-building"></i>
+<!-- Room details: a pop-up opened by clicking a room row -->
+<div class="modal fade" id="roomDetailsModal" tabindex="-1" aria-label="Room details" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-lg modal-dialog-scrollable">
+        <div class="modal-content border-0 shadow rounded-4">
+        <?php foreach ($rooms as $r):
+            $roomTenants = $tenantsByRoom[$r['id']] ?? [];
+            $occCount = count($roomTenants);
+            $capacity = (int)$r['capacity'];
+            $occPct = $capacity > 0 ? min(100, round(($occCount / $capacity) * 100)) : 0;
+            $share = rentShare((float)$r['price_per_month'], $capacity);
+            $isMaintenance = $r['status'] === 'maintenance';
+            $isFull = $occCount >= $capacity && $capacity > 0;
+            if ($isMaintenance) {
+                [$badgeClass, $badgeText] = ['badge-soft-danger', 'Maintenance'];
+            } elseif ($isFull) {
+                [$badgeClass, $badgeText] = ['badge-soft-success', 'Occupied'];
+            } elseif ($occCount > 0) {
+                [$badgeClass, $badgeText] = ['badge-soft-info', 'Partial'];
+            } else {
+                [$badgeClass, $badgeText] = ['badge-soft-warning', 'Available'];
+            }
+        ?>
+            <div class="room-detail" data-room="<?= (int)$r['id'] ?>">
+                <div class="modal-header border-0 pb-2">
+                    <div class="d-flex align-items-center gap-2">
+                        <div class="bg-primary bg-opacity-10 text-primary rounded-3 d-flex justify-content-center align-items-center" style="width: 42px; height: 42px;">
+                            <i class="fa-solid fa-door-open"></i>
                         </div>
-                        <div class="d-flex align-items-center">
-                            <h5 class="fw-bold mb-0 text-dark me-2">Room <?= htmlspecialchars($r['room_number'] ?? '') ?></h5>
-                            <span class="badge <?= $badgeClass ?> ms-1" style="font-size: 0.65rem;"><?= $badgeText ?></span>
+                        <div>
+                            <h5 class="modal-title fw-bold mb-0 room-detail-title">Room <?= htmlspecialchars($r['room_number'] ?? '') ?></h5>
+                            <span class="badge <?= $badgeClass ?>" style="font-size: 0.65rem;"><?= $badgeText ?></span>
                         </div>
                     </div>
-                    <button class="btn btn-sm btn-light border-0 rounded-circle text-muted" onclick="closeDetailsPanel()"><i class="fa-solid fa-xmark"></i></button>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
-
-                <!-- Stats List -->
-                <div class="mb-3">
-                    <div class="d-flex justify-content-between align-items-center py-2 border-bottom border-light">
-                        <span class="text-muted fw-semibold" style="font-size: 0.75rem;"><i class="fa-solid fa-users me-2"></i> Capacity</span>
-                        <span class="fw-bold text-dark" style="font-size: 0.8rem;"> <?= $r['capacity'] ?> Persons</span>
-                    </div>
-                    <div class="d-flex justify-content-between align-items-center py-2 border-bottom border-light">
-                        <span class="text-muted fw-semibold" style="font-size: 0.75rem;"><i class="fa-solid fa-peso-sign me-2"></i> Price / Room</span>
-                        <span class="fw-bold text-dark" style="font-size: 0.8rem;">₱<?= number_format($r['price_per_month'], 2) ?> <span class="text-muted fw-normal">/ month</span></span>
-                    </div>
-                    <div class="d-flex justify-content-between align-items-center py-2 border-bottom border-light">
-                        <span class="text-muted fw-semibold" style="font-size: 0.75rem;"><i class="fa-solid fa-user me-2"></i> Rent / Tenant</span>
-                        <span class="fw-bold text-dark" style="font-size: 0.8rem;">₱<?= number_format(rentShare((float)$r['price_per_month'], (int)$r['capacity']), 2) ?> <span class="text-muted fw-normal">/ month<?= $r['capacity'] > 1 ? ' (÷ ' . (int)$r['capacity'] . ' beds)' : '' ?></span></span>
-                    </div>
-                    <div class="d-flex justify-content-between align-items-center py-2 border-bottom border-light">
-                        <span class="text-muted fw-semibold" style="font-size: 0.75rem;"><i class="fa-solid fa-sack-dollar me-2"></i> Earning Now</span>
-                        <span class="fw-bold <?= $occCount ? 'text-success' : 'text-muted' ?>" style="font-size: 0.8rem;">₱<?= number_format(rentShare((float)$r['price_per_month'], (int)$r['capacity']) * $occCount, 2) ?> <span class="text-muted fw-normal">/ month<?= $occCount < $r['capacity'] ? ' (₱' . number_format($r['price_per_month'], 0) . ' when full)' : '' ?></span></span>
-                    </div>
-                    <div class="d-flex justify-content-between align-items-center py-2 border-bottom border-light">
-                        <span class="text-muted fw-semibold" style="font-size: 0.75rem;"><i class="fa-solid fa-lock me-2"></i> Status</span>
-                        <span class="fw-bold text-dark" style="font-size: 0.8rem;"><?= ucfirst($r['status']) ?></span>
-                    </div>
-                    <div class="d-flex justify-content-between align-items-center py-2 border-bottom border-light">
-                        <span class="text-muted fw-semibold" style="font-size: 0.75rem;"><i class="fa-solid fa-chart-pie me-2"></i> Occupancy</span>
-                        <div class="text-end" style="width: 120px;">
-                            <div class="d-flex justify-content-between mb-1" style="font-size: 0.7rem;">
-                                <span class="fw-semibold text-muted"><i class="fa-solid fa-user-group me-1"></i> <?= $occCount ?>/<?= $r['capacity'] ?></span>
-                                <span class="fw-bold text-primary">(<?= $occPct ?>%)</span>
-                            </div>
-                            <div class="progress rounded-pill bg-light" style="height: 4px;">
-                                <div class="progress-bar bg-primary" style="width: <?= $occPct ?>%"></div>
-                            </div>
+                <div class="modal-body pt-2">
+                    <?php if ($isMaintenance): ?>
+                        <div class="alert alert-warning border-0 py-2 px-3 mb-3" style="font-size: 0.75rem;">
+                            <i class="fa-solid fa-screwdriver-wrench me-1"></i> Under maintenance: this room isn't offered when assigning tenants. Edit the room to make it available again.
                         </div>
-                    </div>
-                </div>
-
-                <!-- Tenants Header -->
-                <div class="d-flex justify-content-between align-items-center mb-2">
-                    <h6 class="fw-bold mb-0 text-dark" style="font-size: 0.8rem;">Tenants (<?= $occCount ?>)</h6>
-                    <a href="tenants.php" class="btn btn-sm btn-outline-primary fw-semibold rounded-pill px-2 py-0" style="font-size: 0.7rem; line-height: 1.5;">
-                        <i class="fa-solid fa-plus me-1"></i> Add Tenant
-                    </a>
-                </div>
-                
-                <!-- Tenants List -->
-                <div class="tenant-list flex-grow-1">
-                    <?php if ($occCount === 0): ?>
-                        <div class="text-center py-3 text-muted bg-light rounded-3" style="font-size: 0.75rem;">No tenants assigned yet.</div>
                     <?php endif; ?>
-                    
+
+                    <div class="row g-2 mb-3">
+                        <div class="col-6 col-md-3">
+                            <div class="room-fact">
+                                <div class="room-fact-label">Beds taken</div>
+                                <div class="room-fact-value"><?= $occCount ?> / <?= $capacity ?></div>
+                                <div class="progress rounded-pill bg-light mt-1" style="height: 4px;"><div class="progress-bar bg-primary" style="width: <?= $occPct ?>%"></div></div>
+                            </div>
+                        </div>
+                        <div class="col-6 col-md-3">
+                            <div class="room-fact">
+                                <div class="room-fact-label">Room price</div>
+                                <div class="room-fact-value">₱<?= number_format($r['price_per_month'], 2) ?></div>
+                                <div class="room-fact-sub">a month, when full</div>
+                            </div>
+                        </div>
+                        <div class="col-6 col-md-3">
+                            <div class="room-fact">
+                                <div class="room-fact-label">Rent per tenant</div>
+                                <div class="room-fact-value">₱<?= number_format($share, 2) ?></div>
+                                <div class="room-fact-sub"><?= $capacity > 1 ? '÷ ' . $capacity . ' beds' : 'one tenant' ?></div>
+                            </div>
+                        </div>
+                        <div class="col-6 col-md-3">
+                            <div class="room-fact">
+                                <div class="room-fact-label">Earning now</div>
+                                <div class="room-fact-value <?= $occCount ? 'text-success' : 'text-muted' ?>">₱<?= number_format($share * min($occCount, $capacity), 2) ?></div>
+                                <div class="room-fact-sub">a month<?= $occCount < $capacity ? ' · ' . ($capacity - $occCount) . ' free ' . ($capacity - $occCount === 1 ? 'bed' : 'beds') : '' ?></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <h6 class="fw-bold mb-0 text-dark" style="font-size: 0.85rem;">Tenants (<?= $occCount ?>)</h6>
+                        <?php if (!$isMaintenance && !$isFull): ?>
+                            <a href="tenants.php?add=1&amp;room=<?= (int)$r['id'] ?>" class="btn btn-sm btn-outline-primary fw-semibold rounded-pill px-3" style="font-size: 0.72rem;">
+                                <i class="fa-solid fa-user-plus me-1"></i> Add tenant to this room
+                            </a>
+                        <?php endif; ?>
+                    </div>
+
+                    <?php if ($occCount === 0): ?>
+                        <div class="text-center py-4 text-muted bg-light rounded-3" style="font-size: 0.78rem;">No tenants in this room yet.</div>
+                    <?php endif; ?>
                     <?php foreach ($roomTenants as $t):
                         $tData = htmlspecialchars(json_encode([
                             'id' => (int)$t['id'],
@@ -430,53 +420,49 @@ require_once 'header.php';
                             'balance' => round((float)$t['balance'], 2),
                             'return_room' => (int)$r['id'],
                         ]), ENT_QUOTES);
+                        $bal = round((float)$t['balance'], 2);
                     ?>
-                        <div class="d-flex align-items-center justify-content-between p-1 mb-1 tenant-item rounded" data-tenant="<?= $tData ?>">
-                            <div class="d-flex align-items-center">
-                                <?= avatarHtml($t['first_name'] . ' ' . $t['last_name'], 30, 'me-2 shadow-sm', $t['profile_picture'] ?? null, '../') ?>
-                                <div>
-                                    <h6 class="mb-0 fw-bold text-dark" style="font-size: 0.75rem; line-height:1.2;"><?= htmlspecialchars($t['first_name'] . ' ' . $t['last_name']) ?></h6>
-                                    <small class="text-muted" style="font-size: 0.65rem;">Since <?= date('M j, Y', strtotime($t['created_at'])) ?></small>
+                        <div class="room-tenant d-flex align-items-center justify-content-between gap-2" data-tenant="<?= $tData ?>">
+                            <a href="tenant_details.php?id=<?= (int)$t['id'] ?>" class="d-flex align-items-center text-decoration-none" style="min-width: 0;">
+                                <?= avatarHtml($t['first_name'] . ' ' . $t['last_name'], 34, 'me-2 shadow-sm', $t['profile_picture'] ?? null, '../') ?>
+                                <div style="min-width: 0;">
+                                    <div class="fw-bold text-dark text-truncate" style="font-size: 0.8rem;"><?= htmlspecialchars($t['first_name'] . ' ' . $t['last_name']) ?></div>
+                                    <div class="text-muted" style="font-size: 0.68rem;">Since <?= date('M j, Y', strtotime($t['created_at'])) ?>
+                                        · <?= $bal > 0 ? '<span class="text-danger fw-semibold">owes ₱' . number_format($bal, 2) . '</span>' : '<span class="text-success fw-semibold">paid up</span>' ?></div>
                                 </div>
-                            </div>
-                            <div class="dropdown">
-                                <button class="btn btn-link text-muted p-0 px-2" type="button" data-bs-toggle="dropdown" data-bs-strategy="fixed" aria-expanded="false" title="Tenant actions">
-                                    <i class="fa-solid fa-ellipsis-vertical" style="font-size:0.8rem;"></i>
-                                </button>
-                                <ul class="dropdown-menu dropdown-menu-end shadow-sm border-0" style="font-size: 0.75rem;">
-                                    <li><a class="dropdown-item" href="tenant_details.php?id=<?= $t['id'] ?>"><i class="fa-regular fa-eye me-2 text-muted"></i>View details</a></li>
-                                    <li><button type="button" class="dropdown-item" onclick="openRoomModal(this)"><i class="fa-solid fa-right-left me-2 text-info"></i>Change room</button></li>
-                                    <li><hr class="dropdown-divider"></li>
-                                    <li><button type="button" class="dropdown-item text-danger" onclick="openDeactivateModal(this)"><i class="fa-solid fa-user-xmark me-2"></i>Remove tenant</button></li>
-                                </ul>
+                            </a>
+                            <div class="d-flex gap-1 flex-shrink-0">
+                                <a href="tenant_details.php?id=<?= (int)$t['id'] ?>" class="btn btn-sm btn-light border" title="View details" aria-label="View details"><i class="fa-regular fa-eye"></i></a>
+                                <button type="button" class="btn btn-sm btn-light border text-info" title="Change room" aria-label="Change room" onclick="fromDetails(() => openRoomModal(this))"><i class="fa-solid fa-right-left"></i></button>
+                                <button type="button" class="btn btn-sm btn-light border text-danger" title="Remove tenant" aria-label="Remove tenant" onclick="fromDetails(() => openDeactivateModal(this))"><i class="fa-solid fa-user-xmark"></i></button>
                             </div>
                         </div>
                     <?php endforeach; ?>
                 </div>
-
-                <!-- Action Buttons -->
-                <div class="mt-auto pt-2">
-                    <button class="btn btn-light border w-100 fw-bold text-dark mb-1 py-1" style="font-size: 0.8rem;" onclick="openEditModal(<?= $r['id'] ?>, '<?= htmlspecialchars(addslashes($r['room_number'])) ?>', <?= $r['capacity'] ?>, <?= $r['price_per_month'] ?>, '<?= htmlspecialchars($r['status'] ?? '') ?>')">
-                        <i class="fa-solid fa-pen me-1 text-muted"></i> Edit Room
-                    </button>
-                    
-                    <?php if ($occCount === 0): ?>
-                    <form method="POST" onsubmit="return confirm('Are you sure you want to delete this room?');">
-                        <input type="hidden" name="action" value="delete">
-                        <input type="hidden" name="room_id" value="<?= $r['id'] ?>">
-                        <button type="submit" class="btn btn-link text-danger w-100 text-decoration-none py-1" style="font-size: 0.75rem;">
-                            Delete Room
+                <div class="modal-footer border-0 bg-light d-flex justify-content-between">
+                    <div>
+                        <?php if ($occCount === 0): ?>
+                        <form method="POST" class="m-0" onsubmit="return confirm('Delete Room <?= htmlspecialchars(addslashes($r['room_number']), ENT_QUOTES) ?>? This cannot be undone.');">
+                            <input type="hidden" name="action" value="delete">
+                            <input type="hidden" name="room_id" value="<?= (int)$r['id'] ?>">
+                            <button type="submit" class="btn btn-link text-danger text-decoration-none px-0" style="font-size: 0.8rem;"><i class="fa-regular fa-trash-can me-1"></i> Delete room</button>
+                        </form>
+                        <?php else: ?>
+                        <span class="text-muted" style="font-size: 0.7rem;">A room with tenants can't be deleted.</span>
+                        <?php endif; ?>
+                    </div>
+                    <div class="d-flex gap-2">
+                        <button type="button" class="btn btn-light border" data-bs-dismiss="modal">Close</button>
+                        <button type="button" class="btn btn-primary px-3" onclick="fromDetails(() => openEditModal(<?= (int)$r['id'] ?>, '<?= htmlspecialchars(addslashes($r['room_number']), ENT_QUOTES) ?>', <?= $capacity ?>, <?= (float)$r['price_per_month'] ?>, '<?= htmlspecialchars($r['status'] ?? '', ENT_QUOTES) ?>'))">
+                            <i class="fa-solid fa-pen me-1"></i> Edit room
                         </button>
-                    </form>
-                    <?php endif; ?>
+                    </div>
                 </div>
-                
             </div>
         <?php endforeach; ?>
+        </div>
     </div>
 </div>
-
-
 
 <!-- Change Room Modal (tenant) -->
 <div class="modal fade" id="roomChangeModal" tabindex="-1">
@@ -500,6 +486,7 @@ require_once 'header.php';
                         <select class="form-select" name="room_id" id="rc_room" required>
                             <option value="">Select a room</option>
                             <?php foreach ($rooms as $opt):
+                                if ($opt['status'] === 'maintenance') continue;   // can't take tenants
                                 $optOcc = isset($tenantsByRoom[$opt['id']]) ? count($tenantsByRoom[$opt['id']]) : 0;
                                 $optFull = $optOcc >= $opt['capacity'];
                             ?>
@@ -644,27 +631,30 @@ require_once 'header.php';
 </div>
 
 <script>
-function closeDetailsPanel() {
-    const container = document.getElementById('rightDetailsContainer');
-    if (container) {
-        container.classList.remove('d-block', 'd-lg-block');
-        container.classList.add('d-none');
-    }
-    // Deselect all rows
-    document.querySelectorAll('.room-row').forEach(row => row.classList.remove('active'));
+// Open a room's details pop-up.
+function selectRoom(id) {
+    const block = document.querySelector('.room-detail[data-room="' + id + '"]');
+    if (!block) return;
+    document.querySelectorAll('.room-detail').forEach(el => el.classList.toggle('is-open', el === block));
+    document.querySelectorAll('.room-row').forEach(row => row.classList.toggle('active', row.id === 'row-' + id));
+    const modal = document.getElementById('roomDetailsModal');
+    modal.setAttribute('aria-label', block.querySelector('.room-detail-title').textContent);
+    bootstrap.Modal.getOrCreateInstance(modal).show();
 }
 
-function selectRoom(id) {
-    // Already showing this room? Nothing to fetch.
-    if (document.getElementById('panel-' + id)) {
-        const container = document.getElementById('rightDetailsContainer');
-        if (container) { container.classList.remove('d-none'); container.classList.add('d-block'); }
-        return;
-    }
-    // Otherwise ask the server for that room's panel. Only one panel is ever built, which
-    // keeps this page small no matter how many rooms and tenants there are.
-    window.location = 'rooms.php?room=' + encodeURIComponent(id);
+// Edit / change room / remove open their own pop-up: close the details first (Bootstrap
+// shows one modal at a time), then open it.
+function fromDetails(open) {
+    const modal = document.getElementById('roomDetailsModal');
+    modal.addEventListener('hidden.bs.modal', () => open(), { once: true });
+    bootstrap.Modal.getInstance(modal).hide();
 }
+
+// A link to rooms.php?room=id (dashboard, notifications) opens that room straight away.
+document.addEventListener('DOMContentLoaded', () => {
+    const openRoom = <?= json_encode($selectedRoom && !$success && !$error ? $selectedRoom : 0) ?>;
+    if (openRoom) selectRoom(openRoom);
+});
 
 // "Each tenant pays ₱2,000.00 (₱4,000.00 ÷ 2 beds)" under the price, as it is typed.
 function updateRentPreview(form) {

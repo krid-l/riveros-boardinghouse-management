@@ -433,13 +433,18 @@ function oldestUnpaidDueDate(PDO $pdo, int $tenantId, float $balance): ?string {
 }
 
 // Room capacity check, counting active tenants only. Call inside a transaction.
+// A room under maintenance takes nobody: that is an error, not just "full".
 function roomHasSpace(PDO $pdo, int $roomId, ?int $ignoreTenantId = null): bool {
-    $stmt = $pdo->prepare("SELECT capacity FROM rooms WHERE id = ? FOR UPDATE");
+    $stmt = $pdo->prepare("SELECT capacity, status, room_number FROM rooms WHERE id = ? FOR UPDATE");
     $stmt->execute([$roomId]);
-    $capacity = $stmt->fetchColumn();
-    if ($capacity === false) {
+    $room = $stmt->fetch();
+    if (!$room) {
         throw new Exception("Selected room does not exist.");
     }
+    if ($room['status'] === 'maintenance') {
+        throw new Exception("Room {$room['room_number']} is under maintenance and can't take tenants.");
+    }
+    $capacity = $room['capacity'];
     $cnt = $pdo->prepare("SELECT COUNT(*) FROM tenants WHERE room_id = ? AND status = 'active' AND id <> ?");
     $cnt->execute([$roomId, $ignoreTenantId ?? 0]);
     return (int)$cnt->fetchColumn() < (int)$capacity;
