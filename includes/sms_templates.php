@@ -69,3 +69,18 @@ function smsPaymentRejectedMessage(PDO $pdo, string $name, float $amount, string
          . "Hello, $name. Your payment of " . smsPeso($amount) . ($reference !== '' ? " (ref $reference)" : '') . ' was not approved.'
          . "\n\nPlease check the amount and reference number and submit it again, or contact the management. Thank you.";
 }
+
+/** The admin approved using the deposit for the tenant's last month. */
+function smsDepositApprovedMessage(PDO $pdo, string $name, float $deposit, string $monthLabel, float $balance): string {
+    return smsHeader($pdo) . "\n\n"
+         . "Hello, $name! Your request to use your deposit of " . smsPeso($deposit) . " for your rent for $monthLabel has been approved.\n\n"
+         . 'Remaining Balance: ' . smsPeso(max(0, $balance)) . "\n\nThank you!";
+}
+
+/** The admin declined it. */
+function smsDepositDeclinedMessage(PDO $pdo, string $name, string $monthLabel, string $note): string {
+    return smsHeader($pdo) . "\n\n"
+         . "Hello, $name. Your request to use your deposit for your rent for $monthLabel was not approved."
+         . ($note !== '' ? "\n\nReason: $note" : '')
+         . "\n\nPlease contact the management if you have questions. Thank you.";
+}

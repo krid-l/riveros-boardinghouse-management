@@ -1,6 +1,20 @@
 <?php
 require_once 'header.php';
 require_once '../includes/billing.php';
+require_once '../includes/deposit_requests.php';
+
+// "Use my deposit for my last month": the tenant asks, the admin approves.
+$depositMsg = '';
+$depositErr = '';
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'deposit_request') {
+    $depositErr = requestDepositUse($pdo, $currentTenant, (string)($_POST['last_month'] ?? ''));
+    if ($depositErr === '') {
+        $depositMsg = 'Request sent. The admin will confirm it, and you will get a text.';
+    }
+} elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'deposit_cancel') {
+    cancelDepositRequest($pdo, (int)$currentTenant['id']);
+    $depositMsg = 'Request cancelled.';
+}
 
 // Fetch specific room info for the tenant
 $room = null;
@@ -19,6 +33,9 @@ $roomCapacity = $room ? max(1, (int)$room['capacity']) : 1;
 $myRentShare = $room ? rentShare((float)$room['price_per_month'], $roomCapacity) : 0.0;
 // Held to pay for their last month: one month of their rent.
 $myDeposit = tenantDeposit($pdo, $currentTenant);
+$depositUsed = depositAppliedThisStay($pdo, $currentTenant);
+$depositPending = pendingDepositRequest($pdo, (int)$currentTenant['id']);
+$depositLast = $depositPending ? null : latestDepositRequest($pdo, (int)$currentTenant['id']);
 $upcomingDue = upcomingDueDate($pdo, (int)$currentTenant['id']);
 
 // Fetch recent payment history
@@ -47,6 +64,7 @@ $balance = $currentTenant['balance'] ?? 0;
 
 <style>
 .dashboard-header { margin-bottom: 1.5rem; }
+.deposit-icon { width: 42px; height: 42px; border-radius: 12px; background: #eef2ff; color: #4f46e5; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; flex-shrink: 0; }
 .room-card {
     background: #0d6efd; /* Fallback */
     background: linear-gradient(135deg, #1e71ff 0%, #0055ff 100%);
@@ -170,7 +188,7 @@ $balance = $currentTenant['balance'] ?? 0;
         <div class="text-white-50 fw-semibold" style="font-size: 0.85rem;">
             <i class="fa-solid fa-money-bill-wave me-1"></i> PHP <?= number_format($myRentShare, 2) ?> / month<?php if ($roomCapacity > 1): ?> <span class="text-white-50">(1 of <?= $roomCapacity ?> beds in the PHP <?= number_format($room['price_per_month'], 2) ?> room)</span><?php endif; ?>
             <?php if ($myDeposit > 0): ?>
-                <br><i class="fa-solid fa-vault me-1"></i> PHP <?= number_format($myDeposit, 2) ?> deposit <span class="text-white-50">(pays for your last month)</span>
+                <br><i class="fa-solid fa-vault me-1"></i> PHP <?= number_format($myDeposit, 2) ?> deposit <span class="text-white-50"><?= $depositUsed ? '(used for ' . date('F Y', strtotime($depositUsed['billing_month'] . '-01')) . ')' : '(pays for your last month)' ?></span>
             <?php endif; ?>
         </div>
     </div>
@@ -221,6 +239,47 @@ $balance = $currentTenant['balance'] ?? 0;
     </div>
     <h5 class="fw-bold text-dark">No Room Assigned</h5>
     <p class="text-muted mb-0">Please wait for the administrator to assign you to a room.</p>
+</div>
+<?php endif; ?>
+
+<?php if ($room && $myDeposit > 0): ?>
+<!-- Deposit: use it for the last month (the admin confirms) -->
+<div class="section-card mb-4" id="deposit">
+    <div class="d-flex align-items-start gap-3">
+        <div class="deposit-icon"><i class="fa-solid fa-vault"></i></div>
+        <div class="flex-grow-1">
+            <h6 class="fw-bold text-dark mb-1">Your deposit: PHP <?= number_format($myDeposit, 2) ?></h6>
+            <?php if ($depositMsg): ?><div class="alert alert-success py-2 px-3 mb-2" style="font-size:0.8rem;"><?= htmlspecialchars($depositMsg) ?></div><?php endif; ?>
+            <?php if ($depositErr): ?><div class="alert alert-danger py-2 px-3 mb-2" style="font-size:0.8rem;"><?= htmlspecialchars($depositErr) ?></div><?php endif; ?>
+
+            <?php if ($depositUsed): ?>
+                <p class="text-muted mb-0" style="font-size:0.8rem;"><i class="fa-solid fa-circle-check text-success me-1"></i>Used to pay your rent for <strong><?= date('F Y', strtotime($depositUsed['billing_month'] . '-01')) ?></strong>.</p>
+            <?php elseif ($depositPending): ?>
+                <p class="text-muted mb-2" style="font-size:0.8rem;">
+                    <i class="fa-regular fa-hourglass-half text-warning me-1"></i>You asked to use it for your rent for <strong><?= date('F Y', strtotime($depositPending['billing_month'] . '-01')) ?></strong>
+                    (sent <?= date('M j', strtotime($depositPending['created_at'])) ?>). Waiting for the admin to confirm.
+                </p>
+                <form method="POST" class="m-0" onsubmit="return confirm('Cancel your request?');">
+                    <input type="hidden" name="action" value="deposit_cancel">
+                    <button type="submit" class="btn btn-sm btn-outline-secondary rounded-pill px-3">Cancel request</button>
+                </form>
+            <?php else: ?>
+                <p class="text-muted mb-2" style="font-size:0.8rem;">It pays for your last month. Moving out soon? Tell us which month is your last and the admin will apply your deposit to it.</p>
+                <?php if ($depositLast && $depositLast['status'] === 'declined'): ?>
+                    <div class="alert alert-warning py-2 px-3 mb-2" style="font-size:0.75rem;">Your last request (for <?= date('F Y', strtotime($depositLast['billing_month'] . '-01')) ?>) was not approved<?= $depositLast['note'] ? ': ' . htmlspecialchars($depositLast['note']) : '.' ?></div>
+                <?php endif; ?>
+                <form method="POST" class="d-flex flex-wrap gap-2 align-items-center m-0" onsubmit="return confirm('Ask the admin to use your deposit for ' + this.last_month.selectedOptions[0].text + '?');">
+                    <input type="hidden" name="action" value="deposit_request">
+                    <select name="last_month" class="form-select form-select-sm" style="max-width: 200px;" aria-label="Your last month">
+                        <?php foreach (depositMonthChoices() as $value => $label): ?>
+                            <option value="<?= $value ?>"><?= $label ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                    <button type="submit" class="btn btn-sm btn-primary rounded-pill px-3"><i class="fa-solid fa-paper-plane me-1"></i>Use my deposit</button>
+                </form>
+            <?php endif; ?>
+        </div>
+    </div>
 </div>
 <?php endif; ?>
 

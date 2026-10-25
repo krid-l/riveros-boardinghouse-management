@@ -196,7 +196,7 @@ $smsPurposeLabels = [
     'payment_verified' => 'Payment verified', 'payment_covered' => 'Paid by roommate', 'move_in_payment' => 'Move-in payment',
     'password_reset' => 'Password reset code', 'registration' => 'Welcome / login details',
     'payment_rejected' => 'Payment rejected', 'reminder_due' => 'Rent due soon', 'reminder_due_today' => 'Rent due today',
-    'reminder_overdue' => 'Rent overdue', 'announcement' => 'Announcement', 'test' => 'Test',
+    'reminder_overdue' => 'Rent overdue', 'announcement' => 'Announcement', 'test' => 'Test', 'deposit_request' => 'Deposit request answer',
 ];
 $qrUploadedAt = $settingsMap['gcash_qr_uploaded_at'] ?? '';
 require_once '../includes/daily_jobs.php';

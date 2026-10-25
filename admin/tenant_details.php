@@ -8,6 +8,7 @@ require_once '../includes/password_reset.php';
 require_once '../includes/tenant_profile.php';
 require_once '../includes/uploads.php';
 require_once '../includes/sms_templates.php';
+require_once '../includes/deposit_requests.php';
 requireAdmin();
 
 $reminderSuccess = '';
@@ -51,6 +52,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'edit_
     } catch (Exception $e) {
         $profileError = $e->getMessage();
         $reminderError = $profileError;
+    }
+}
+
+// The tenant asked to use their deposit for their last month: approve or decline it.
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'deposit_decide' && (int)($_POST['tenant_id'] ?? 0) === $tenantId) {
+    $approve = ($_POST['decision'] ?? '') === 'approve';
+    $r = decideDepositRequest($pdo, (int)($_POST['request_id'] ?? 0), $approve, (string)($_POST['note'] ?? ''));
+    if ($r['error'] !== '') {
+        $reminderError = $r['error'];
+    } else {
+        $reminderSuccess = ($approve
+            ? 'Deposit of ₱' . number_format($r['applied'], 2) . ' applied to the requested month.'
+            : 'Request declined.') . ' ' . smsOutcomeText($r['sms']);
     }
 }
 
@@ -450,6 +464,45 @@ require_once 'header.php';
                         <span class="badge bg-warning-subtle text-warning border border-warning-subtle">No room</span>
                     <?php endif; ?>
                 </span>
+            </div>
+        </div>
+
+        <!-- Deposit: held for the last month; the tenant can ask to use it -->
+        <?php
+        $depositUsed = depositAppliedThisStay($pdo, $tenant);
+        $depositPending = pendingDepositRequest($pdo, $tenantId);
+        ?>
+        <div class="section-card shadow-sm" id="deposit">
+            <div class="section-header">
+                <h6 class="section-title"><i class="fa-solid fa-vault text-muted me-2"></i>Deposit</h6>
+                <?php if ($depositPending): ?><span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle">Request waiting</span><?php endif; ?>
+            </div>
+            <div class="p-3" style="font-size:0.75rem;">
+                <?php if ($depositHeld <= 0 && !$depositUsed): ?>
+                    <span class="text-muted">No deposit on record for this stay.</span>
+                <?php elseif ($depositUsed): ?>
+                    <div><strong>₱<?= number_format((float)$depositUsed['amount'], 2) ?></strong> used for the rent of <strong><?= date('F Y', strtotime($depositUsed['billing_month'] . '-01')) ?></strong>.</div>
+                <?php else: ?>
+                    <div class="mb-2"><strong>₱<?= number_format($depositHeld, 2) ?></strong> held for the last month of stay.</div>
+                    <?php if ($depositPending): ?>
+                        <div class="alert alert-warning py-2 px-2 mb-2" style="font-size:0.72rem;">
+                            The tenant asked to use it for <strong><?= date('F Y', strtotime($depositPending['billing_month'] . '-01')) ?></strong>
+                            (<?= date('M j, g:i A', strtotime($depositPending['created_at'])) ?>).
+                        </div>
+                        <form method="POST" class="m-0">
+                            <input type="hidden" name="action" value="deposit_decide">
+                            <input type="hidden" name="tenant_id" value="<?= $tenantId ?>">
+                            <input type="hidden" name="request_id" value="<?= (int)$depositPending['id'] ?>">
+                            <input type="text" name="note" class="form-control form-control-sm mb-2" maxlength="255" placeholder="Note to the tenant if declining (optional)">
+                            <div class="d-flex gap-2">
+                                <button type="submit" name="decision" value="approve" class="btn btn-sm btn-success flex-grow-1" onclick="return confirm('Apply the ₱<?= number_format($depositHeld, 2) ?> deposit to <?= date('F Y', strtotime($depositPending['billing_month'] . '-01')) ?>?');"><i class="fa-solid fa-check me-1"></i>Approve</button>
+                                <button type="submit" name="decision" value="decline" class="btn btn-sm btn-outline-danger flex-grow-1"><i class="fa-solid fa-xmark me-1"></i>Decline</button>
+                            </div>
+                        </form>
+                    <?php else: ?>
+                        <span class="text-muted">The tenant can ask to use it for their last month from their portal. If they move out without asking, it is applied automatically.</span>
+                    <?php endif; ?>
+                <?php endif; ?>
             </div>
         </div>
 

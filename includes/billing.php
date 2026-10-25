@@ -109,6 +109,11 @@ function applyDepositToLastMonth(PDO $pdo, int $tenantId, string $moveOutDate): 
     $deposit = tenantDeposit($pdo, $tenant);
     if ($deposit <= 0) return 0.0;
 
+    // Already used during this stay (the tenant asked to put it toward their last month): once is all.
+    $used = $pdo->prepare("SELECT 1 FROM charges WHERE tenant_id = ? AND kind = ? AND billing_month >= ?");
+    $used->execute([$tenantId, DEPOSIT_APPLIED_KIND, date('Y-m', strtotime($tenant['move_in_date']))]);
+    if ($used->fetchColumn()) return 0.0;
+
     $ins = $pdo->prepare("
         INSERT INTO charges (tenant_id, room_id, kind, billing_month, description, amount, due_date)
         VALUES (?, NULL, ?, ?, ?, ?, ?)

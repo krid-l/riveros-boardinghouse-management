@@ -42,6 +42,10 @@ foreach ($pdo->query("SELECT id, balance, status FROM tenants WHERE balance > 0"
 // Complaints not resolved yet (pending or in progress).
 $unresolvedComplaints = (int)$pdo->query("SELECT COUNT(*) FROM complaints WHERE status <> 'resolved'")->fetchColumn();
 
+// Tenants asking to use their deposit for their last month.
+$depositRequests = $pdo->query("SELECT r.tenant_id, t.first_name, t.last_name FROM deposit_requests r JOIN tenants t ON t.id = r.tenant_id
+                                WHERE r.status = 'pending' ORDER BY r.created_at, r.id")->fetchAll();
+
 // Batched Rooms Aggregate
 $totalRooms = $pdo->query("SELECT COUNT(*) FROM rooms")->fetchColumn();
 
@@ -334,6 +338,13 @@ require_once 'header.php';
                      $roomsWithSpaceCount ? $availableSpaces . ' free ' . ($availableSpaces === 1 ? 'bed' : 'beds') : 'Every room is full',
                      'fa-door-open', 'success', 'rooms.php?show=space'],
                 ];
+                if ($depositRequests) {
+                    // Only while there are some: most days there are none.
+                    $first = $depositRequests[0];
+                    $attention[] = ['Deposit Requests', count($depositRequests),
+                        trim($first['first_name'] . ' ' . $first['last_name']) . (count($depositRequests) > 1 ? ' and ' . (count($depositRequests) - 1) . ' more want' : ' wants') . ' to use their deposit',
+                        'fa-vault', 'info', 'tenant_details.php?id=' . (int)$first['tenant_id'] . '#deposit'];
+                }
                 foreach ($attention as [$label, $count, $detail, $icon, $color, $href]): ?>
                 <a href="<?= $href ?>" class="attention-row d-flex align-items-center text-decoration-none <?= $count ? '' : 'is-clear' ?>">
                     <span class="attention-icon bg-<?= $count ? $color : 'secondary' ?> bg-opacity-10 text-<?= $count ? $color : 'secondary' ?>"><i class="fa-solid <?= $icon ?>"></i></span>
