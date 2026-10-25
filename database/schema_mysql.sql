@@ -43,8 +43,14 @@ CREATE TABLE IF NOT EXISTS tenants (
     move_in_date DATE,                                -- set when the tenant first gets a room
     deactivated_at DATE,
     last_billed_month VARCHAR(7),                     -- 'YYYY-MM' of the latest rent posted
+    middle_name VARCHAR(50),
+    gender VARCHAR(20),
+    email VARCHAR(120),
     occupation VARCHAR(100),
-    emergency_contact VARCHAR(100),
+    emergency_contact VARCHAR(100),                  -- older records: name and number in one field
+    emergency_name VARCHAR(100),
+    emergency_relationship VARCHAR(50),
+    emergency_phone VARCHAR(20),
     address TEXT,
     date_of_birth DATE,
     profile_picture VARCHAR(255),

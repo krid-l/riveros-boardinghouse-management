@@ -5,6 +5,7 @@ require_once '../includes/billing.php';
 require_once '../includes/sms.php';
 require_once '../includes/sms_reminders.php';
 require_once '../includes/password_reset.php';
+require_once '../includes/tenant_profile.php';
 requireAdmin();
 
 $reminderSuccess = '';
@@ -34,6 +35,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'reset
                 'password_reset', $tenantId);
             $reminderSuccess .= $r['sent'] > 0 ? ' (texted to the tenant).' : '. ' . smsOutcomeText($r);
         }
+    }
+}
+
+// Edit the tenant's details: the same fields as Add Tenant and the tenant's Profile Settings.
+$profileError = '';
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'edit_profile' && (int)($_POST['tenant_id'] ?? 0) === $tenantId) {
+    try {
+        $profile = tenantProfileFromPost($_POST);
+        $set = implode(', ', array_map(fn($c) => "$c = ?", array_keys($profile)));
+        $pdo->prepare("UPDATE tenants SET $set WHERE id = ?")->execute(array_merge(array_values($profile), [$tenantId]));
+        $reminderSuccess = 'Tenant details saved.';
+    } catch (Exception $e) {
+        $profileError = $e->getMessage();
+        $reminderError = $profileError;
     }
 }
 
@@ -374,15 +389,46 @@ require_once 'header.php';
         <div class="section-card shadow-sm">
             <div class="section-header">
                 <h6 class="section-title"><i class="fa-solid fa-house-user text-muted me-2"></i>Tenant Information</h6>
-                <button class="btn btn-sm btn-outline-primary py-0 px-2" style="font-size:0.65rem;">Edit</button>
+                <button type="button" class="btn btn-sm btn-outline-primary py-0 px-2" style="font-size:0.65rem;" data-bs-toggle="modal" data-bs-target="#editProfileModal">Edit</button>
             </div>
+            <?php $na = '<span class="text-black-50 fst-italic">Not provided</span>'; $age = tenantAge($tenant['date_of_birth'] ?? null); $emergency = tenantEmergencyText($tenant); ?>
             <div class="info-grid">
-                <span class="info-label">Full Name</span><span class="info-value"><?= htmlspecialchars($tenant['first_name'] . ' ' . $tenant['last_name']) ?></span>
-                <span class="info-label">Contact Number</span><span class="info-value"><?= htmlspecialchars($tenant['contact_number'] ?? '') ?></span>
+                <span class="info-label">Full Name</span><span class="info-value"><?= htmlspecialchars(trim($tenant['first_name'] . ' ' . ($tenant['middle_name'] ?? '') . ' ' . $tenant['last_name'])) ?></span>
+                <span class="info-label">Gender</span><span class="info-value"><?= !empty($tenant['gender']) ? htmlspecialchars($tenant['gender']) : $na ?></span>
+                <span class="info-label">Date of Birth</span><span class="info-value"><?= !empty($tenant['date_of_birth']) ? date('M j, Y', strtotime($tenant['date_of_birth'])) . " <span class=\"text-muted fw-normal\">($age years old)</span>" : $na ?></span>
+                <span class="info-label">Mobile Number</span><span class="info-value"><?= !empty($tenant['contact_number']) ? htmlspecialchars($tenant['contact_number']) : $na ?></span>
+                <span class="info-label">Email</span><span class="info-value text-break"><?= !empty($tenant['email']) ? htmlspecialchars($tenant['email']) : $na ?></span>
+                <span class="info-label">Home Address</span><span class="info-value"><?= !empty($tenant['address']) ? nl2br(htmlspecialchars($tenant['address'])) : $na ?></span>
+                <span class="info-label">Occupation / School</span><span class="info-value"><?= !empty($tenant['occupation']) ? htmlspecialchars($tenant['occupation']) : $na ?></span>
+                <span class="info-label">Emergency Contact</span><span class="info-value"><?= $emergency !== '' ? htmlspecialchars($emergency) : $na ?></span>
                 <span class="info-label">Username</span><span class="info-value"><?= htmlspecialchars($tenant['username'] ?? '') ?></span>
-                  <span class="info-label">Temporary Password</span><span class="info-value"><?= !empty($tenant['temp_password']) ? '<span class="badge bg-warning text-dark fw-bold" style="font-family: monospace; font-size:0.7rem;">' . htmlspecialchars($tenant['temp_password'] ?? '') . '</span>' : '<span class="text-success fst-italic fw-semibold" style="font-size:0.7rem;"><i class="fa-solid fa-check"></i> Changed by tenant</span>' ?></span>
-                <span class="info-label">Occupation</span><span class="info-value"><?= !empty($tenant['occupation']) ? htmlspecialchars($tenant['occupation'] ?? '') : '<span class="text-black-50 fst-italic">Not provided</span>' ?></span>
-                <span class="info-label">Emergency Contact</span><span class="info-value"><?= !empty($tenant['emergency_contact']) ? htmlspecialchars($tenant['emergency_contact'] ?? '') : '<span class="text-black-50 fst-italic">Not provided</span>' ?></span>
+                <span class="info-label">Temporary Password</span><span class="info-value"><?= !empty($tenant['temp_password']) ? '<span class="badge bg-warning text-dark fw-bold" style="font-family: monospace; font-size:0.7rem;">' . htmlspecialchars($tenant['temp_password'] ?? '') . '</span>' : '<span class="text-success fst-italic fw-semibold" style="font-size:0.7rem;"><i class="fa-solid fa-check"></i> Changed by tenant</span>' ?></span>
+            </div>
+        </div>
+
+        <?php if ($profileError): ?>
+        <script>document.addEventListener('DOMContentLoaded', () => bootstrap.Modal.getOrCreateInstance(document.getElementById('editProfileModal')).show());</script>
+        <?php endif; ?>
+        <!-- Edit tenant details -->
+        <div class="modal fade" id="editProfileModal" tabindex="-1" aria-label="Edit tenant details">
+            <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+                <div class="modal-content border-0 shadow">
+                    <form method="POST">
+                        <input type="hidden" name="action" value="edit_profile">
+                        <input type="hidden" name="tenant_id" value="<?= $tenantId ?>">
+                        <div class="modal-header bg-light border-0">
+                            <h6 class="modal-title fw-bold"><i class="fa-solid fa-user-pen text-primary me-2"></i>Edit Tenant Details</h6>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                        </div>
+                        <div class="modal-body p-4 form-compact">
+                            <?= tenantProfileFormFields($profileError ? $_POST : $tenant, 'td') ?>
+                        </div>
+                        <div class="modal-footer border-0 bg-light">
+                            <button type="button" class="btn btn-light border" data-bs-dismiss="modal" style="font-size:0.8rem;">Cancel</button>
+                            <button type="submit" class="btn btn-primary px-4" style="font-size:0.8rem;">Save Changes</button>
+                        </div>
+                    </form>
+                </div>
             </div>
         </div>
         
@@ -393,7 +439,6 @@ require_once 'header.php';
             </div>
             <div class="info-grid">
                 <span class="info-label">Room Number</span><span class="info-value"><?= $tenant['room_number'] ? 'Room ' . htmlspecialchars($tenant['room_number'] ?? '') : 'N/A' ?></span>
-                <span class="info-label">Room Type</span><span class="info-value">Standard</span>
                 <span class="info-label">Monthly Rent</span><span class="info-value">₱<?= number_format($monthlyRent, 2) ?><?= $rentSplitNote ? ' <span class="text-muted fw-normal" style="font-size:0.7rem;">(' . $rentSplitNote . ')</span>' : '' ?></span>
                 <span class="info-label">Deposit</span><span class="info-value"><?= $depositHeld > 0 ? '₱' . number_format($depositHeld, 2) . ' <span class="text-muted fw-normal" style="font-size:0.7rem;">(pays for the last month)</span>' : '<span class="text-muted">None on record</span>' ?></span>
                 <span class="info-label">Rent Due</span><span class="info-value">First month and deposit on moving in, then every 30th</span>

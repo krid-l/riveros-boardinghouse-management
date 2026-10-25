@@ -6,6 +6,7 @@ require_once '../includes/tenant_actions.php';
 require_once '../includes/pagination.php';
 require_once '../includes/sms_reminders.php';   // REMINDER_DAYS_BEFORE, for "due soon"
 require_once '../includes/ui.php';
+require_once '../includes/tenant_profile.php';
 requireAdmin();
 
 $error = '';
@@ -187,16 +188,6 @@ require_once 'header.php';
         display: inline-block;
         margin-right: 4px;
     }
-    .form-compact label {
-        font-size: 0.75rem;
-        font-weight: 600;
-        color: #475569;
-        margin-bottom: 0.25rem;
-    }
-    .form-compact .form-control, .form-compact .form-select {
-        font-size: 0.8rem;
-        padding: 0.4rem 0.75rem;
-    }
     tr.tenant-row[data-href] { cursor: pointer; }
     tr.tenant-row[data-href] .row-actions { cursor: default; }
     tr.tenant-row[data-href]:hover .tenant-link { color: #2563eb !important; text-decoration: underline !important; }
@@ -322,9 +313,7 @@ require_once 'header.php';
                                 'name' => $t['first_name'] . ' ' . $t['last_name'],
                                 'first_name' => $t['first_name'],
                                 'last_name' => $t['last_name'],
-                                'contact' => $t['contact_number'] ?? '',
-                                'occupation' => $t['occupation'] ?? '',
-                                'emergency_contact' => $t['emergency_contact'] ?? '',
+                                'profile' => array_combine(TENANT_PROFILE_COLUMNS, array_map(fn($c) => $t[$c] ?? '', TENANT_PROFILE_COLUMNS)),
                                 'room_id' => $t['room_id'] ? (int)$t['room_id'] : null,
                                 'room_number' => $t['room_number'],
                                 'has_move_in' => !empty($t['move_in_date']),
@@ -455,34 +444,11 @@ function moveInPaymentFields(string $id, bool $startHidden = false): string {
                         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                     </div>
                     <div class="modal-body p-4 form-compact">
-                    <div class="row g-4">
-                    <div class="col-md-6">
-                    <div class="small fw-bold text-muted text-uppercase mb-2" style="font-size:0.65rem; letter-spacing:0.5px;">Tenant details</div>
+                    <?= tenantProfileFormFields($addOld, 'add') ?>
 
-                    <div class="mb-2">
-                        <label>First Name</label>
-                        <input type="text" class="form-control" name="first_name" placeholder="e.g., Juan" value="<?= htmlspecialchars($addOld['first_name'] ?? '') ?>" required>
-                    </div>
-                    <div class="mb-2">
-                        <label>Last Name</label>
-                        <input type="text" class="form-control" name="last_name" placeholder="e.g., Dela Cruz" value="<?= htmlspecialchars($addOld['last_name'] ?? '') ?>" required>
-                    </div>
-                    <div class="mb-2">
-                        <label>Contact Number</label>
-                        <input type="text" class="form-control" name="contact_number" placeholder="e.g., 0912 345 6789" value="<?= htmlspecialchars($addOld['contact_number'] ?? '') ?>">
-                    </div>
-                    <div class="mb-2">
-                        <label>Occupation</label>
-                        <input type="text" class="form-control" name="occupation" placeholder="e.g., Student" value="<?= htmlspecialchars($addOld['occupation'] ?? '') ?>">
-                    </div>
-                    <div class="mb-2">
-                        <label>Emergency Contact</label>
-                        <input type="text" class="form-control" name="emergency_contact" placeholder="Name & Number" value="<?= htmlspecialchars($addOld['emergency_contact'] ?? '') ?>">
-                    </div>
-
-                    </div>
-                    <div class="col-md-6">
-                    <div class="small fw-bold text-muted text-uppercase mb-2" style="font-size:0.65rem; letter-spacing:0.5px;">Room &amp; move-in</div>
+                    <div class="profile-section-title">Room &amp; move-in</div>
+                    <div class="row g-2">
+                    <div class="col-sm-7">
                     <div class="mb-3">
                         <label>Assign Room <span class="text-muted fw-normal">(Optional)</span></label>
                         <select class="form-select" name="room_id">
@@ -504,15 +470,17 @@ function moveInPaymentFields(string $id, bool $startHidden = false): string {
                             <?php endforeach; ?>
                         </select>
                     </div>
+                    </div>
+                    <div class="col-sm-5">
                     <div class="mb-3">
                         <label>Move-in Date</label>
                         <input type="date" class="form-control" name="move_in_date" value="<?= htmlspecialchars($addOld['move_in_date'] ?? date('Y-m-d')) ?>">
                         <small class="text-muted d-block mt-1" style="font-size:0.62rem;">Used when a room is assigned. Day 1–15: full first month. Day 16+: half. Due every 30th.</small>
                     </div>
+                    </div>
+                    </div>
                     <?= moveInPaymentFields('add_movein', true) ?>
-                    <small class="text-muted d-block" style="font-size:0.65rem;"><i class="fa-solid fa-key me-1"></i>A username and password are created automatically and shown after saving.</small>
-                    </div>
-                    </div>
+                    <small class="text-muted d-block" style="font-size:0.65rem;"><i class="fa-solid fa-key me-1"></i>A username and temporary password are created automatically, shown after saving and texted to the tenant.</small>
                     </div>
                     <div class="modal-footer border-0 bg-light">
                         <button type="button" class="btn btn-light border" data-bs-dismiss="modal" style="font-size:0.8rem;">Cancel</button>
@@ -523,39 +491,20 @@ function moveInPaymentFields(string $id, bool $startHidden = false): string {
     </div>
 </div>
 
-<!-- Edit Tenant Modal -->
+<!-- Edit Tenant Modal: the same fields as Add Tenant (and the tenant's own Profile Settings) -->
 <div class="modal fade" id="editTenantModal" tabindex="-1">
-    <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
         <div class="modal-content border-0 shadow">
-            <form method="POST">
+            <form method="POST" id="editTenantForm">
                 <input type="hidden" name="action" value="edit">
                 <input type="hidden" name="tenant_id" id="edit_tenant_id">
                 <div class="modal-header bg-light border-0">
-                    <h6 class="modal-title fw-bold">Edit Tenant Details</h6>
+                    <h6 class="modal-title fw-bold"><i class="fa-solid fa-user-pen text-primary me-2"></i>Edit Tenant Details</h6>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body p-4 form-compact">
-                    <div class="mb-3">
-                        <label>First Name</label>
-                        <input type="text" class="form-control" name="first_name" id="edit_first_name" required>
-                    </div>
-                    <div class="mb-3">
-                        <label>Last Name</label>
-                        <input type="text" class="form-control" name="last_name" id="edit_last_name" required>
-                    </div>
-                    <div class="mb-3">
-                        <label>Contact Number</label>
-                        <input type="text" class="form-control" name="contact_number" id="edit_contact">
-                    </div>
-                    <div class="mb-3">
-                        <label>Occupation</label>
-                        <input type="text" class="form-control" name="occupation" id="edit_occupation">
-                    </div>
-                    <div class="mb-3">
-                        <label>Emergency Contact</label>
-                        <input type="text" class="form-control" name="emergency_contact" id="edit_emergency_contact">
-                    </div>
-                    <small class="text-muted" style="font-size:0.65rem;"><i class="fa-solid fa-circle-info me-1"></i>To move the tenant, use the <i class="fa-solid fa-right-left"></i> Change Room button.</small>
+                    <?= tenantProfileFormFields([], 'edit') ?>
+                    <small class="text-muted d-block mt-2" style="font-size:0.65rem;"><i class="fa-solid fa-circle-info me-1"></i>To move the tenant, use the <i class="fa-solid fa-right-left"></i> Change Room button.</small>
                 </div>
                 <div class="modal-footer border-0 bg-light">
                     <button type="button" class="btn btn-light border" data-bs-dismiss="modal" style="font-size:0.8rem;">Cancel</button>
@@ -730,11 +679,10 @@ function peso(n) {
 function openEditModal(btn) {
     const t = tenantData(btn);
     document.getElementById('edit_tenant_id').value = t.id;
-    document.getElementById('edit_first_name').value = t.first_name;
-    document.getElementById('edit_last_name').value = t.last_name;
-    document.getElementById('edit_contact').value = t.contact || '';
-    document.getElementById('edit_occupation').value = t.occupation || '';
-    document.getElementById('edit_emergency_contact').value = t.emergency_contact || '';
+    const form = document.getElementById('editTenantForm');
+    for (const [key, value] of Object.entries(t.profile)) {
+        if (form.elements[key]) form.elements[key].value = value ?? '';
+    }
     showModal('editTenantModal');
 }
 

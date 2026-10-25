@@ -2,6 +2,7 @@
 require_once 'header.php';
 require_once '../includes/uploads.php';
 require_once '../includes/sms.php';
+require_once '../includes/tenant_profile.php';
 
 // Fetch the username from users table for this tenant
 $stmtUser = $pdo->prepare("SELECT username FROM users WHERE id = ?");
@@ -44,12 +45,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     } else {
         try {
-            $contact = validatedMobileInput($_POST['contact_number'] ?? '');
-            $occupation = $_POST['occupation'] ?? '';
-            $emergency = $_POST['emergency_contact'] ?? '';
+            // The same details the admin entered when adding the tenant; only the name is the admin's.
+            $profile = tenantProfileFromPost($_POST, false);
 
             $picUpdate = '';
-            $params = [$contact, $occupation, $emergency];
+            $params = array_values($profile);
 
             // Saved to Supabase Storage when deployed, to uploads/profiles/ when run locally.
             if (isset($_FILES['profile_picture'])) {
@@ -64,7 +64,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             $params[] = $_SESSION['tenant_id'];
 
-            $stmt = $pdo->prepare("UPDATE tenants SET contact_number = ?, occupation = ?, emergency_contact = ? $picUpdate WHERE id = ?");
+            $set = implode(', ', array_map(fn($c) => "$c = ?", array_keys($profile)));
+            $stmt = $pdo->prepare("UPDATE tenants SET $set $picUpdate WHERE id = ?");
             $stmt->execute($params);
             
             $success = 'Profile updated successfully!';
@@ -74,7 +75,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stmt->execute([$_SESSION['tenant_id']]);
             $currentTenant = $stmt->fetch();
         } catch (Exception $e) {
-            $error = "Error updating profile: " . $e->getMessage();
+            $error = "Profile not saved: " . $e->getMessage();
+            $profileOld = $_POST;   // keep what was typed
         }
     }
 }
@@ -99,12 +101,21 @@ $fullName = htmlspecialchars($currentTenant['first_name'] . ' ' . $currentTenant
             <hr class="text-muted my-4">
             <div class="text-start">
                 <div class="mb-3">
-                    <span class="text-muted d-block" style="font-size:0.75rem;"><i class="fa-solid fa-envelope me-2"></i> Username</span>
+                    <span class="text-muted d-block" style="font-size:0.75rem;"><i class="fa-solid fa-user me-2"></i> Username</span>
                     <span class="fw-semibold text-dark"><?= htmlspecialchars($username) ?></span>
                 </div>
-                <div>
-                    <span class="text-muted d-block" style="font-size:0.75rem;"><i class="fa-solid fa-phone me-2"></i> Contact</span>
+                <div class="mb-3">
+                    <span class="text-muted d-block" style="font-size:0.75rem;"><i class="fa-solid fa-phone me-2"></i> Mobile number</span>
                     <span class="fw-semibold text-dark"><?= !empty($currentTenant['contact_number']) ? htmlspecialchars($currentTenant['contact_number'] ?? '') : '<i class="text-black-50 small">Not set</i>' ?></span>
+                </div>
+                <div class="mb-3">
+                    <span class="text-muted d-block" style="font-size:0.75rem;"><i class="fa-solid fa-at me-2"></i> Email</span>
+                    <span class="fw-semibold text-dark text-break"><?= !empty($currentTenant['email']) ? htmlspecialchars($currentTenant['email']) : '<i class="text-black-50 small">Not set</i>' ?></span>
+                </div>
+                <div>
+                    <span class="text-muted d-block" style="font-size:0.75rem;"><i class="fa-solid fa-truck-medical me-2"></i> Emergency contact</span>
+                    <?php $emergencyText = tenantEmergencyText($currentTenant); ?>
+                    <span class="fw-semibold text-dark"><?= $emergencyText !== '' ? htmlspecialchars($emergencyText) : '<i class="text-black-50 small">Not set</i>' ?></span>
                 </div>
             </div>
         </div>
@@ -136,41 +147,9 @@ $fullName = htmlspecialchars($currentTenant['first_name'] . ' ' . $currentTenant
                         <div class="form-text" style="font-size: 0.65rem;">Leave empty to keep current picture. Recommended size: 200x200px.</div>
                     </div>
 
-                    <div class="row g-3 mb-3">
-                        <div class="col-md-6">
-                            <label class="form-label text-muted fw-semibold small">First Name</label>
-                            <input type="text" class="form-control bg-light" value="<?= htmlspecialchars($currentTenant['first_name'] ?? '') ?>" readonly>
-                            <div class="form-text" style="font-size: 0.65rem;">Contact admin to change name.</div>
-                        </div>
-                        <div class="col-md-6">
-                            <label class="form-label text-muted fw-semibold small">Last Name</label>
-                            <input type="text" class="form-control bg-light" value="<?= htmlspecialchars($currentTenant['last_name'] ?? '') ?>" readonly>
-                        </div>
+                    <div class="form-compact mb-3">
+                        <?= tenantProfileFormFields(isset($profileOld) ? array_merge($currentTenant, $profileOld) : $currentTenant, 'me', false) ?>
                     </div>
-                    
-                    <div class="row g-3 mb-3">
-                        <div class="col-md-12">
-                            <label class="form-label text-muted fw-semibold small">Contact Number</label>
-                            <div class="input-group">
-                                <span class="input-group-text bg-white"><i class="fa-solid fa-phone text-muted" style="font-size: 0.8rem;"></i></span>
-                                <input type="text" class="form-control" name="contact_number" value="<?= htmlspecialchars($currentTenant['contact_number'] ?? '') ?>" placeholder="e.g., 0912 345 6789">
-                            </div>
-                        </div>
-
-                    </div>
-
-                    <div class="row g-3 mb-3">
-                        <div class="col-md-6">
-                            <label class="form-label text-muted fw-semibold small">Occupation</label>
-                            <input type="text" class="form-control" name="occupation" value="<?= htmlspecialchars($currentTenant['occupation'] ?? '') ?>" placeholder="e.g., Student, Software Engineer">
-                        </div>
-                        <div class="col-md-6">
-                            <label class="form-label text-muted fw-semibold small">Emergency Contact</label>
-                            <input type="text" class="form-control" name="emergency_contact" value="<?= htmlspecialchars($currentTenant['emergency_contact'] ?? '') ?>" placeholder="e.g., Jane Doe - 0998 765 4321">
-                        </div>
-                    </div>
-
-
 
                     <div class="d-flex justify-content-end">
                         <button type="submit" class="btn btn-primary px-4 rounded-pill shadow-sm"><i class="fa-solid fa-floppy-disk me-2"></i> Save Profile Details</button>

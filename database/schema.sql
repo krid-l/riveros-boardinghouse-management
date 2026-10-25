@@ -31,8 +31,14 @@ CREATE TABLE IF NOT EXISTS tenants (
     contact_number VARCHAR(20),
     room_id INT REFERENCES rooms(id) ON DELETE SET NULL,
     balance DECIMAL(10,2) DEFAULT 0.00,               -- charges minus payments credited
+    middle_name VARCHAR(50),
+    gender VARCHAR(20),
+    email VARCHAR(120),
     occupation VARCHAR(100),
-    emergency_contact VARCHAR(100),
+    emergency_contact VARCHAR(100),                  -- older records: name and number in one field
+    emergency_name VARCHAR(100),
+    emergency_relationship VARCHAR(50),
+    emergency_phone VARCHAR(20),
     address TEXT,
     date_of_birth DATE,
     profile_picture TEXT,

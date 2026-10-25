@@ -9,7 +9,7 @@ require_once __DIR__ . '/billing.php';
 require_once __DIR__ . '/sql_compat.php';
 require_once __DIR__ . '/sms.php';
 
-const SCHEMA_VERSION = '8';
+const SCHEMA_VERSION = '9';
 
 function runMigrations(PDO $pdo): void {
     try {
@@ -44,6 +44,7 @@ function runMigrations(PDO $pdo): void {
         migrateToV6($pdo);
         migrateToV7($pdo);
         migrateToV8($pdo);
+        migrateToV9($pdo);
 
         $pdo->prepare("INSERT INTO settings (setting_key, setting_value) VALUES ('schema_version', ?)
                        " . sqlUpsert(['setting_key'], ['setting_value']))
@@ -125,6 +126,19 @@ function migrateToV8(PDO $pdo): void {
         created_at TIMESTAMP NULL DEFAULT NULL,
         decided_at TIMESTAMP NULL DEFAULT NULL
     )");
+}
+
+// v9: the fuller tenant profile (includes/tenant_profile.php). The emergency contact becomes
+// name / relationship / number; what older records kept in the one field moves to the name.
+function migrateToV9(PDO $pdo): void {
+    ensureColumn($pdo, 'tenants', 'middle_name', 'VARCHAR(50)');
+    ensureColumn($pdo, 'tenants', 'gender', 'VARCHAR(20)');
+    ensureColumn($pdo, 'tenants', 'email', 'VARCHAR(120)');
+    ensureColumn($pdo, 'tenants', 'emergency_name', 'VARCHAR(100)');
+    ensureColumn($pdo, 'tenants', 'emergency_relationship', 'VARCHAR(50)');
+    ensureColumn($pdo, 'tenants', 'emergency_phone', 'VARCHAR(20)');
+    $pdo->exec("UPDATE tenants SET emergency_name = emergency_contact
+                WHERE emergency_name IS NULL AND emergency_contact IS NOT NULL AND emergency_contact <> ''");
 }
 
 // v7: rent per bed. A tenant now pays price / capacity, however many beds are taken, instead of

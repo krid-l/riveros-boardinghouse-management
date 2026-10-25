@@ -7,6 +7,8 @@ require_once __DIR__ . '/billing.php';
 require_once __DIR__ . '/sms.php';
 require_once __DIR__ . '/pdf_generator.php';
 require_once __DIR__ . '/notifications.php';
+require_once __DIR__ . '/tenant_profile.php';
+require_once __DIR__ . '/password_reset.php';   // generateTempPassword()
 
 function postedDate(string $field): string {
     $value = trim($_POST[$field] ?? '');
@@ -154,11 +156,11 @@ function handleTenantAction(PDO $pdo): array {
         $pdo->beginTransaction();
 
         if ($action === 'add') {
-            $firstName = trim($_POST['first_name'] ?? '');
-            $lastName = trim($_POST['last_name'] ?? '');
+            $profile = tenantProfileFromPost($_POST);
+            $firstName = $profile['first_name'];
+            $lastName = $profile['last_name'];
             $roomId = !empty($_POST['room_id']) ? (int)$_POST['room_id'] : null;
             $moveInDate = $roomId ? postedDate('move_in_date') : null;
-            $contactNumber = validatedMobileInput($_POST['contact_number'] ?? '');
 
             if ($roomId && !roomHasSpace($pdo, $roomId)) {
                 throw new Exception("Cannot assign tenant: Room is already full.");
@@ -178,8 +180,8 @@ function handleTenantAction(PDO $pdo): array {
                 $counter++;
             }
 
-            // Auto-generate a random 8-character password
-            $rawPassword = substr(str_shuffle('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%'), 0, 8);
+            // A random 8-character password without look-alike characters (it is texted to them)
+            $rawPassword = generateTempPassword();
             $password = password_hash($rawPassword, PASSWORD_DEFAULT);
 
             $userId = insertReturningId(
@@ -189,20 +191,12 @@ function handleTenantAction(PDO $pdo): array {
             );
 
             // Create tenant profile
+            $columns = array_keys($profile);
             $tenantId = insertReturningId(
                 $pdo,
-                "INSERT INTO tenants (user_id, first_name, last_name, contact_number, room_id, occupation, emergency_contact, status, move_in_date, balance)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, 0)",
-                [
-                    $userId,
-                    $firstName,
-                    $lastName,
-                    $contactNumber,
-                    $roomId,
-                    !empty($_POST['occupation']) ? $_POST['occupation'] : null,
-                    !empty($_POST['emergency_contact']) ? $_POST['emergency_contact'] : null,
-                    $moveInDate
-                ]
+                "INSERT INTO tenants (user_id, " . implode(', ', $columns) . ", room_id, status, move_in_date, balance)
+                 VALUES (?, " . implode(', ', array_fill(0, count($columns), '?')) . ", ?, 'active', ?, 0)",
+                array_merge([$userId], array_values($profile), [$roomId, $moveInDate])
             );
             if ($roomId) {
                 logRoomTransfer($pdo, $tenantId, null, $roomId, $moveInDate, 'Moved in');
@@ -220,15 +214,10 @@ function handleTenantAction(PDO $pdo): array {
             }
 
         } elseif ($action === 'edit') {
-            $stmt = $pdo->prepare("UPDATE tenants SET first_name = ?, last_name = ?, contact_number = ?, occupation = ?, emergency_contact = ? WHERE id = ?");
-            $stmt->execute([
-                trim($_POST['first_name'] ?? ''),
-                trim($_POST['last_name'] ?? ''),
-                validatedMobileInput($_POST['contact_number'] ?? ''),
-                !empty($_POST['occupation']) ? $_POST['occupation'] : null,
-                !empty($_POST['emergency_contact']) ? $_POST['emergency_contact'] : null,
-                (int)$_POST['tenant_id']
-            ]);
+            $profile = tenantProfileFromPost($_POST);
+            $set = implode(', ', array_map(fn($c) => "$c = ?", array_keys($profile)));
+            $pdo->prepare("UPDATE tenants SET $set WHERE id = ?")
+                ->execute(array_merge(array_values($profile), [(int)$_POST['tenant_id']]));
             $success = "Tenant updated successfully.";
 
         } elseif ($action === 'change_room') {
