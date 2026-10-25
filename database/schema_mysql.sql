@@ -182,6 +182,17 @@ CREATE TABLE IF NOT EXISTS deposit_requests (
     FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
+-- Reports exported from Reports & Analytics (the Exported Reports tab)
+CREATE TABLE IF NOT EXISTS report_exports (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    report_type VARCHAR(20) NOT NULL,                 -- financial | payments | unpaid | tenants | occupancy | complaints
+    format VARCHAR(4) NOT NULL,                       -- csv | pdf
+    date_from DATE NULL,
+    date_to DATE NULL,
+    row_count INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMP NULL DEFAULT NULL
+) ENGINE=InnoDB;
+
 CREATE TABLE IF NOT EXISTS settings (
     setting_key VARCHAR(50) PRIMARY KEY,
     setting_value TEXT

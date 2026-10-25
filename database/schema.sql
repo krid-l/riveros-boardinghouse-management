@@ -158,6 +158,17 @@ CREATE TABLE IF NOT EXISTS deposit_requests (
     created_at TIMESTAMP NULL DEFAULT NULL,
     decided_at TIMESTAMP NULL DEFAULT NULL
 );
+
+-- Reports exported from Reports & Analytics (the Exported Reports tab)
+CREATE TABLE IF NOT EXISTS report_exports (
+    id SERIAL PRIMARY KEY,
+    report_type VARCHAR(20) NOT NULL,                 -- financial | payments | unpaid | tenants | occupancy | complaints
+    format VARCHAR(4) NOT NULL,                       -- csv | pdf
+    date_from DATE NULL,
+    date_to DATE NULL,
+    row_count INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMP NULL DEFAULT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_notifications_ref ON notifications (ref);
 
 CREATE TABLE IF NOT EXISTS settings (

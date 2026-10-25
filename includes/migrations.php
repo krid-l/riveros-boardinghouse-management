@@ -9,7 +9,7 @@ require_once __DIR__ . '/billing.php';
 require_once __DIR__ . '/sql_compat.php';
 require_once __DIR__ . '/sms.php';
 
-const SCHEMA_VERSION = '10';
+const SCHEMA_VERSION = '11';
 
 function runMigrations(PDO $pdo): void {
     try {
@@ -46,6 +46,7 @@ function runMigrations(PDO $pdo): void {
         migrateToV8($pdo);
         migrateToV9($pdo);
         migrateToV10($pdo);
+        migrateToV11($pdo);
 
         $pdo->prepare("INSERT INTO settings (setting_key, setting_value) VALUES ('schema_version', ?)
                        " . sqlUpsert(['setting_key'], ['setting_value']))
@@ -151,6 +152,19 @@ function migrateToV10(PDO $pdo): void {
     ensureColumn($pdo, 'complaints', 'resolved_at', 'TIMESTAMP NULL DEFAULT NULL');
     ensureColumn($pdo, 'complaints', 'priority', "VARCHAR(10) NOT NULL DEFAULT 'normal'");
     ensureColumn($pdo, 'complaints', 'photo_path', 'VARCHAR(255)');
+}
+
+// v11: a record of each report exported from Reports & Analytics (the Exported Reports tab).
+function migrateToV11(PDO $pdo): void {
+    $pdo->exec("CREATE TABLE IF NOT EXISTS report_exports (
+        id " . sqlSerialPk() . ",
+        report_type VARCHAR(20) NOT NULL,
+        format VARCHAR(4) NOT NULL,
+        date_from DATE NULL,
+        date_to DATE NULL,
+        row_count INT NOT NULL DEFAULT 0,
+        created_at TIMESTAMP NULL DEFAULT NULL
+    )");
 }
 
 // v7: rent per bed. A tenant now pays price / capacity, however many beds are taken, instead of

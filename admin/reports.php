@@ -4,6 +4,7 @@ require_once '../includes/auth.php';
 require_once '../includes/billing.php';
 require_once '../includes/pagination.php';
 require_once '../includes/ui.php';
+require_once '../includes/reports.php';
 requireAdmin();
 
 // --- DATA FETCHING ---
@@ -12,7 +13,7 @@ $totalTenants = $pdo->query("SELECT COUNT(*) FROM tenants WHERE status = 'active
 $totalRooms = $pdo->query("SELECT COUNT(*) FROM rooms")->fetchColumn() ?: 0;
 
 $roomsData = $pdo->query("
-    SELECT r.id, r.room_number, r.capacity, 
+    SELECT r.id, r.room_number, r.capacity, r.status,
            (SELECT COUNT(*) FROM tenants t WHERE t.room_id = r.id AND t.status = 'active') as tenant_count
     FROM rooms r
 ")->fetchAll();
@@ -23,15 +24,23 @@ $totalOccupied = 0;
 $occupiedRooms = 0;
 $availableRooms = 0;
 
+$maintenanceBeds = 0;   // empty beds in rooms under maintenance: not available to anyone
 foreach($roomsData as $r) {
     $totalCapacity += $r['capacity'];
     $totalOccupied += $r['tenant_count'];
+    if ($r['status'] === 'maintenance') $maintenanceBeds += max(0, $r['capacity'] - $r['tenant_count']);
     if($r['tenant_count'] > 0) $occupiedRooms++;
     else $availableRooms++;
 }
 
 $occupancyRate = $totalRooms > 0 ? ($occupiedRooms / $totalRooms) * 100 : 0;
 $bedOccupancyRate = $totalCapacity > 0 ? ($totalOccupied / $totalCapacity) * 100 : 0;
+$availableBeds = max(0, $totalCapacity - $totalOccupied - $maintenanceBeds);
+$pctOfBeds = fn($n) => $totalCapacity > 0 ? number_format($n / $totalCapacity * 100, 1) : '0.0';
+
+// The Exported Reports tab: what was downloaded, newest first.
+$exportPager = paginate((int)$pdo->query("SELECT COUNT(*) FROM report_exports")->fetchColumn(), 15, 'page_exports', ['tab' => 'exported']);
+$exportRows = $pdo->query("SELECT * FROM report_exports ORDER BY created_at DESC, id DESC" . paginationLimitSql($exportPager))->fetchAll();
 
 // Revenue excludes "covered by roommate" rows: that money is already in the room payment itself.
 $totalRevenue = $pdo->query("SELECT SUM(amount) FROM payments WHERE " . REVENUE_FILTER_SQL)->fetchColumn() ?: 0;
@@ -194,11 +203,7 @@ require_once 'header.php';
     </div>
     
     <div class="d-flex gap-2 align-items-center flex-shrink-0">
-        <div class="input-group input-group-sm rounded-2 border bg-white" style="width:180px;">
-            <input type="text" class="form-control border-0 shadow-none px-2 fw-semibold text-dark" value="All time" style="font-size:0.65rem;" readonly>
-            <span class="input-group-text bg-transparent border-0 pe-2"><i class="fa-regular fa-calendar text-muted" style="font-size:0.65rem;"></i></span>
-        </div>
-        <button class="btn btn-primary fw-semibold btn-sm px-3 py-1 rounded-2 shadow-sm text-nowrap" style="font-size:0.7rem;"><i class="fa-solid fa-download me-1"></i> Export Report</button>
+        <button type="button" class="btn btn-primary fw-semibold btn-sm px-3 py-1 rounded-2 shadow-sm text-nowrap" style="font-size:0.75rem;" data-bs-toggle="modal" data-bs-target="#exportModal"><i class="fa-solid fa-download me-1"></i> Export Report</button>
     </div>
 </div>
 
@@ -244,11 +249,11 @@ require_once 'header.php';
                             </div>
                             <div class="d-flex justify-content-between align-items-center mb-2">
                                 <span class="fw-bold text-dark" style="font-size:0.6rem;"><span class="dot bg-primary"></span> Available</span>
-                                <span class="text-muted" style="font-size:0.55rem;"><?= $totalCapacity - $totalOccupied ?> (<?= number_format(100 - $bedOccupancyRate,1) ?>%)</span>
+                                <span class="text-muted" style="font-size:0.55rem;"><?= $availableBeds ?> (<?= $pctOfBeds($availableBeds) ?>%)</span>
                             </div>
                             <div class="d-flex justify-content-between align-items-center">
                                 <span class="fw-bold text-dark" style="font-size:0.6rem;"><span class="dot bg-warning"></span> Maintenance</span>
-                                <span class="text-muted" style="font-size:0.55rem;">0 (0%)</span>
+                                <span class="text-muted" style="font-size:0.55rem;"><?= $maintenanceBeds ?> (<?= $pctOfBeds($maintenanceBeds) ?>%)</span>
                             </div>
                         </div>
                     </div>
@@ -256,8 +261,8 @@ require_once 'header.php';
                     <div class="d-flex justify-content-between text-center mt-3 pt-3 border-top">
                         <div><div class="fw-bold text-dark" style="font-size:0.75rem;"><?= $totalCapacity ?></div><div class="text-muted" style="font-size:0.5rem; text-transform:uppercase; font-weight:600;">Total Beds</div></div>
                         <div><div class="fw-bold text-dark" style="font-size:0.75rem;"><?= $totalOccupied ?></div><div class="text-muted" style="font-size:0.5rem; text-transform:uppercase; font-weight:600;">Occupied</div></div>
-                        <div><div class="fw-bold text-dark" style="font-size:0.75rem;"><?= $totalCapacity - $totalOccupied ?></div><div class="text-muted" style="font-size:0.5rem; text-transform:uppercase; font-weight:600;">Available</div></div>
-                        <div><div class="fw-bold text-dark" style="font-size:0.75rem;">0</div><div class="text-muted" style="font-size:0.5rem; text-transform:uppercase; font-weight:600;">Maintenance</div></div>
+                        <div><div class="fw-bold text-dark" style="font-size:0.75rem;"><?= $availableBeds ?></div><div class="text-muted" style="font-size:0.5rem; text-transform:uppercase; font-weight:600;">Available</div></div>
+                        <div><div class="fw-bold text-dark" style="font-size:0.75rem;"><?= $maintenanceBeds ?></div><div class="text-muted" style="font-size:0.5rem; text-transform:uppercase; font-weight:600;">Maintenance</div></div>
                     </div>
                 </div>
             </div>
@@ -291,7 +296,7 @@ require_once 'header.php';
                                 <span class="fw-bold text-dark" style="font-size:0.7rem;"><?= $totalTransactions ?></span>
                             </div>
                             <div class="text-center mt-2">
-                                <a href="#" class="text-primary text-decoration-none fw-semibold" style="font-size:0.65rem;" onclick="document.querySelector('[data-target=tab-financial]').click();">View Financial Report &rarr;</a>
+                                <a href="reports.php?tab=financial" class="text-primary text-decoration-none fw-semibold" style="font-size:0.65rem;">View Financial Report &rarr;</a>
                             </div>
                         </div>
                     </div>
@@ -332,7 +337,7 @@ require_once 'header.php';
                     </table>
                 </div>
                 <div class="card-footer bg-white border-top p-2 text-center">
-                    <a href="#" class="text-primary text-decoration-none fw-semibold" style="font-size:0.6rem;" onclick="document.querySelector('[data-target=tab-occupancy]').click();">View Occupancy Report &rarr;</a>
+                    <a href="reports.php?tab=occupancy" class="text-primary text-decoration-none fw-semibold" style="font-size:0.6rem;">View Occupancy Report &rarr;</a>
                 </div>
             </div>
         </div>
@@ -374,7 +379,7 @@ require_once 'header.php';
                     </table>
                 </div>
                 <div class="card-footer bg-white border-top p-2 text-center">
-                    <a href="#" class="text-primary text-decoration-none fw-semibold" style="font-size:0.6rem;" onclick="document.querySelector('[data-target=tab-payment]').click();">View All Transactions &rarr;</a>
+                    <a href="reports.php?tab=payment" class="text-primary text-decoration-none fw-semibold" style="font-size:0.6rem;">View All Transactions &rarr;</a>
                 </div>
             </div>
         </div>
@@ -434,7 +439,7 @@ require_once 'header.php';
                         ?>
                     </div>
                     <div class="text-center mt-3 pt-2">
-                        <a href="#" class="text-primary text-decoration-none fw-semibold" style="font-size:0.6rem;" onclick="document.querySelector('[data-target=tab-tenant]').click();">View Full Report &rarr;</a>
+                        <a href="reports.php?tab=tenant" class="text-primary text-decoration-none fw-semibold" style="font-size:0.6rem;">View Full Report &rarr;</a>
                     </div>
                 </div>
             </div>
@@ -600,23 +605,136 @@ require_once 'header.php';
 <!-- ============================================== -->
 <div id="tab-exported" class="tab-pane <?= $activeTab === 'exported' ? '' : 'd-none' ?>">
     <div class="card border-0 shadow-sm rounded-3">
-        <div class="card-header bg-white border-0 p-3 pb-0">
-            <h6 class="fw-bold text-dark mb-0" style="font-size:0.75rem;">Generated File Archives</h6>
+        <div class="card-header bg-white border-0 p-3 pb-0 d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <div>
+                <h6 class="fw-bold text-dark mb-0" style="font-size:0.8rem;">Exported Reports</h6>
+                <small class="text-muted" style="font-size:0.68rem;">Every report downloaded from this page. Download again rebuilds it from today's data.</small>
+            </div>
+            <button type="button" class="btn btn-sm btn-outline-primary" style="font-size:0.72rem;" data-bs-toggle="modal" data-bs-target="#exportModal"><i class="fa-solid fa-plus me-1"></i>New export</button>
         </div>
         <div class="card-body p-0 mt-2">
+            <div class="table-responsive">
             <table class="table table-compact mb-0">
                 <thead class="bg-light">
-                    <tr><th class="ps-3 border-0">File Name</th><th class="border-0">Type</th><th class="border-0">Date Generated</th><th class="border-0 text-end pe-3">Action</th></tr>
+                    <tr><th class="ps-3 border-0">Report</th><th class="border-0">Period</th><th class="border-0">Format</th><th class="border-0 text-end">Rows</th><th class="border-0">Exported</th><th class="border-0 text-end pe-3">Action</th></tr>
                 </thead>
                 <tbody>
+                    <?php if (!$exportRows): ?>
+                    <tr><td colspan="6" class="text-center text-muted py-4" style="font-size:0.75rem;">Nothing exported yet. Use <strong>Export Report</strong> to download one.</td></tr>
+                    <?php endif; ?>
+                    <?php foreach ($exportRows as $x):
+                        $xType = REPORT_TYPES[$x['report_type']] ?? null;
+                        if (!$xType) continue;
+                        $again = 'export_report.php?' . http_build_query(array_filter(['type' => $x['report_type'], 'format' => $x['format'],
+                                 'from' => $x['date_from'], 'to' => $x['date_to'], 'again' => 1]));
+                    ?>
                     <tr>
-                        <td colspan="4" class="text-center text-muted py-4" style="font-size:0.75rem;">No historical exports available yet.</td>
+                        <td class="ps-3 fw-semibold text-dark"><i class="fa-regular <?= $x['format'] === 'pdf' ? 'fa-file-pdf text-danger' : 'fa-file-excel text-success' ?> me-2"></i><?= htmlspecialchars($xType[0]) ?></td>
+                        <td class="text-muted"><?= $x['date_from'] ? date('M j, Y', strtotime($x['date_from'])) . ' – ' . date('M j, Y', strtotime($x['date_to'])) : 'As of ' . date('M j, Y', strtotime($x['created_at'])) ?></td>
+                        <td><span class="badge bg-light text-dark border"><?= strtoupper($x['format']) ?></span></td>
+                        <td class="text-end"><?= (int)$x['row_count'] ?></td>
+                        <td class="text-muted text-nowrap"><?= date('M j, Y g:i A', strtotime($x['created_at'])) ?></td>
+                        <td class="text-end pe-3"><a href="<?= htmlspecialchars($again) ?>" class="btn btn-sm btn-light border py-0 px-2" style="font-size:0.7rem;"><i class="fa-solid fa-download me-1"></i>Download again</a></td>
                     </tr>
+                    <?php endforeach; ?>
                 </tbody>
             </table>
+            </div>
         </div>
+        <?php if ($exportPager['totalPages'] > 1): ?>
+        <div class="card-footer bg-white d-flex justify-content-between align-items-center">
+            <small class="text-muted"><?= paginationSummary($exportPager, 'exports') ?></small>
+            <ul class="pagination pagination-sm mb-0"><?= paginationControls($exportPager) ?></ul>
+        </div>
+        <?php endif; ?>
     </div>
 </div>
+
+<!-- Export a report -->
+<div class="modal fade" id="exportModal" tabindex="-1" aria-labelledby="exportModalTitle" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <form method="GET" action="export_report.php" class="modal-content border-0 shadow" id="exportForm">
+            <div class="modal-header bg-light border-0">
+                <h6 class="modal-title fw-bold" id="exportModalTitle"><i class="fa-solid fa-file-export text-primary me-2"></i>Export Report</h6>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body form-compact">
+                <div class="mb-3">
+                    <label for="exportType">Report</label>
+                    <select name="type" id="exportType" class="form-select">
+                        <?php foreach (REPORT_TYPES as $key => [$label, $range, $about]): ?>
+                            <option value="<?= $key ?>" data-range="<?= $range ? 1 : 0 ?>" data-about="<?= htmlspecialchars($about) ?>"><?= htmlspecialchars($label) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                    <div class="form-text" id="exportAbout" style="font-size:0.68rem;"></div>
+                </div>
+                <div id="exportRange">
+                    <label>Period</label>
+                    <div class="d-flex flex-wrap gap-1 mb-2">
+                        <?php
+                        $presets = [
+                            'This month' => [date('Y-m-01'), date('Y-m-d')],
+                            'Last month' => [date('Y-m-01', strtotime('first day of last month')), date('Y-m-t', strtotime('first day of last month'))],
+                            'This year'  => [date('Y-01-01'), date('Y-m-d')],
+                            'All time'   => [$pdo->query("SELECT MIN(payment_date) FROM payments")->fetchColumn() ?: date('Y-m-01'), date('Y-m-d')],
+                        ];
+                        foreach ($presets as $label => [$pf, $pt]): ?>
+                            <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2 export-preset" style="font-size:0.7rem;" data-from="<?= $pf ?>" data-to="<?= $pt ?>"><?= $label ?></button>
+                        <?php endforeach; ?>
+                    </div>
+                    <div class="row g-2 mb-3">
+                        <div class="col-6"><label for="exportFrom" class="text-muted fw-normal">From</label><input type="date" name="from" id="exportFrom" class="form-control" value="<?= date('Y-m-01') ?>" max="<?= date('Y-m-d') ?>"></div>
+                        <div class="col-6"><label for="exportTo" class="text-muted fw-normal">To</label><input type="date" name="to" id="exportTo" class="form-control" value="<?= date('Y-m-d') ?>" max="<?= date('Y-m-d') ?>"></div>
+                    </div>
+                </div>
+                <label class="d-block">Format</label>
+                <div class="btn-group w-100" role="group" aria-label="Format">
+                    <input type="radio" class="btn-check" name="format" id="formatCsv" value="csv" checked>
+                    <label class="btn btn-outline-success btn-sm" for="formatCsv"><i class="fa-regular fa-file-excel me-1"></i>Excel (CSV)</label>
+                    <input type="radio" class="btn-check" name="format" id="formatPdf" value="pdf">
+                    <label class="btn btn-outline-danger btn-sm" for="formatPdf"><i class="fa-regular fa-file-pdf me-1"></i>PDF</label>
+                </div>
+            </div>
+            <div class="modal-footer border-0 bg-light">
+                <button type="button" class="btn btn-light border btn-sm" data-bs-dismiss="modal">Cancel</button>
+                <button type="submit" class="btn btn-primary btn-sm px-3"><i class="fa-solid fa-download me-1"></i>Download</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+// Export pop-up: the period only matters for some reports; it opens on the report of the open tab.
+document.addEventListener('DOMContentLoaded', function () {
+    const type = document.getElementById('exportType');
+    const range = document.getElementById('exportRange');
+    const about = document.getElementById('exportAbout');
+    const sync = () => {
+        const opt = type.selectedOptions[0];
+        range.classList.toggle('d-none', opt.dataset.range !== '1');
+        range.querySelectorAll('input').forEach(i => i.disabled = opt.dataset.range !== '1');
+        about.textContent = opt.dataset.about;
+    };
+    type.addEventListener('change', sync);
+    document.querySelectorAll('.export-preset').forEach(b => b.addEventListener('click', () => {
+        document.getElementById('exportFrom').value = b.dataset.from;
+        document.getElementById('exportTo').value = b.dataset.to;
+    }));
+    const tabToReport = { 'tab-financial': 'financial', 'tab-occupancy': 'occupancy', 'tab-tenant': 'tenants', 'tab-payment': 'payments' };
+    document.getElementById('exportModal').addEventListener('show.bs.modal', () => {
+        const open = document.querySelector('#reportTabs .tab-item.active');
+        const pick = open && tabToReport[open.dataset.target];
+        if (pick) type.value = pick;
+        sync();
+    });
+    // The download doesn't leave the page; show it in the Exported Reports list afterwards.
+    document.getElementById('exportForm').addEventListener('submit', () => {
+        bootstrap.Modal.getInstance(document.getElementById('exportModal')).hide();
+        setTimeout(() => { window.location = 'reports.php?tab=exported'; }, 1500);
+    });
+    sync();
+});
+</script>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
@@ -647,7 +765,7 @@ document.addEventListener("DOMContentLoaded", function () {
 </script>
 
 <script>
-Chart.register(ChartDataLabels);
+if (window.ChartDataLabels) Chart.register(ChartDataLabels);   // the labels plugin is optional
 
 document.addEventListener("DOMContentLoaded", function() {
     // 1. Occupancy Donut Chart
@@ -657,7 +775,7 @@ document.addEventListener("DOMContentLoaded", function() {
         data: {
             labels: ['Occupied', 'Available', 'Maintenance'],
             datasets: [{
-                data: [<?= $totalOccupied ?: 0 ?>, <?= ($totalCapacity - $totalOccupied) ?: 0 ?>, 0],
+                data: [<?= (int)$totalOccupied ?>, <?= $availableBeds ?>, <?= $maintenanceBeds ?>],
                 backgroundColor: ['#22c55e', '#0d6efd', '#f59e0b'],
                 borderWidth: 0,
                 cutout: '75%'
