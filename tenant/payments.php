@@ -2,6 +2,7 @@
 require_once 'header.php';
 require_once '../includes/billing.php';
 require_once '../includes/uploads.php';
+require_once '../includes/notifications.php';
 
 // Fetch settings (for GCash)
 $settings = $pdo->query("SELECT setting_key, setting_value FROM settings")->fetchAll(PDO::FETCH_KEY_PAIR);
@@ -89,9 +90,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($payment_method === 'gcash' && !$destPath) {
             $error = "Please upload a GCash screenshot.";
         } else {
-            $stmt = $pdo->prepare("INSERT INTO payments (tenant_id, amount, payment_date, reference_number, screenshot_path, payment_method, pay_for_room) VALUES (?, ?, ?, ?, ?, ?, ?)");
-            $stmt->execute([$currentTenant['id'], $amount, $payment_date, $reference_number, $destPath, $payment_method, dbBool($payForRoom)]);
+            $newPaymentId = insertReturningId($pdo,
+                "INSERT INTO payments (tenant_id, amount, payment_date, reference_number, screenshot_path, payment_method, pay_for_room) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [$currentTenant['id'], $amount, $payment_date, $reference_number, $destPath, $payment_method, dbBool($payForRoom)]);
             $success = "Payment submitted successfully. Awaiting Admin verification.";
+            notifyAdmin($pdo, 'payment_submitted',
+                'Payment to verify: ' . trim($currentTenant['first_name'] . ' ' . $currentTenant['last_name']),
+                'PHP ' . number_format($amount, 2) . ' via ' . paymentMethodLabel($payment_method)
+                . ($payForRoom ? ' for the whole room' : '') . ($payment_method === 'gcash' ? ", ref $reference_number" : ''),
+                'payments.php?status=pending', "payment_submitted:$newPaymentId");
             $hasPending = true;
         }
     }

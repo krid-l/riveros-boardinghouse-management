@@ -7,6 +7,7 @@ require_once '../includes/sms.php';
 require_once '../includes/billing.php';
 require_once '../includes/pagination.php';
 require_once '../includes/uploads.php';
+require_once '../includes/notifications.php';
 
 // --- ACTION HANDLING ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'send_reminders') {
@@ -111,7 +112,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'send_
                 $smsResults[] = sendSMS($pdo, $to, $msg, $purpose, $tenantId);
             }
 
-            $success = "Payment verified successfully. Receipt generated. " . smsOutcomeText(mergeSmsResults(...$smsResults));
+            $smsSummary = mergeSmsResults(...$smsResults);
+            $success = "Payment verified successfully. Receipt generated. " . smsOutcomeText($smsSummary);
+
+            markNotificationsRead($pdo, "payment_submitted:$paymentId");
+            notifyAdmin($pdo, 'payment_verified', "Payment verified: $fullName",
+                'PHP ' . number_format($amount, 2) . ' via ' . paymentMethodLabel($payment['payment_method'] ?? 'gcash')
+                . ' · Receipt RCP-' . str_pad($paymentId, 6, '0', STR_PAD_LEFT)
+                . ($smsSummary['sent'] > 0 ? ' · SMS sent' : ''),
+                'payments.php?status=verified');
         } catch (Exception $e) {
             $pdo->rollBack();
             $error = "Error verifying payment: " . $e->getMessage();
@@ -122,6 +131,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'send_
         if ($upd->rowCount() === 1) {
             $msg = "$smsName: Your payment submission of PHP " . number_format($payment['amount'], 2) . " (ref " . $payment['reference_number'] . ") was REJECTED. Please check it and submit again.";
             $success = "Payment rejected. " . smsOutcomeText(sendSMS($pdo, $payment['contact_number'], $msg, 'payment_rejected', (int)$payment['tenant_id']));
+            markNotificationsRead($pdo, "payment_submitted:$paymentId");
+            notifyAdmin($pdo, 'payment_rejected', 'Payment rejected: ' . $payment['first_name'] . ' ' . $payment['last_name'],
+                'PHP ' . number_format((float)$payment['amount'], 2) . ($payment['reference_number'] ? ', ref ' . $payment['reference_number'] : ''),
+                'payments.php?status=rejected');
         } else {
             $error = "This payment was already processed.";
         }

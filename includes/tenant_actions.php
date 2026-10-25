@@ -6,6 +6,7 @@
 require_once __DIR__ . '/billing.php';
 require_once __DIR__ . '/sms.php';
 require_once __DIR__ . '/pdf_generator.php';
+require_once __DIR__ . '/notifications.php';
 
 function postedDate(string $field): string {
     $value = trim($_POST[$field] ?? '');
@@ -139,6 +140,16 @@ function handleTenantAction(PDO $pdo): array {
         }
     }
 
+    // Who lives in the rooms this action touches, to tell the admin when one fills up or frees a bed.
+    $roomIds = [(int)($_POST['room_id'] ?? 0)];
+    if (!empty($_POST['tenant_id'])) {
+        $roomStmt = $pdo->prepare("SELECT room_id FROM tenants WHERE id = ?");
+        $roomStmt->execute([(int)$_POST['tenant_id']]);
+        $roomIds[] = (int)$roomStmt->fetchColumn();
+    }
+    $roomsBefore = roomOccupancySnapshot($pdo, $roomIds);
+    $newTenant = null;
+
     try {
         $pdo->beginTransaction();
 
@@ -198,6 +209,7 @@ function handleTenantAction(PDO $pdo): array {
                 $billTenantId = $tenantId;
                 $moveInTenantId = $tenantId;
             }
+            $newTenant = ['id' => $tenantId, 'name' => trim("$firstName $lastName"), 'room_id' => $roomId, 'move_in' => $moveInDate];
 
             $success = "Tenant added successfully! <br><strong>Username:</strong> " . htmlspecialchars($username) . " <br><strong>Password:</strong> " . htmlspecialchars($rawPassword) . " <br><small>Please save these credentials!</small>";
             if ($moveInDate && $roomId) {
@@ -338,6 +350,21 @@ function handleTenantAction(PDO $pdo): array {
     // Post the first-month charge right away instead of waiting for the next page load.
     if (!$error && $billTenantId) {
         runBilling($pdo, $billTenantId);
+    }
+
+    if (!$error) {
+        if ($newTenant) {
+            $roomNo = null;
+            if ($newTenant['room_id']) {
+                $roomStmt = $pdo->prepare("SELECT room_number FROM rooms WHERE id = ?");
+                $roomStmt->execute([$newTenant['room_id']]);
+                $roomNo = $roomStmt->fetchColumn();
+            }
+            notifyAdmin($pdo, 'tenant_added', "New tenant registered: {$newTenant['name']}",
+                $roomNo ? "Room $roomNo, moving in " . date('M j, Y', strtotime($newTenant['move_in'])) . '.' : 'No room assigned yet.',
+                "tenant_details.php?id={$newTenant['id']}");
+        }
+        notifyRoomAvailabilityChanges($pdo, $roomsBefore);
     }
 
     // Moving in means handing over the advance and deposit. Recorded last, once billing has

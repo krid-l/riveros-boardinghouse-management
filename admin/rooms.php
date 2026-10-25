@@ -39,11 +39,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
         try {
             if ($action === 'add') {
-                $stmt = $pdo->prepare("INSERT INTO rooms (room_number, capacity, price_per_month, status) VALUES (?, ?, ?, ?)");
-                $stmt->execute([$roomNumber, $capacity, $roomPrice, 'vacant']);
+                $newRoomId = insertReturningId($pdo, "INSERT INTO rooms (room_number, capacity, price_per_month, status) VALUES (?, ?, ?, ?)",
+                                               [$roomNumber, $capacity, $roomPrice, 'vacant']);
+                notifyAdmin($pdo, 'room_available', "New room $roomNumber is available",
+                    $capacity . ($capacity === 1 ? ' bed' : ' beds') . ', PHP ' . number_format(rentShare($roomPrice, $capacity), 2) . ' per bed a month.',
+                    "rooms.php?room=$newRoomId");
             } elseif ($action === 'edit') {
+                $roomId = (int)($_POST['room_id'] ?? 0);
+                $status = in_array($_POST['status'] ?? '', ['vacant', 'occupied', 'maintenance'], true) ? $_POST['status'] : 'vacant';
+                $oldStatus = $pdo->prepare("SELECT status FROM rooms WHERE id = ?");
+                $oldStatus->execute([$roomId]);
+                $oldStatus = $oldStatus->fetchColumn();
                 $stmt = $pdo->prepare("UPDATE rooms SET room_number = ?, capacity = ?, price_per_month = ?, status = ? WHERE id = ?");
-                $stmt->execute([$roomNumber, $capacity, $roomPrice, $_POST['status'], $_POST['room_id']]);
+                $stmt->execute([$roomNumber, $capacity, $roomPrice, $status, $roomId]);
+                if ($status === 'maintenance' && $oldStatus !== 'maintenance') {
+                    notifyAdmin($pdo, 'room_maintenance', "Room $roomNumber is under maintenance",
+                        'It is no longer offered when assigning tenants.', "rooms.php?room=$roomId");
+                } elseif ($status !== 'maintenance' && $oldStatus === 'maintenance') {
+                    $free = max(0, $capacity - roomOccupantCount($pdo, $roomId));
+                    notifyAdmin($pdo, 'room_available', "Room $roomNumber is back from maintenance",
+                        $free ? ($free === 1 ? '1 free bed.' : "$free free beds.") : 'All beds are taken.', "rooms.php?room=$roomId");
+                }
             } elseif ($action === 'delete') {
                 $pdo->prepare("UPDATE tenants SET room_id = NULL WHERE room_id = ?")->execute([$_POST['room_id']]);
                 $pdo->prepare("DELETE FROM rooms WHERE id = ?")->execute([$_POST['room_id']]);

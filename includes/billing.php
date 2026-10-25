@@ -449,3 +449,11 @@ function logRoomTransfer(PDO $pdo, int $tenantId, ?int $fromRoom, ?int $toRoom, 
     $pdo->prepare("INSERT INTO room_transfers (tenant_id, from_room_id, to_room_id, transferred_at, note) VALUES (?, ?, ?, ?, ?)")
         ->execute([$tenantId, $fromRoom, $toRoom, $date, $note]);
 }
+
+/** "Cash" or "GCash", for messages (a roommate's covered share keeps its "Covered by ..." text). */
+function paymentMethodLabel(?string $method): string {
+    $method = (string)$method;
+    if ($method === 'cash') return 'Cash';
+    if ($method === '' || $method === 'gcash') return 'GCash';
+    return $method;
+}

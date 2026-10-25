@@ -1,5 +1,6 @@
 <?php
 require_once 'header.php';
+require_once '../includes/notifications.php';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['subject'])) {
     $subject = trim($_POST['subject'] ?? '');
@@ -10,6 +11,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['subject'])) {
     $stmt = $pdo->prepare("INSERT INTO complaints (tenant_id, subject, message, category) VALUES (?, ?, ?, ?)");
     $stmt->execute([$currentTenant['id'], $subject, $message, $category]);
     $success = "Complaint submitted successfully.";
+    notifyAdmin($pdo, 'complaint', 'New complaint: ' . $subject,
+        trim($currentTenant['first_name'] . ' ' . $currentTenant['last_name']) . " · $category", 'complaints.php?status=pending');
 }
 
 // Fetch complaints

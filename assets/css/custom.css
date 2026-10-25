@@ -172,3 +172,19 @@ body {
 @media (max-width: 767.98px) {
     .topbar .page-title { font-size: 1rem; }
 }
+
+/* Notification bell (admin top bar) */
+.notif-badge { font-size: 0.6rem; padding: 0.25em 0.45em; }
+.notif-panel { width: 340px; max-width: calc(100vw - 24px); border-radius: 12px; overflow: hidden; }
+.notif-list { max-height: 360px; overflow-y: auto; }
+.notif-item { color: #1e293b; border-bottom: 1px solid #f1f5f9; }
+.notif-item:last-child { border-bottom: 0; }
+.notif-item:hover { background: #f8fafc; }
+.notif-item.unread { background: #eff6ff; }
+.notif-item.unread:hover { background: #e0edff; }
+.notif-icon { width: 32px; height: 32px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 0.8rem; }
+.notif-title { font-size: 0.8rem; font-weight: 600; line-height: 1.25; }
+.notif-item.unread .notif-title { font-weight: 700; }
+.notif-msg { font-size: 0.72rem; color: #64748b; }
+.notif-time { font-size: 0.68rem; color: #94a3b8; margin-top: 2px; }
+.notif-dot { width: 8px; height: 8px; border-radius: 50%; background: #2563eb; margin-top: 6px; }
