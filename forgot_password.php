@@ -132,5 +132,6 @@ $houseName = (string)($pdo->query("SELECT setting_value FROM settings WHERE sett
             <div class="text-center mt-2"><a class="back-link" href="login.php"><i class="fa-solid fa-arrow-left me-1"></i> Back to login</a></div>
         </div>
     </div>
+<script src="assets/js/busy.js?v=<?= (int)@filemtime(__DIR__ . '/assets/js/busy.js') ?>"></script>
 </body>
 </html>
