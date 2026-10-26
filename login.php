@@ -18,9 +18,9 @@ if (isLoggedIn()) {
 $error = isset($_GET['deactivated']) ? "This tenant account has been deactivated. Please contact the admin." : '';
 $notice = isset($_GET['reset']) ? "Your password was changed. Log in with your new password." : '';
 
-// Background photo the admin uploaded under Settings -> Login Page (none: the default design).
+// Background photo: the one uploaded under Settings -> Login Page, or the boarding house photo.
 require_once 'includes/uploads.php';
-$loginBg = uploadSrc((string)($pdo->query("SELECT setting_value FROM settings WHERE setting_key = 'login_bg_path'")->fetchColumn() ?: ''));
+$loginBg = loginBackgroundSrc($pdo);
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $username = trim($_POST['username'] ?? '');
     $password = $_POST['password'] ?? '';
@@ -65,7 +65,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <link rel="stylesheet" href="assets/css/auth.css">
 
 </head>
-<body<?php if ($loginBg): ?> class="has-custom-bg" style="background-image: linear-gradient(rgba(15, 23, 42, 0.55), rgba(15, 23, 42, 0.55)), url('<?= htmlspecialchars($loginBg, ENT_QUOTES) ?>');"<?php endif; ?>>
+<body class="has-custom-bg" style="background-image: linear-gradient(rgba(15, 23, 42, 0.45), rgba(15, 23, 42, 0.45)), url('<?= htmlspecialchars($loginBg, ENT_QUOTES) ?>');">
 
     <!-- Background Elements -->
     <div class="bg-left"></div>

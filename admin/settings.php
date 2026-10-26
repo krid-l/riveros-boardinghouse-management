@@ -176,7 +176,7 @@ $s = function($key) use ($settingsMap) {
 
 // GCash QR code: a Supabase URL when deployed, an uploads/ path when run locally.
 $qrSrc = uploadSrc($settingsMap['gcash_qr_path'] ?? '', '../');
-$loginBgSrc = uploadSrc($settingsMap['login_bg_path'] ?? '', '../');
+$loginBgSrc = uploadSrc($settingsMap['login_bg_path'] ?? '', '../');   // null: the default photo is used
 
 // SMS: whether a token is saved (the token itself never goes back to the browser), and the
 // latest texts, so the admin can see what went out and why anything didn't.
@@ -587,21 +587,18 @@ require_once 'header.php';
                 </div>
                 <div class="settings-body pt-2">
                     <div class="rounded-3 border mb-2 d-flex align-items-center justify-content-center bg-light" style="height: 130px; overflow: hidden;">
-                        <?php if ($loginBgSrc): ?>
-                            <img src="<?= htmlspecialchars($loginBgSrc) ?>" alt="Login page background" style="width: 100%; height: 100%; object-fit: cover;">
-                        <?php else: ?>
-                            <span class="text-muted small"><i class="fa-regular fa-image me-1"></i>Default design (no photo uploaded)</span>
-                        <?php endif; ?>
+                        <img src="<?= htmlspecialchars($loginBgSrc ?: '../' . DEFAULT_LOGIN_BG) ?>" alt="Login page background" style="width: 100%; height: 100%; object-fit: cover;">
                     </div>
+                    <div class="form-text mb-2"><?= $loginBgSrc ? 'Your uploaded photo.' : 'The default boarding house photo. Upload one to replace it.' ?></div>
                     <input type="file" name="login_bg" class="form-control mb-1" accept="image/png,image/jpeg,image/webp" required>
                     <div class="form-text mb-2">JPG, PNG or WebP, up to 5MB. A wide photo works best.</div>
                     <button type="submit" class="btn btn-primary btn-save shadow-sm w-100"><i class="fa-solid fa-upload me-2" style="font-size:0.65rem;"></i>Upload Background</button>
                 </div>
             </form>
             <?php if ($loginBgSrc): ?>
-            <form method="POST" class="px-4 pb-3 text-center" onsubmit="return confirm('Remove the login background photo?');">
+            <form method="POST" class="px-4 pb-3 text-center" onsubmit="return confirm('Remove your photo and go back to the default one?');">
                 <input type="hidden" name="action" value="delete_login_bg">
-                <button type="submit" class="btn btn-link text-danger text-decoration-none p-0" style="font-size:0.75rem;">Remove photo</button>
+                <button type="submit" class="btn btn-link text-danger text-decoration-none p-0" style="font-size:0.75rem;">Remove photo (use the default)</button>
             </form>
             <?php endif; ?>
         </div>

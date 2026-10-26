@@ -52,7 +52,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
-$loginBg = uploadSrc((string)($pdo->query("SELECT setting_value FROM settings WHERE setting_key = 'login_bg_path'")->fetchColumn() ?: ''));
+$loginBg = loginBackgroundSrc($pdo);
 $houseName = (string)($pdo->query("SELECT setting_value FROM settings WHERE setting_key = 'boarding_house_name'")->fetchColumn() ?: 'Riveros Boarding House');
 ?>
 <!DOCTYPE html>
@@ -65,7 +65,7 @@ $houseName = (string)($pdo->query("SELECT setting_value FROM settings WHERE sett
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="stylesheet" href="assets/css/auth.css">
 </head>
-<body<?php if ($loginBg): ?> class="has-custom-bg" style="background-image: linear-gradient(rgba(15, 23, 42, 0.55), rgba(15, 23, 42, 0.55)), url('<?= htmlspecialchars($loginBg, ENT_QUOTES) ?>');"<?php endif; ?>>
+<body class="has-custom-bg" style="background-image: linear-gradient(rgba(15, 23, 42, 0.45), rgba(15, 23, 42, 0.45)), url('<?= htmlspecialchars($loginBg, ENT_QUOTES) ?>');">
     <div class="bg-left"></div>
     <div class="bg-right">
         <div class="dots-pattern"></div>

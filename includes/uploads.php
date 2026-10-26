@@ -127,6 +127,19 @@ function uploadSrc(?string $path, string $prefix = ''): ?string {
     return preg_match('#^https?://#i', $path) ? $path : $prefix . $path;
 }
 
+/** The boarding house photo behind the login form, shipped with the app. */
+const DEFAULT_LOGIN_BG = 'assets/img/login-bg.jpg';
+
+/**
+ * The login page background: the photo uploaded under Settings -> Login Page, or the default
+ * boarding house photo.
+ * @param string $prefix path back to the project root from the current page, e.g. '../'
+ */
+function loginBackgroundSrc(PDO $pdo, string $prefix = ''): string {
+    $uploaded = (string)($pdo->query("SELECT setting_value FROM settings WHERE setting_key = 'login_bg_path'")->fetchColumn() ?: '');
+    return uploadSrc($uploaded, $prefix) ?? $prefix . DEFAULT_LOGIN_BG;
+}
+
 /** Delete a locally stored upload. Files kept in Supabase are left alone. */
 function deleteLocalUpload(?string $path): void {
     $path = trim((string)$path);

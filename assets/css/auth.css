@@ -123,8 +123,8 @@ body, html {
     .main-wrapper { padding: 2rem 1rem; }
 }
 
-/* An uploaded background photo (Settings -> Login Page) covers the whole page instead of the
-   left-hand panel, under a dark tint so the card stays readable. */
+/* The background photo (the boarding house, or one uploaded under Settings -> Login Page)
+   covers the whole page, under a dark tint so the card stays readable. */
 body.has-custom-bg {
     /* The photo itself is set on the page (a path in this file would resolve against assets/css/). */
     background-color: #0f172a;
