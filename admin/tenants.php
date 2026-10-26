@@ -435,7 +435,7 @@ function moveInPaymentFields(string $id, bool $startHidden = false): string {
 
 <!-- Add Tenant Modal -->
 <div class="modal fade" id="addTenantModal" tabindex="-1">
-    <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+    <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
         <div class="modal-content border-0 shadow">
                 <form method="POST" data-movein-form>
                     <input type="hidden" name="action" value="add">
@@ -444,11 +444,16 @@ function moveInPaymentFields(string $id, bool $startHidden = false): string {
                         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                     </div>
                     <div class="modal-body p-4 form-compact">
+                    <!-- Desktop: profile on the left, room and payment on the right, so it all fits without scrolling -->
+                    <div class="row gx-4">
+                    <div class="col-lg-7">
                     <?= tenantProfileFormFields($addOld, 'add') ?>
+                    </div>
 
+                    <div class="col-lg-5">
                     <div class="profile-section-title">Room &amp; move-in</div>
                     <div class="row g-2">
-                    <div class="col-sm-7">
+                    <div class="col-sm-7 col-lg-12">
                     <div class="mb-3">
                         <label>Assign Room <span class="text-muted fw-normal">(Optional)</span></label>
                         <select class="form-select" name="room_id">
@@ -471,7 +476,7 @@ function moveInPaymentFields(string $id, bool $startHidden = false): string {
                         </select>
                     </div>
                     </div>
-                    <div class="col-sm-5">
+                    <div class="col-sm-5 col-lg-12">
                     <div class="mb-3">
                         <label>Move-in Date</label>
                         <input type="date" class="form-control" name="move_in_date" value="<?= htmlspecialchars($addOld['move_in_date'] ?? date('Y-m-d')) ?>">
@@ -481,6 +486,8 @@ function moveInPaymentFields(string $id, bool $startHidden = false): string {
                     </div>
                     <?= moveInPaymentFields('add_movein', true) ?>
                     <small class="text-muted d-block" style="font-size:0.65rem;"><i class="fa-solid fa-key me-1"></i>A username and temporary password are created automatically, shown after saving and texted to the tenant.</small>
+                    </div>
+                    </div>
                     </div>
                     <div class="modal-footer border-0 bg-light">
                         <button type="button" class="btn btn-light border" data-bs-dismiss="modal" style="font-size:0.8rem;">Cancel</button>

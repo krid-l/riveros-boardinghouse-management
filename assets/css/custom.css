@@ -219,6 +219,11 @@ body {
     .stat-chevron { display: none; }
 }
 
+/* Scrollable modals whose <form> wraps header, body and footer: without this the form grows
+   past the screen, the body never scrolls and the footer buttons are cut off. */
+.modal-dialog-scrollable .modal-content > form { display: flex; flex-direction: column; min-height: 0; max-height: 100%; }
+.modal-dialog-scrollable .modal-content > form > .modal-body { overflow-y: auto; }
+
 /* Tenant profile form sections (includes/tenant_profile.php) */
 .profile-section-title { font-size: 0.65rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #64748b; margin: 0.25rem 0 0.5rem; padding-bottom: 0.3rem; border-bottom: 1px solid #f1f5f9; }
 .profile-section-title:not(:first-child) { margin-top: 1rem; }
