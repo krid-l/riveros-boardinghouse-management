@@ -34,6 +34,8 @@ $myRentShare = $room ? rentShare((float)$room['price_per_month'], $roomCapacity)
 // Held to pay for their last month: one month of their rent.
 $myDeposit = tenantDeposit($pdo, $currentTenant);
 $depositUsed = depositAppliedThisStay($pdo, $currentTenant);
+// Not paid yet (e.g. nothing paid at move-in): there is nothing to use for the last month.
+$depositUnpaid = $depositUsed ? 0.0 : depositUnpaid($pdo, $currentTenant);
 $depositPending = pendingDepositRequest($pdo, (int)$currentTenant['id']);
 $depositLast = $depositPending ? null : latestDepositRequest($pdo, (int)$currentTenant['id']);
 $upcomingDue = upcomingDueDate($pdo, (int)$currentTenant['id']);
@@ -190,7 +192,7 @@ $balance = $currentTenant['balance'] ?? 0;
         <div class="text-white-50 fw-semibold" style="font-size: 0.85rem;">
             <i class="fa-solid fa-money-bill-wave me-1"></i> PHP <?= number_format($myRentShare, 2) ?> / month<?php if ($roomCapacity > 1): ?> <span class="text-white-50">(1 of <?= $roomCapacity ?> beds in the PHP <?= number_format($room['price_per_month'], 2) ?> room)</span><?php endif; ?>
             <?php if ($myDeposit > 0): ?>
-                <br><i class="fa-solid fa-vault me-1"></i> PHP <?= number_format($myDeposit, 2) ?> deposit <span class="text-white-50"><?= $depositUsed ? '(used for ' . date('F Y', strtotime($depositUsed['billing_month'] . '-01')) . ')' : '(pays for your last month)' ?></span>
+                <br><i class="fa-solid fa-vault me-1"></i> PHP <?= number_format($myDeposit, 2) ?> deposit <span class="text-white-50"><?= $depositUsed ? '(used for ' . date('F Y', strtotime($depositUsed['billing_month'] . '-01')) . ')' : ($depositUnpaid > 0 ? '(not paid yet)' : '(pays for your last month)') ?></span>
             <?php endif; ?>
         </div>
     </div>
@@ -265,6 +267,9 @@ $balance = $currentTenant['balance'] ?? 0;
                     <input type="hidden" name="action" value="deposit_cancel">
                     <button type="submit" class="btn btn-sm btn-outline-secondary rounded-pill px-3">Cancel request</button>
                 </form>
+            <?php elseif ($depositUnpaid > 0): ?>
+                <p class="text-muted mb-2" style="font-size:0.8rem;"><i class="fa-solid fa-circle-exclamation text-warning me-1"></i>Not paid yet: <strong>PHP <?= number_format($depositUnpaid, 2) ?></strong> of it is still due, together with your rent. Once it is paid, it pays for your last month and you can ask to use it here.</p>
+                <a href="payments.php" class="btn btn-sm btn-primary rounded-pill px-3"><i class="fa-solid fa-upload me-1"></i>Submit a payment</a>
             <?php else: ?>
                 <p class="text-muted mb-2" style="font-size:0.8rem;">It pays for your last month. Moving out soon? Tell us which month is your last and the admin will apply your deposit to it.</p>
                 <?php if ($depositLast && $depositLast['status'] === 'declined'): ?>
