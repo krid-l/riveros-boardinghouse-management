@@ -262,7 +262,7 @@ require_once 'header.php';
     .standing-badge { display: inline-block; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.04em; padding: 0.3em 0.9em; border-radius: 999px; }
     .profile-id { min-width: 0; }
     .fact-box { border: 1px solid #eef2f7; border-radius: 10px; padding: 0.75rem 0.85rem; height: 100%; background: #fff; }
-    .fact-icon { width: 30px; height: 30px; border-radius: 50%; background: #eff6ff; color: #2563eb; display: inline-flex; align-items: center; justify-content: center; font-size: 0.8rem; margin-bottom: 0.4rem; }
+    .fact-icon { width: 32px; height: 32px; border-radius: 8px; background: #eff6ff; color: #2563eb; display: inline-flex; align-items: center; justify-content: center; font-size: 0.8rem; margin-bottom: 0.4rem; }
     .fact-label { font-size: 0.72rem; color: #64748b; }
     .fact-value { font-size: 0.95rem; font-weight: 700; color: #0f172a; line-height: 1.3; }
     .fact-sub { font-size: 0.66rem; color: #64748b; line-height: 1.3; margin-top: 2px; }
@@ -321,8 +321,10 @@ require_once 'header.php';
     .receipt-thumb { height: 56px; background-color: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 4px; margin: 0.4rem 0; display: flex; align-items: center; justify-content: center; }
 
     /* Balance summary */
-    .balance-row { display: flex; justify-content: space-between; font-size: 0.8rem; margin-bottom: 0.55rem; }
-    .balance-total { display: flex; justify-content: space-between; align-items: center; font-size: 0.85rem; font-weight: 700; border-radius: 8px; padding: 0.65rem 0.8rem; margin-top: 0.4rem; }
+    .balance-row { display: flex; justify-content: space-between; align-items: center; font-size: 0.82rem; padding: 0.6rem 0; border-bottom: 1px solid #f1f5f9; }
+    .balance-row > span:last-child { font-size: 0.95rem; color: #0f172a; }
+    .balance-row > span.text-danger:last-child { color: #dc2626 !important; }
+    .balance-total { display: flex; justify-content: space-between; align-items: center; font-size: 0.9rem; font-weight: 700; border-radius: 8px; padding: 0.75rem 0.85rem; margin-top: 0.75rem; }
     .method-box { display: flex; align-items: center; gap: 0.75rem; border: 1px solid #eef2f7; border-radius: 8px; padding: 0.6rem 0.75rem; font-size: 0.82rem; }
     .method-icon { width: 34px; height: 34px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; font-weight: 800; }
 

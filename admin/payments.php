@@ -541,7 +541,7 @@ require_once 'header.php';
                 </table>
             </div>
             <div class="card-footer bg-white border-0 p-3 d-flex justify-content-between align-items-center flex-wrap gap-2">
-                <span class="text-muted" style="font-size:0.78rem;"><?= str_replace(' to ', ' - ', paginationSummary($pager, 'payments')) ?></span>
+                <span class="text-muted" style="font-size:0.78rem;"><?= $pager['total'] ? str_replace(' to ', ' - ', paginationSummary($pager, 'payments')) : '' ?></span>
                 <nav><ul class="pagination pagination-sm mb-0"><?= paginationControls($pager) ?></ul></nav>
             </div>
         </div>
