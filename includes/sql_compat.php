@@ -70,6 +70,11 @@ function sqlMonthName(string $expr): string {
     return isPgsql() ? "TO_CHAR($expr, 'Mon')" : "DATE_FORMAT($expr, '%b')";
 }
 
+/** 'YYYY-MM' of a date expression, e.g. '2026-10'. */
+function sqlYearMonth(string $expr): string {
+    return isPgsql() ? "TO_CHAR($expr, 'YYYY-MM')" : "DATE_FORMAT($expr, '%Y-%m')";
+}
+
 /**
  * Row lock for the named table alias.
  * MariaDB has no "FOR UPDATE OF <alias>", so it locks every table in the statement.

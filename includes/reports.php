@@ -295,3 +295,74 @@ function outputReportPdf(array $report, string $filename, string $houseName, str
 
     $pdf->Output('D', $filename);   // sends it as a download
 }
+
+/**
+ * The months the Revenue Overview can show: from the first bill or payment to this month,
+ * newest first (at most two years back). 'YYYY-MM' => 'October 2026'.
+ */
+function revenueMonthChoices(PDO $pdo): array {
+    $first = $pdo->query("SELECT MIN(m) FROM (SELECT MIN(billing_month) AS m FROM charges
+                          UNION ALL SELECT " . sqlYearMonth('MIN(payment_date)') . " FROM payments) x")->fetchColumn();
+    $current = date('Y-m');
+    $oldest = max($first && $first <= $current ? $first : $current, date('Y-m', strtotime('-23 months', strtotime($current . '-01'))));
+    $choices = [];
+    for ($m = $current; $m >= $oldest; $m = date('Y-m', strtotime('-1 month', strtotime($m . '-01')))) {
+        $choices[$m] = date('F Y', strtotime($m . '-01'));
+    }
+    return $choices;
+}
+
+/**
+ * One month's money, for the Revenue Overview.
+ *   expected     - bills for the month (rent and deposits)
+ *   collected    - verified payments received in the month
+ *   transactions - how many verified payments that was
+ *   unpaid       - what is still owed on the month's bills. Payments settle the oldest bills
+ *                  first, so a tenant's balance sits on their newest bills.
+ */
+function monthRevenueSummary(PDO $pdo, string $month): array {
+    $from = $month . '-01';
+    $to = date('Y-m-t', strtotime($from));
+
+    $stmt = $pdo->prepare("SELECT COALESCE(SUM(amount), 0) FROM charges WHERE billing_month = ? AND amount > 0");
+    $stmt->execute([$month]);
+    $expected = (float)$stmt->fetchColumn();
+
+    $stmt = $pdo->prepare("SELECT COUNT(*), COALESCE(SUM(amount), 0) FROM payments WHERE " . REVENUE_FILTER_SQL . " AND payment_date BETWEEN ? AND ?");
+    $stmt->execute([$from, $to]);
+    [$count, $collected] = $stmt->fetch(PDO::FETCH_NUM);
+
+    $unpaid = 0.0;
+    $owing = $pdo->query("SELECT id, balance FROM tenants WHERE balance > 0")->fetchAll();
+    $bills = $pdo->prepare("SELECT amount, billing_month FROM charges WHERE tenant_id = ? AND amount > 0 ORDER BY due_date DESC, id DESC");
+    foreach ($owing as $t) {
+        $left = (float)$t['balance'];
+        $bills->execute([$t['id']]);
+        foreach ($bills->fetchAll() as $b) {
+            if ($left <= 0) break;
+            $part = min($left, (float)$b['amount']);
+            if ($b['billing_month'] === $month) $unpaid += $part;
+            $left -= $part;
+        }
+    }
+
+    return ['expected' => $expected, 'collected' => (float)$collected, 'transactions' => (int)$count, 'unpaid' => round($unpaid, 2)];
+}
+
+/**
+ * Verified revenue per calendar month for the last $months months, oldest first, with zeros
+ * for months without payments. ['Oct 2026' => 4000.0, ...]
+ */
+function monthlyRevenueTrend(PDO $pdo, int $months): array {
+    $start = date('Y-m-01', strtotime('-' . ($months - 1) . ' months', strtotime(date('Y-m-01'))));
+    $stmt = $pdo->prepare("SELECT " . sqlYearMonth('payment_date') . " AS ym, SUM(amount) AS total FROM payments
+                           WHERE " . REVENUE_FILTER_SQL . " AND payment_date >= ? GROUP BY ym");
+    $stmt->execute([$start]);
+    $byMonth = array_column($stmt->fetchAll(), 'total', 'ym');
+    $trend = [];
+    for ($i = 0; $i < $months; $i++) {
+        $m = date('Y-m', strtotime("+$i months", strtotime($start)));
+        $trend[date('M Y', strtotime($m . '-01'))] = (float)($byMonth[$m] ?? 0);
+    }
+    return $trend;
+}

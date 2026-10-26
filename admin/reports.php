@@ -47,13 +47,14 @@ $totalRevenue = $pdo->query("SELECT SUM(amount) FROM payments WHERE " . REVENUE_
 $outstandingBalance = $pdo->query("SELECT SUM(CASE WHEN balance > 0 THEN balance ELSE 0 END) FROM tenants")->fetchColumn() ?: 0;
 $totalTransactions = $pdo->query("SELECT COUNT(*) FROM payments WHERE " . REVENUE_FILTER_SQL)->fetchColumn() ?: 0;
 
-// Transactions (Overview)
+// Recent Transactions (Overview): money received, newest first.
 $recentTransactions = $pdo->query("
-    SELECT p.*, t.first_name, t.last_name, r.room_number 
+    SELECT p.*, t.first_name, t.last_name, r.room_number
     FROM payments p
     JOIN tenants t ON p.tenant_id = t.id
     LEFT JOIN rooms r ON t.room_id = r.id
-    ORDER BY p.payment_date DESC LIMIT 5
+    WHERE " . revenueFilterSql('p') . "
+    ORDER BY p.payment_date DESC, p.id DESC LIMIT 5
 ")->fetchAll();
 
 // The three long report tables are paged in SQL. Each tab keeps its own page number, and
@@ -93,49 +94,29 @@ $allTenants = $pdo->query("
     ORDER BY t.first_name ASC, t.id ASC" . paginationLimitSql($tenantPager) . "
 ")->fetchAll();
 
-// Top Paying Tenants
-$topTenants = $pdo->query("
-    SELECT t.first_name, t.last_name, r.room_number, SUM(p.amount) as total_paid
-    FROM tenants t
-    JOIN payments p ON t.id = p.tenant_id
-    LEFT JOIN rooms r ON t.room_id = r.id
-    WHERE p.status = 'verified' AND p.covered_by_payment_id IS NULL
-    GROUP BY t.id, r.room_number
-    ORDER BY total_paid DESC
-    LIMIT 3
-")->fetchAll();
+// Revenue Overview and Top Paying Tenants: one month, this month unless another is picked.
+$monthChoices = revenueMonthChoices($pdo);
+$revMonth = isset($monthChoices[queryParam('month')]) ? queryParam('month') : array_key_first($monthChoices);
+$revMonthLabel = $revMonth === date('Y-m') ? 'This Month' : date('M Y', strtotime($revMonth . '-01'));
+$revenue = monthRevenueSummary($pdo, $revMonth);
 
-// Monthly Revenue Data for Charts
-// Latest 6 months of revenue, shown oldest to newest
-$monthlyRevData = array_reverse($pdo->query("
-    SELECT " . sqlMonthName('payment_date') . " as month_name,
-           EXTRACT(MONTH FROM payment_date) as month_num,
-           EXTRACT(YEAR FROM payment_date) as year_num,
-           SUM(amount) as total
-    FROM payments
-    WHERE " . REVENUE_FILTER_SQL . "
-    GROUP BY year_num, month_num, month_name
-    ORDER BY year_num DESC, month_num DESC
-    LIMIT 6
-")->fetchAll());
+$topStmt = $pdo->prepare("
+    SELECT t.id, t.first_name, t.last_name, r.room_number, SUM(p.amount) AS total_paid
+    FROM payments p
+    JOIN tenants t ON t.id = p.tenant_id
+    LEFT JOIN rooms r ON r.id = t.room_id
+    WHERE " . revenueFilterSql('p') . " AND p.payment_date BETWEEN ? AND ?
+    GROUP BY t.id, t.first_name, t.last_name, r.room_number
+    ORDER BY total_paid DESC, t.first_name
+    LIMIT 5
+");
+$topStmt->execute([$revMonth . '-01', date('Y-m-t', strtotime($revMonth . '-01'))]);
+$topTenants = $topStmt->fetchAll();
 
-$monthNames = [];
-$monthTotals = [];
-$monthLineNames = [];
-if (empty($monthlyRevData)) {
-    $monthNames = ["No Data"];
-    $monthLineNames = ["No Data"];
-    $monthTotals = [0];
-} else {
-    foreach ($monthlyRevData as $row) {
-        $monthNames[] = $row['month_name'];
-        $monthLineNames[] = $row['month_name'] . ' ' . $row['year_num'];
-        $monthTotals[] = $row['total'];
-    }
-}
-$jsMonthNames = json_encode($monthNames);
-$jsMonthLineNames = json_encode($monthLineNames);
-$jsMonthTotals = json_encode($monthTotals);
+// Monthly Revenue Trend: the last 6 or 12 calendar months.
+$trendMonths = queryParam('trend') === '12' ? 12 : 6;
+$trend = monthlyRevenueTrend($pdo, $trendMonths);
+$trendHasData = array_sum($trend) > 0;
 
 require_once 'header.php';
 ?>
@@ -158,10 +139,7 @@ require_once 'header.php';
     .nav-tabs-custom .tab-item.active { color: #0d6efd; border-bottom: 2px solid #0d6efd; }
     
     /* Charts */
-    .chart-container-donut { position: relative; height: 140px; width: 140px; margin: 0 auto; }
-    .donut-center-text { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center; }
-    .chart-container-bar { position: relative; height: 180px; width: 100%; }
-    .chart-container-line { position: relative; height: 160px; width: 100%; }
+    .chart-container-line { position: relative; height: 220px; width: 100%; }
     
     /* Tables */
     .table-compact th { font-size: 0.55rem; text-transform: uppercase; color: #64748b; font-weight: 600; padding: 0.6rem 0.5rem; letter-spacing: 0.5px; border-bottom: 1px solid #e2e8f0; }
@@ -172,18 +150,51 @@ require_once 'header.php';
     .dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; margin-right: 6px; }
     
     /* Shortcuts */
-    .shortcut-card { border: 1px solid #f1f5f9; border-radius: 6px; padding: 0.6rem; margin-bottom: 0.4rem; display: flex; align-items: center; justify-content: space-between; background: #fff; cursor: pointer; transition: 0.2s; }
+    .shortcut-card { border: 1px solid #eef2f7; border-radius: 8px; padding: 0.65rem 0.75rem; height: 100%; display: flex; align-items: center; justify-content: space-between; background: #fff; cursor: pointer; transition: 0.2s; }
     .shortcut-card:hover { border-color: #cbd5e1; background: #f8fafc; }
-    .shortcut-icon { width: 30px; height: 30px; border-radius: 6px; display: flex; align-items: center; justify-content: center; background: #eff6ff; color: #0d6efd; font-size: 0.8rem; margin-right: 0.75rem; flex-shrink: 0; }
-    
-    /* Top Paying List */
-    .top-tenant-row { display: flex; align-items: center; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px dashed #f1f5f9; font-size: 0.65rem; }
-    .top-tenant-row:last-child { border-bottom: none; }
-    .number-badge { width: 20px; height: 20px; border-radius: 50%; background: #eff6ff; color: #0f172a; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 0.6rem; margin-right: 0.5rem; }
+    .shortcut-icon { width: 34px; height: 34px; border-radius: 8px; display: flex; align-items: center; justify-content: center; background: #eff6ff; color: #0d6efd; font-size: 0.8rem; margin-right: 0.75rem; flex-shrink: 0; }
     
     /* File Icon */
     .file-icon { font-size: 1.25rem; color: #ef4444; }
     .file-icon.csv { color: #22c55e; }
+
+    /* Overview cards (laid out like the reference) */
+    .rpt-card { border: 1px solid #eef2f7 !important; display: flex; flex-direction: column; }
+    .rpt-head { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; padding: 0.9rem 1rem 0.25rem; }
+    .rpt-head h6 { display: flex; align-items: center; gap: 0.6rem; margin: 0; font-size: 0.9rem; font-weight: 700; color: #1e293b; }
+    .rpt-icon { width: 32px; height: 32px; border-radius: 50%; background: #eff6ff; color: #2563eb; display: inline-flex; align-items: center; justify-content: center; font-size: 0.8rem; flex-shrink: 0; }
+    .rpt-select { font-size: 0.75rem; width: auto; max-width: 100%; padding: 0.3rem 2rem 0.3rem 0.75rem; background-position: right 0.6rem center; }
+    .rpt-link { font-size: 0.75rem; font-weight: 600; color: #2563eb; text-decoration: none; }
+    .rpt-link:hover { text-decoration: underline; }
+    .rpt-table>thead>tr>th { font-size: 0.7rem; text-transform: none; letter-spacing: 0; padding: 0.55rem 0.5rem; background: #f8fafc; color: #475569; }
+    .rpt-table>tbody>tr>td { font-size: 0.78rem; padding: 0.6rem 0.5rem; color: #475569; }
+    .rpt-empty { text-align: center; color: #64748b; font-size: 0.75rem; background: #f8fafc; border-radius: 8px; padding: 2.5rem 1rem; }
+    .rpt-empty > i { font-size: 1.3rem; color: #94a3b8; margin-bottom: 0.5rem; display: block; }
+    .soft-pill { display: inline-block; font-size: 0.68rem; font-weight: 600; padding: 0.2em 0.7em; border-radius: 999px; white-space: nowrap; }
+
+    .occ-box { border: 1px solid #eef2f7; border-radius: 8px; padding: 0.7rem 0.8rem; height: 100%; }
+    .occ-label { font-size: 0.75rem; font-weight: 600; color: #1e293b; margin-bottom: 0.3rem; white-space: nowrap; }
+    .occ-num { font-size: 1.35rem; font-weight: 700; color: #0f172a; }
+    .occ-pct { font-size: 0.7rem; color: #64748b; }
+    .occ-totals { display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid #eef2f7; border-radius: 8px; text-align: center; }
+    .occ-totals > div { padding: 0.65rem 0.25rem; display: flex; flex-direction: column; gap: 0.15rem; }
+    .occ-totals > div + div { border-left: 1px solid #eef2f7; }
+    .occ-totals span { font-size: 0.7rem; color: #64748b; }
+    .occ-totals strong { font-size: 1rem; color: #0f172a; }
+
+    .rev-box { border: 1px solid #eef2f7; border-radius: 8px; padding: 0.75rem; height: 100%; display: flex; gap: 0.6rem; align-items: flex-start; }
+    .rev-icon { width: 34px; height: 34px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 0.8rem; flex-shrink: 0; }
+    .rev-label { font-size: 0.72rem; font-weight: 600; color: #1e293b; line-height: 1.25; }
+    .rev-value { font-size: 1.05rem; font-weight: 700; color: #0f2a5c; white-space: nowrap; margin-top: 0.15rem; }
+    .rev-sub { font-size: 0.65rem; color: #64748b; line-height: 1.25; margin-top: 0.15rem; }
+    @media (max-width: 575.98px) {
+        .occ-box { padding: 0.55rem; }
+        .occ-num { font-size: 1.1rem; }
+        .occ-label { font-size: 0.64rem; }
+        .occ-label .dot { margin-right: 4px; }
+        .rev-box { flex-direction: column; }
+        .rpt-table>thead>tr>th, .rpt-table>tbody>tr>td { padding-left: 0.4rem; padding-right: 0.4rem; }
+    }
 </style>
 
 <!-- Header -->
@@ -224,223 +235,210 @@ require_once 'header.php';
          'icon' => 'fa-solid fa-coins', 'color' => 'warning', 'href' => 'tenants.php?status=unpaid', 'aria' => 'View tenants with unpaid rent'],
     ]) ?>
 
-    <!-- Middle Row 1: Charts Overview -->
-    <div class="row g-2 mb-3">
-        <!-- Room Occupancy Donut -->
-        <div class="col-lg-4">
-            <div class="card border-0 shadow-sm rounded-3 h-100">
-                <div class="card-body p-3">
-                    <h6 class="fw-bold text-dark mb-3" style="font-size:0.75rem;">Bed Occupancy Overview</h6>
-                    
-                    <div class="row align-items-center mb-3">
-                        <div class="col-6">
-                            <div class="chart-container-donut">
-                                <canvas id="occupancyDonut"></canvas>
-                                <div class="donut-center-text">
-                                    <div class="fw-bold text-dark" style="font-size:1.1rem; line-height:1;"><?= $totalOccupied ?></div>
-                                    <div class="text-muted" style="font-size:0.5rem;">Occupied</div>
-                                </div>
+    <!-- Row 1: beds and this month's money -->
+    <div class="row g-3 mb-3">
+        <div class="col-xl-5">
+            <div class="card rpt-card h-100">
+                <div class="rpt-head">
+                    <h6><span class="rpt-icon"><i class="fa-solid fa-bed"></i></span>Bed Occupancy Overview</h6>
+                </div>
+                <div class="p-3">
+                    <div class="row g-2 mb-2">
+                        <?php foreach ([['Occupied', $totalOccupied, 'success'], ['Available', $availableBeds, 'primary'], ['Maintenance', $maintenanceBeds, 'warning']] as [$label, $n, $color]): ?>
+                        <div class="col-4">
+                            <div class="occ-box">
+                                <div class="occ-label"><span class="dot bg-<?= $color ?>"></span><?= $label ?></div>
+                                <div><span class="occ-num"><?= (int)$n ?></span> <span class="occ-pct">(<?= $pctOfBeds($n) ?>%)</span></div>
                             </div>
                         </div>
-                        <div class="col-6">
-                            <div class="d-flex justify-content-between align-items-center mb-2">
-                                <span class="fw-bold text-dark" style="font-size:0.6rem;"><span class="dot bg-success"></span> Occupied</span>
-                                <span class="text-muted" style="font-size:0.55rem;"><?= $totalOccupied ?> (<?= number_format($bedOccupancyRate,1) ?>%)</span>
-                            </div>
-                            <div class="d-flex justify-content-between align-items-center mb-2">
-                                <span class="fw-bold text-dark" style="font-size:0.6rem;"><span class="dot bg-primary"></span> Available</span>
-                                <span class="text-muted" style="font-size:0.55rem;"><?= $availableBeds ?> (<?= $pctOfBeds($availableBeds) ?>%)</span>
-                            </div>
-                            <div class="d-flex justify-content-between align-items-center">
-                                <span class="fw-bold text-dark" style="font-size:0.6rem;"><span class="dot bg-warning"></span> Maintenance</span>
-                                <span class="text-muted" style="font-size:0.55rem;"><?= $maintenanceBeds ?> (<?= $pctOfBeds($maintenanceBeds) ?>%)</span>
-                            </div>
-                        </div>
+                        <?php endforeach; ?>
                     </div>
-                    
-                    <div class="d-flex justify-content-between text-center mt-3 pt-3 border-top">
-                        <div><div class="fw-bold text-dark" style="font-size:0.75rem;"><?= $totalCapacity ?></div><div class="text-muted" style="font-size:0.5rem; text-transform:uppercase; font-weight:600;">Total Beds</div></div>
-                        <div><div class="fw-bold text-dark" style="font-size:0.75rem;"><?= $totalOccupied ?></div><div class="text-muted" style="font-size:0.5rem; text-transform:uppercase; font-weight:600;">Occupied</div></div>
-                        <div><div class="fw-bold text-dark" style="font-size:0.75rem;"><?= $availableBeds ?></div><div class="text-muted" style="font-size:0.5rem; text-transform:uppercase; font-weight:600;">Available</div></div>
-                        <div><div class="fw-bold text-dark" style="font-size:0.75rem;"><?= $maintenanceBeds ?></div><div class="text-muted" style="font-size:0.5rem; text-transform:uppercase; font-weight:600;">Maintenance</div></div>
+                    <div class="occ-totals">
+                        <div><span>Total Beds</span><strong><?= (int)$totalCapacity ?></strong></div>
+                        <div><span>Occupied</span><strong><?= (int)$totalOccupied ?></strong></div>
+                        <div><span>Available</span><strong><?= (int)$availableBeds ?></strong></div>
+                        <div><span>Maintenance</span><strong><?= (int)$maintenanceBeds ?></strong></div>
                     </div>
                 </div>
             </div>
         </div>
-        
-        <!-- Revenue Bar & Stats -->
-        <div class="col-lg-8">
-            <div class="card border-0 shadow-sm rounded-3 h-100">
-                <div class="card-body p-3">
-                    <div class="row h-100">
-                        <div class="col-md-7 border-end border-light">
-                            <h6 class="fw-bold text-dark mb-3" style="font-size:0.75rem;">Revenue Overview</h6>
-                            <div class="chart-container-bar"><canvas id="revenueBar"></canvas></div>
+
+        <div class="col-xl-7">
+            <div class="card rpt-card h-100">
+                <div class="rpt-head">
+                    <h6><span class="rpt-icon"><i class="fa-solid fa-chart-column"></i></span>Revenue Overview</h6>
+                    <form method="GET" class="m-0">
+                        <input type="hidden" name="tab" value="overview">
+                        <?php if ($trendMonths !== 6): ?><input type="hidden" name="trend" value="<?= $trendMonths ?>"><?php endif; ?>
+                        <select name="month" class="form-select form-select-sm rpt-select" aria-label="Month to show" onchange="this.form.submit()">
+                            <?php foreach ($monthChoices as $m => $label): ?>
+                            <option value="<?= $m ?>" <?= $m === $revMonth ? 'selected' : '' ?>><?= $m === date('Y-m') ? 'This Month (' . date('M j', strtotime($m . '-01')) . ' - ' . date('M t, Y', strtotime($m . '-01')) . ')' : $label ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                        <noscript><button type="submit" class="btn btn-sm btn-light border mt-1">Show</button></noscript>
+                    </form>
+                </div>
+                <div class="p-3 d-flex flex-column flex-grow-1">
+                    <div class="row g-2 row-cols-2 row-cols-lg-4 row-cols-xl-2">
+                        <?php foreach ([
+                            ['Expected Revenue', peso($revenue['expected']), 'fa-peso-sign', 'success', 'Rent and deposits billed'],
+                            ['Total Payments Collected', peso($revenue['collected']), 'fa-receipt', 'primary', 'Verified, received ' . ($revMonth === date('Y-m') ? 'this month' : 'that month')],
+                            ['Total Unpaid Rent', peso($revenue['unpaid']), 'fa-triangle-exclamation', 'danger', 'Still owed on these bills'],
+                            ['Total Transactions', (string)$revenue['transactions'], 'fa-arrow-right-arrow-left', 'info', $revenue['transactions'] === 1 ? 'Verified payment' : 'Verified payments'],
+                        ] as [$label, $value, $icon, $color, $sub]): ?>
+                        <div class="col">
+                            <div class="rev-box">
+                                <span class="rev-icon bg-<?= $color ?>-subtle text-<?= $color ?>"><i class="fa-solid <?= $icon ?>"></i></span>
+                                <div style="min-width:0;">
+                                    <div class="rev-label"><?= $label ?></div>
+                                    <div class="rev-value"><?= $value ?></div>
+                                    <div class="rev-sub"><?= $sub ?></div>
+                                </div>
+                            </div>
                         </div>
-                        <div class="col-md-5 d-flex flex-column justify-content-center px-3">
-                            <div class="text-dark fw-bold mb-3" style="font-size:0.65rem;">This Month (<?= date('M 1 - M t, Y') ?>)</div>
-                            <div class="d-flex justify-content-between align-items-center mb-3">
-                                <span class="text-dark fw-semibold" style="font-size:0.65rem;">Expected Revenue</span>
-                                <span class="fw-bold text-primary" style="font-size:0.65rem;">₱<?= number_format($totalRevenue + $outstandingBalance, 2) ?></span>
-                            </div>
-                            <div class="d-flex justify-content-between align-items-center mb-3">
-                                <span class="text-dark fw-semibold" style="font-size:0.65rem;">Total Payments Collected</span>
-                                <span class="fw-bold text-success" style="font-size:0.65rem;">₱<?= number_format($totalRevenue, 2) ?></span>
-                            </div>
-                            <div class="d-flex justify-content-between align-items-center mb-3">
-                                <span class="text-dark fw-semibold" style="font-size:0.65rem;">Total Unpaid Rent</span>
-                                <span class="fw-bold text-danger" style="font-size:0.65rem;">₱<?= number_format($outstandingBalance, 2) ?></span>
-                            </div>
-                            <div class="d-flex justify-content-between align-items-center mb-3">
-                                <span class="text-dark fw-semibold" style="font-size:0.65rem;">Total Transactions</span>
-                                <span class="fw-bold text-dark" style="font-size:0.7rem;"><?= $totalTransactions ?></span>
-                            </div>
-                            <div class="text-center mt-2">
-                                <a href="reports.php?tab=financial" class="text-primary text-decoration-none fw-semibold" style="font-size:0.65rem;">View Financial Report &rarr;</a>
-                            </div>
-                        </div>
+                        <?php endforeach; ?>
+                    </div>
+                    <div class="text-end mt-auto pt-2">
+                        <a href="reports.php?tab=financial" class="rpt-link">View Financial Report <i class="fa-solid fa-arrow-right ms-1"></i></a>
                     </div>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- Middle Row 2: Occupancy, Transactions, Shortcuts -->
-    <div class="row g-2 mb-3">
-        <!-- Occupancy by Room -->
-        <div class="col-lg-4">
-            <div class="card border-0 shadow-sm rounded-3 h-100">
-                <div class="card-header bg-white border-0 p-3 pb-0"><h6 class="fw-bold text-dark mb-0" style="font-size:0.75rem;">Occupancy by Room</h6></div>
-                <div class="card-body p-0 mt-2 overflow-auto">
-                    <table class="table table-compact mb-0">
-                        <thead class="bg-light">
-                            <tr>
-                                <th class="ps-3 border-0">Room</th>
-                                <th class="border-0 text-center">Capacity</th>
-                                <th class="border-0 text-center">Occupied</th>
-                                <th class="border-0 text-end pe-3">Rate</th>
-                            </tr>
-                        </thead>
+    <!-- Row 2: rooms, recent money, shortcuts -->
+    <div class="row g-3 mb-3">
+        <div class="col-lg-6 col-xxl-4">
+            <div class="card rpt-card h-100">
+                <div class="rpt-head"><h6><span class="rpt-icon"><i class="fa-solid fa-door-open"></i></span>Occupancy by Room</h6></div>
+                <div class="table-responsive px-3">
+                    <table class="table rpt-table mb-0">
+                        <thead><tr><th>Room</th><th>Capacity</th><th>Occupied</th><th>Rate</th></tr></thead>
                         <tbody>
-                            <?php foreach(array_slice($roomsData, 0, 5) as $r): 
-                                $rate = $r['capacity'] > 0 ? round(($r['tenant_count'] / $r['capacity']) * 100) : 0;
-                                $rateColor = $rate == 100 ? 'success' : ($rate >= 50 ? 'warning' : 'danger');
-                            ?>
+                            <?php if (!$roomsData): ?>
+                                <tr><td colspan="4" class="text-center text-muted py-4">No rooms yet.</td></tr>
+                            <?php endif; ?>
+                            <?php foreach (array_slice($roomsData, 0, 6) as $r):
+                                $rate = $r['capacity'] > 0 ? round($r['tenant_count'] / $r['capacity'] * 100) : 0; ?>
                             <tr>
-                                <td class="ps-3 fw-bold text-dark">Room <?= htmlspecialchars($r['room_number'] ?? '') ?></td>
-                                <td class="text-center text-muted"><?= $r['capacity'] ?></td>
-                                <td class="text-center text-muted"><?= $r['tenant_count'] ?></td>
-                                <td class="text-end pe-3"><span class="badge bg-<?= $rateColor ?>-subtle text-<?= $rateColor ?> rounded-pill px-2" style="font-size:0.55rem;"><?= $rate ?>%</span></td>
+                                <td class="fw-semibold text-dark text-nowrap">Room <?= htmlspecialchars($r['room_number'] ?? '') ?></td>
+                                <td><?= (int)$r['capacity'] ?></td>
+                                <td><?= (int)$r['tenant_count'] ?></td>
+                                <td><?= $r['status'] === 'maintenance' ? '<span class="soft-pill bg-warning-subtle text-warning-emphasis">Maintenance</span>' : $rate . '%' ?></td>
                             </tr>
                             <?php endforeach; ?>
                         </tbody>
                     </table>
                 </div>
-                <div class="card-footer bg-white border-top p-2 text-center">
-                    <a href="reports.php?tab=occupancy" class="text-primary text-decoration-none fw-semibold" style="font-size:0.6rem;">View Occupancy Report &rarr;</a>
+                <div class="px-3 py-3 mt-auto">
+                    <a href="reports.php?tab=occupancy" class="rpt-link" onclick="document.querySelector('[data-target=tab-occupancy]').click(); return false;">View Occupancy Report<?= count($roomsData) > 6 ? ' (all ' . count($roomsData) . ' rooms)' : '' ?> <i class="fa-solid fa-arrow-right ms-1"></i></a>
                 </div>
             </div>
         </div>
-        
-        <!-- Recent Transactions -->
-        <div class="col-lg-5">
-            <div class="card border-0 shadow-sm rounded-3 h-100">
-                <div class="card-header bg-white border-0 p-3 pb-0 d-flex justify-content-between align-items-center">
-                    <h6 class="fw-bold text-dark mb-0" style="font-size:0.75rem;">Recent Transactions</h6>
-                    <a href="payments.php" class="text-primary text-decoration-none fw-semibold" style="font-size: 0.6rem;">View All</a>
-                </div>
-                <div class="card-body p-0 mt-2 overflow-auto">
-                    <table class="table table-compact mb-0">
-                        <thead class="bg-light">
-                            <tr>
-                                <th class="ps-3 border-0">Date</th><th class="border-0">Type</th><th class="border-0">Description</th><th class="border-0">Amount</th><th class="border-0 text-center pe-3">Status</th>
-                            </tr>
-                        </thead>
+
+        <div class="col-lg-6 col-xxl-4">
+            <div class="card rpt-card h-100">
+                <div class="rpt-head"><h6><span class="rpt-icon"><i class="fa-regular fa-file-lines"></i></span>Recent Transactions</h6></div>
+                <div class="table-responsive px-3">
+                    <table class="table rpt-table mb-0">
+                        <thead><tr><th>Date</th><th class="d-none d-sm-table-cell">Type</th><th>Description</th><th class="text-end">Amount</th></tr></thead>
                         <tbody>
-                            <?php 
-                            if (empty($recentTransactions)) {
-                                echo '<tr><td colspan="5" class="text-center py-4 text-muted">No transactions recorded.</td></tr>';
-                            } else {
-                                foreach($recentTransactions as $p): 
-                                    $isVerified = $p['status'] == 'verified';
-                                    $sClass = $isVerified ? 'success' : 'warning';
-                                    $sText = $isVerified ? 'Paid' : 'Pending';
-                                ?>
-                                <tr>
-                                    <td class="ps-3 text-dark fw-semibold" style="font-size:0.6rem;"><?= date('M d, Y', strtotime($p['payment_date'])) ?></td>
-                                    <td class="text-muted" style="font-size:0.6rem;">Payment</td>
-                                    <td class="text-dark fw-semibold" style="font-size:0.6rem;"><?= htmlspecialchars($p['first_name'].' '.$p['last_name']) ?> (Rm <?= htmlspecialchars($p['room_number'] ?? '?') ?>)</td>
-                                    <td class="text-dark fw-bold" style="font-size:0.6rem;">₱<?= number_format($p['amount'], 2) ?></td>
-                                    <td class="text-center pe-3"><span class="badge bg-<?= $sClass ?>-subtle text-<?= $sClass ?> rounded-pill px-2" style="font-size:0.55rem;"><?= $sText ?></span></td>
-                                </tr>
-                                <?php endforeach; 
-                            } ?>
+                            <?php if (!$recentTransactions): ?>
+                                <tr><td colspan="4" class="text-center text-muted py-4">No payments received yet.</td></tr>
+                            <?php endif; ?>
+                            <?php foreach ($recentTransactions as $p): ?>
+                            <tr>
+                                <td class="text-nowrap"><?= date('M d, Y', strtotime($p['payment_date'])) ?></td>
+                                <td class="d-none d-sm-table-cell"><?= ($p['reference_number'] ?? '') === 'MOVE-IN' ? 'Move-in' : 'Payment' ?></td>
+                                <td><?= htmlspecialchars($p['first_name'] . ' ' . $p['last_name']) ?><?= $p['room_number'] ? ' (Rm ' . htmlspecialchars($p['room_number']) . ')' : '' ?></td>
+                                <td class="text-end text-nowrap fw-semibold text-dark"><?= peso((float)$p['amount']) ?></td>
+                            </tr>
+                            <?php endforeach; ?>
                         </tbody>
                     </table>
                 </div>
-                <div class="card-footer bg-white border-top p-2 text-center">
-                    <a href="reports.php?tab=payment" class="text-primary text-decoration-none fw-semibold" style="font-size:0.6rem;">View All Transactions &rarr;</a>
+                <div class="px-3 py-3 mt-auto text-end">
+                    <a href="reports.php?tab=payment" class="rpt-link" onclick="document.querySelector('[data-target=tab-payment]').click(); return false;">View All Transactions <i class="fa-solid fa-arrow-right ms-1"></i></a>
                 </div>
             </div>
         </div>
-        
-        <!-- Reports Shortcuts -->
-        <div class="col-lg-3">
-            <div class="card border-0 shadow-sm rounded-3 h-100">
-                <div class="card-body p-3">
-                    <h6 class="fw-bold text-dark mb-3" style="font-size:0.75rem;">Reports Shortcuts</h6>
-                    
-                    <div class="shortcut-card" onclick="document.querySelector('[data-target=tab-financial]').click();">
-                        <div class="d-flex align-items-center"><div class="shortcut-icon"><i class="fa-solid fa-chart-line"></i></div><div><div class="fw-bold text-primary" style="font-size:0.65rem;">Financial Reports</div><div class="text-muted" style="font-size:0.55rem;">View revenue, payments and expenses</div></div></div><i class="fa-solid fa-chevron-right text-muted" style="font-size:0.6rem;"></i>
-                    </div>
-                    
-                    <div class="shortcut-card" onclick="document.querySelector('[data-target=tab-occupancy]').click();">
-                        <div class="d-flex align-items-center"><div class="shortcut-icon"><i class="fa-solid fa-bed"></i></div><div><div class="fw-bold text-primary" style="font-size:0.65rem;">Occupancy Reports</div><div class="text-muted" style="font-size:0.55rem;">Analyze room occupancy and status</div></div></div><i class="fa-solid fa-chevron-right text-muted" style="font-size:0.6rem;"></i>
-                    </div>
-                    
-                    <div class="shortcut-card" onclick="document.querySelector('[data-target=tab-tenant]').click();">
-                        <div class="d-flex align-items-center"><div class="shortcut-icon"><i class="fa-solid fa-users"></i></div><div><div class="fw-bold text-primary" style="font-size:0.65rem;">Tenant Reports</div><div class="text-muted" style="font-size:0.55rem;">View tenant summary and analytics</div></div></div><i class="fa-solid fa-chevron-right text-muted" style="font-size:0.6rem;"></i>
-                    </div>
-                    
-                    <div class="shortcut-card mb-0" onclick="document.querySelector('[data-target=tab-payment]').click();">
-                        <div class="d-flex align-items-center"><div class="shortcut-icon"><i class="fa-regular fa-file-lines"></i></div><div><div class="fw-bold text-primary" style="font-size:0.65rem;">Payment Reports</div><div class="text-muted" style="font-size:0.55rem;">Track payments and outstanding balances</div></div></div><i class="fa-solid fa-chevron-right text-muted" style="font-size:0.6rem;"></i>
-                    </div>
+
+        <div class="col-xxl-4">
+            <div class="card rpt-card h-100">
+                <div class="rpt-head"><h6><span class="rpt-icon"><i class="fa-solid fa-bolt"></i></span>Reports Shortcuts</h6></div>
+                <div class="p-3 row g-2 row-cols-1 row-cols-md-2 row-cols-xxl-1 mx-0">
+                    <?php foreach ([
+                        ['financial', 'fa-chart-line', 'Financial Reports', 'View revenue and payments received'],
+                        ['occupancy', 'fa-bed', 'Occupancy Reports', 'Analyze room occupancy and status'],
+                        ['tenant', 'fa-users', 'Tenant Reports', 'View tenant summary and balances'],
+                        ['payment', 'fa-file-invoice', 'Payment Reports', 'Track payments and outstanding balances'],
+                    ] as [$tab, $icon, $title, $desc]): ?>
+                    <div class="col"><a href="reports.php?tab=<?= $tab ?>" class="shortcut-card text-decoration-none" onclick="document.querySelector('[data-target=tab-<?= $tab ?>]').click(); return false;">
+                        <span class="d-flex align-items-center" style="min-width:0;">
+                            <span class="shortcut-icon"><i class="fa-solid <?= $icon ?>"></i></span>
+                            <span style="min-width:0;"><span class="d-block fw-semibold text-dark" style="font-size:0.8rem;"><?= $title ?></span><span class="d-block text-muted" style="font-size:0.7rem;"><?= $desc ?></span></span>
+                        </span>
+                        <i class="fa-solid fa-chevron-right text-muted" style="font-size:0.65rem;"></i>
+                    </a></div>
+                    <?php endforeach; ?>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- Bottom Row: Line Chart & Top Tenants -->
-    <div class="row g-2">
-        <div class="col-lg-8">
-            <div class="card border-0 shadow-sm rounded-3 h-100">
-                <div class="card-body p-3">
-                    <div class="d-flex justify-content-between align-items-center mb-3">
-                        <h6 class="fw-bold text-dark mb-0" style="font-size:0.75rem;">Monthly Revenue Trend</h6>
-                        <select class="form-select form-select-sm w-auto shadow-none text-muted py-0 pe-4" style="font-size: 0.65rem;"><option>Last 6 Months</option><option>This Year</option></select>
-                    </div>
-                    <div class="chart-container-line"><canvas id="revenueLine"></canvas></div>
+    <!-- Row 3: trend and top payers -->
+    <div class="row g-3">
+        <div class="col-xl-6">
+            <div class="card rpt-card h-100">
+                <div class="rpt-head">
+                    <h6><span class="rpt-icon"><i class="fa-solid fa-chart-simple"></i></span>Monthly Revenue Trend</h6>
+                    <form method="GET" class="m-0">
+                        <input type="hidden" name="tab" value="overview">
+                        <?php if ($revMonth !== date('Y-m')): ?><input type="hidden" name="month" value="<?= $revMonth ?>"><?php endif; ?>
+                        <select name="trend" class="form-select form-select-sm rpt-select" aria-label="Months to show" onchange="this.form.submit()">
+                            <option value="6" <?= $trendMonths === 6 ? 'selected' : '' ?>>Last 6 Months</option>
+                            <option value="12" <?= $trendMonths === 12 ? 'selected' : '' ?>>Last 12 Months</option>
+                        </select>
+                        <noscript><button type="submit" class="btn btn-sm btn-light border mt-1">Show</button></noscript>
+                    </form>
+                </div>
+                <div class="p-3">
+                    <?php if ($trendHasData): ?>
+                        <div class="chart-container-line"><canvas id="revenueLine" aria-label="Revenue per month" role="img"></canvas></div>
+                    <?php else: ?>
+                        <div class="rpt-empty">
+                            <i class="fa-solid fa-chart-simple"></i>
+                            <div class="fw-semibold text-dark">No data available</div>
+                            <div>There is no revenue data for the selected period.</div>
+                        </div>
+                    <?php endif; ?>
                 </div>
             </div>
         </div>
-        <div class="col-lg-4">
-            <div class="card border-0 shadow-sm rounded-3 h-100">
-                <div class="card-body p-3">
-                    <h6 class="fw-bold text-dark mb-3" style="font-size:0.75rem;">Top Paying Tenants (This Month)</h6>
-                    <div>
-                        <?php 
-                        if (empty($topTenants)) {
-                            echo '<div class="text-muted text-center py-4" style="font-size:0.65rem;">No verified payments yet.</div>';
-                        } else {
-                            foreach ($topTenants as $idx => $t) {
-                                echo '<div class="top-tenant-row"><div class="d-flex align-items-center"><div class="number-badge">'.($idx+1).'</div><span class="text-dark fw-semibold">'.htmlspecialchars($t['first_name'].' '.$t['last_name']).' (Room '.$t['room_number'].')</span></div><span class="text-dark fw-bold">₱'.number_format($t['total_paid'], 2).'</span></div>';
-                            }
-                        }
-                        ?>
-                    </div>
-                    <div class="text-center mt-3 pt-2">
-                        <a href="reports.php?tab=tenant" class="text-primary text-decoration-none fw-semibold" style="font-size:0.6rem;">View Full Report &rarr;</a>
-                    </div>
+
+        <div class="col-xl-6">
+            <div class="card rpt-card h-100">
+                <div class="rpt-head"><h6><span class="rpt-icon"><i class="fa-solid fa-trophy"></i></span>Top Paying Tenants (<?= $revMonthLabel ?>)</h6></div>
+                <div class="table-responsive px-3">
+                    <table class="table rpt-table mb-0">
+                        <thead><tr><th style="width:2.5rem;">#</th><th>Tenant</th><th>Room</th><th class="text-end">Amount</th></tr></thead>
+                        <tbody>
+                            <?php if (!$topTenants): ?>
+                                <tr><td colspan="4" class="text-center text-muted py-4">No verified payments in <?= date('F Y', strtotime($revMonth . '-01')) ?>.</td></tr>
+                            <?php endif; ?>
+                            <?php foreach ($topTenants as $i => $t): ?>
+                            <tr>
+                                <td><?= $i + 1 ?></td>
+                                <td><a href="tenant_details.php?id=<?= (int)$t['id'] ?>" class="text-dark text-decoration-none fw-semibold"><?= htmlspecialchars($t['first_name'] . ' ' . $t['last_name']) ?></a></td>
+                                <td class="text-nowrap"><?= $t['room_number'] ? 'Room ' . htmlspecialchars($t['room_number']) : '—' ?></td>
+                                <td class="text-end text-nowrap fw-semibold text-dark"><?= peso((float)$t['total_paid']) ?></td>
+                            </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="px-3 py-3 mt-auto text-end">
+                    <a href="reports.php?tab=financial" class="rpt-link" onclick="document.querySelector('[data-target=tab-financial]').click(); return false;">View Full Report <i class="fa-solid fa-arrow-right ms-1"></i></a>
                 </div>
             </div>
         </div>
@@ -764,121 +762,56 @@ document.addEventListener("DOMContentLoaded", function () {
 });
 </script>
 
+<?php if ($trendHasData): ?>
 <script>
 if (window.ChartDataLabels) Chart.register(ChartDataLabels);   // the labels plugin is optional
 
 document.addEventListener("DOMContentLoaded", function() {
-    // 1. Occupancy Donut Chart
-    const occCtx = document.getElementById('occupancyDonut').getContext('2d');
-    new Chart(occCtx, {
-        type: 'doughnut',
-        data: {
-            labels: ['Occupied', 'Available', 'Maintenance'],
-            datasets: [{
-                data: [<?= (int)$totalOccupied ?>, <?= $availableBeds ?>, <?= $maintenanceBeds ?>],
-                backgroundColor: ['#22c55e', '#0d6efd', '#f59e0b'],
-                borderWidth: 0,
-                cutout: '75%'
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: { display: false },
-                tooltip: { enabled: true },
-                datalabels: { display: false }
-            }
-        }
-    });
-
-    // 2. Revenue Bar Chart
-    const barCtx = document.getElementById('revenueBar').getContext('2d');
-    new Chart(barCtx, {
-        type: 'bar',
-        data: {
-            labels: <?= $jsMonthNames ?>,
-            datasets: [{
-                label: 'Revenue',
-                data: <?= $jsMonthTotals ?>,
-                backgroundColor: '#3b82f6',
-                borderRadius: 2,
-                barThickness: 12
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            scales: {
-                y: {
-                    beginAtZero: true,
-                    max: 100000,
-                    grid: { color: '#f1f5f9', drawBorder: false },
-                    ticks: { color: '#94a3b8', font: { size: 9 }, stepSize: 20000, callback: function(val) { return '₱' + (val/1000) + 'k'; } }
-                },
-                x: {
-                    grid: { display: false, drawBorder: false },
-                    ticks: { color: '#94a3b8', font: { size: 10 } }
-                }
-            },
-            plugins: { 
-                legend: { display: false },
-                datalabels: { display: false }
-            }
-        }
-    });
-    
-    // 3. Monthly Revenue Trend Line Chart
-    const lineCtx = document.getElementById('revenueLine').getContext('2d');
-    new Chart(lineCtx, {
+    // Monthly Revenue Trend
+    const peso = (v) => '₱' + Number(v).toLocaleString('en-PH', { maximumFractionDigits: 0 });
+    new Chart(document.getElementById('revenueLine'), {
         type: 'line',
         data: {
-            labels: <?= $jsMonthLineNames ?>,
+            labels: <?= json_encode(array_keys($trend)) ?>,
             datasets: [{
                 label: 'Revenue',
-                data: <?= $jsMonthTotals ?>,
-                borderColor: '#22c55e',
-                backgroundColor: 'rgba(34, 197, 94, 0.1)',
+                data: <?= json_encode(array_values($trend)) ?>,
+                borderColor: '#2563eb',
+                backgroundColor: 'rgba(37, 99, 235, 0.08)',
                 borderWidth: 2,
                 pointBackgroundColor: '#fff',
-                pointBorderColor: '#22c55e',
+                pointBorderColor: '#2563eb',
                 pointBorderWidth: 2,
                 pointRadius: 4,
                 fill: true,
-                tension: 0.1
+                tension: 0.25
             }]
         },
         options: {
             responsive: true,
             maintainAspectRatio: false,
-            layout: {
-                padding: { top: 20 }
-            },
+            layout: { padding: { top: 22 } },
             scales: {
                 y: {
                     beginAtZero: true,
-                    max: 100000,
-                    grid: { color: '#f1f5f9', drawBorder: false },
-                    ticks: { color: '#94a3b8', font: { size: 9 }, stepSize: 25000, callback: function(val) { return '₱' + (val/1000) + 'k'; } }
+                    grid: { color: '#f1f5f9' },
+                    ticks: { color: '#94a3b8', font: { size: 10 }, maxTicksLimit: 5, callback: (val) => val >= 1000 ? '₱' + (val / 1000) + 'k' : '₱' + val }
                 },
-                x: {
-                    grid: { display: false, drawBorder: false },
-                    ticks: { color: '#94a3b8', font: { size: 10 } }
-                }
+                x: { grid: { display: false }, ticks: { color: '#94a3b8', font: { size: 10 } } }
             },
-            plugins: { 
+            plugins: {
                 legend: { display: false },
+                tooltip: { callbacks: { label: (ctx) => peso(ctx.parsed.y) } },
                 datalabels: {
-                    align: 'top',
-                    color: '#1e293b',
-                    font: { weight: 'bold', size: 9 },
-                    formatter: function(value) { return '₱' + value.toLocaleString(); }
+                    display: (ctx) => ctx.dataset.data[ctx.dataIndex] > 0,
+                    align: 'top', color: '#1e293b', font: { weight: 'bold', size: 9 },
+                    formatter: peso
                 }
             }
         }
     });
-
 });
 </script>
+<?php endif; ?>
 
 <?php require_once 'footer.php'; ?>
