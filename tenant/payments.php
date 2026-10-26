@@ -103,8 +103,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $error = "Please upload a GCash screenshot.";
         } else {
             $newPaymentId = insertReturningId($pdo,
-                "INSERT INTO payments (tenant_id, amount, payment_date, reference_number, screenshot_path, payment_method, pay_for_room) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                [$currentTenant['id'], $amount, $payment_date, $reference_number, $destPath, $payment_method, dbBool($payForRoom)]);
+                "INSERT INTO payments (tenant_id, amount, payment_date, reference_number, screenshot_path, payment_method, pay_for_room, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [$currentTenant['id'], $amount, $payment_date, $reference_number, $destPath, $payment_method, dbBool($payForRoom), date('Y-m-d H:i:s')]);
             $success = "Payment submitted successfully. Awaiting Admin verification.";
             notifyAdmin($pdo, 'payment_submitted',
                 'Payment to verify: ' . trim($currentTenant['first_name'] . ' ' . $currentTenant['last_name']),

@@ -134,6 +134,15 @@ try {
     die("Database connection failed for $username@$host:$port/$dbname. $where Error: " . $e->getMessage());
 }
 
+// Timestamps the database fills in itself (DEFAULT CURRENT_TIMESTAMP) in Manila time, the same
+// clock PHP uses. Supabase's runs on UTC, which put those times 8 hours behind. MySQL gets an
+// offset because WAMP usually has no named time zones loaded (the Philippines has no DST).
+try {
+    $pdo->exec($isMysql ? "SET time_zone = '+08:00'" : "SET TIME ZONE 'Asia/Manila'");
+} catch (PDOException $e) {
+    error_log('Could not set the database time zone: ' . $e->getMessage());
+}
+
 require_once __DIR__ . '/migrations.php';
 runMigrations($pdo);
 

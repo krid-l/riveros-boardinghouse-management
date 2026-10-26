@@ -37,7 +37,7 @@ function statCards(array $cards): string {
     return $html . '</div>';
 }
 
-/** ₱1,234.50 - whole pesos without the .00 */
+/** ₱1,234.50 */
 function peso(float $amount): string {
-    return '₱' . number_format($amount, fmod($amount, 1.0) == 0.0 ? 0 : 2);
+    return '₱' . number_format($amount, 2);
 }

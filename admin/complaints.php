@@ -109,8 +109,8 @@ require_once 'header.php';
 
 <style>
     .complaints-table { font-size: 0.78rem; }
-    .complaints-table thead th { font-size: 0.64rem; text-transform: uppercase; letter-spacing: 0.5px; color: #64748b; font-weight: 700; background: #f8fafc; border-bottom: 1px solid #e2e8f0; padding: 0.65rem 0.6rem; white-space: nowrap; }
-    .complaints-table td { padding: 0.6rem; border-bottom: 1px solid #f1f5f9; vertical-align: middle; }
+    .complaints-table>thead>tr>th { font-size: 0.64rem; text-transform: uppercase; letter-spacing: 0.5px; color: #64748b; font-weight: 700; background: #f8fafc; border-bottom: 1px solid #e2e8f0; padding: 0.65rem 0.6rem; white-space: nowrap; }
+    .complaints-table>tbody>tr>td { padding: 0.6rem; border-bottom: 1px solid #f1f5f9; vertical-align: middle; }
     .complaints-table tbody tr[data-complaint] { cursor: pointer; }
     .complaints-table tbody tr:hover { background-color: #f8fafc; }
     .complaints-table .cell-sub { font-size: 0.68rem; color: #94a3b8; }

@@ -170,6 +170,16 @@ CREATE TABLE IF NOT EXISTS report_exports (
     row_count INT NOT NULL DEFAULT 0,
     created_at TIMESTAMP NULL DEFAULT NULL
 );
+
+-- Files the admin keeps for a tenant: IDs, contracts (the Documents tab)
+CREATE TABLE IF NOT EXISTS tenant_documents (
+    id SERIAL PRIMARY KEY,
+    tenant_id INT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    title VARCHAR(120) NOT NULL,
+    file_path VARCHAR(255) NOT NULL,
+    file_type VARCHAR(10) NOT NULL,                   -- jpg | png | webp | pdf
+    uploaded_at TIMESTAMP NULL DEFAULT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_notifications_ref ON notifications (ref);
 
 CREATE TABLE IF NOT EXISTS settings (

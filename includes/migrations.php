@@ -9,7 +9,7 @@ require_once __DIR__ . '/billing.php';
 require_once __DIR__ . '/sql_compat.php';
 require_once __DIR__ . '/sms.php';
 
-const SCHEMA_VERSION = '12';
+const SCHEMA_VERSION = '13';
 
 function runMigrations(PDO $pdo): void {
     try {
@@ -48,6 +48,7 @@ function runMigrations(PDO $pdo): void {
         migrateToV10($pdo);
         migrateToV11($pdo);
         migrateToV12($pdo);
+        migrateToV13($pdo);
 
         $pdo->prepare("INSERT INTO settings (setting_key, setting_value) VALUES ('schema_version', ?)
                        " . sqlUpsert(['setting_key'], ['setting_value']))
@@ -185,6 +186,37 @@ function migrateToV12(PDO $pdo): void {
         $clear->execute($sample);
     }
     $pdo->exec("DELETE FROM settings WHERE setting_key IN ('rent_due_date', 'currency', 'date_format', 'time_zone', 'sms_provider')");
+}
+
+// v13: when a payment was entered (the time shown under its date), and files the admin keeps for
+// a tenant (the Documents tab: IDs, contracts).
+function migrateToV13(PDO $pdo): void {
+    // Postgres already had payments.created_at, filled in by the database. Like every other
+    // DEFAULT CURRENT_TIMESTAMP column there, it was written on the database's own clock: UTC on
+    // Supabase, 8 hours behind Manila. Connections now use Manila time (db.php); move what was
+    // stored before that forward to match. Only when the server's clock really is UTC.
+    if (isPgsql()) {
+        $serverZone = strtoupper((string)$pdo->query("SELECT reset_val FROM pg_settings WHERE name = 'TimeZone'")->fetchColumn());
+        if (in_array($serverZone, ['UTC', 'ETC/UTC', 'GMT', 'ETC/GMT', 'UCT', 'ETC/UCT', 'ZULU', 'UNIVERSAL'], true)) {
+            $columns = [['users', 'created_at'], ['payments', 'created_at'], ['charges', 'created_at'], ['room_transfers', 'created_at'],
+                        ['complaints', 'created_at'], ['complaints', 'updated_at'], ['announcements', 'created_at'], ['sms_log', 'created_at']];
+            foreach ($columns as [$table, $column]) {
+                if (tableExists($pdo, $table) && columnExists($pdo, $table, $column)) {
+                    $pdo->exec("UPDATE $table SET $column = $column + INTERVAL '8 hours' WHERE $column IS NOT NULL");
+                }
+            }
+        }
+    }
+    // MySQL never had it: older payments keep no time (pages show the weekday instead).
+    ensureColumn($pdo, 'payments', 'created_at', 'TIMESTAMP NULL DEFAULT NULL');
+    $pdo->exec("CREATE TABLE IF NOT EXISTS tenant_documents (
+        id " . sqlSerialPk() . ",
+        tenant_id INT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        title VARCHAR(120) NOT NULL,
+        file_path VARCHAR(255) NOT NULL,
+        file_type VARCHAR(10) NOT NULL,
+        uploaded_at TIMESTAMP NULL DEFAULT NULL
+    )");
 }
 
 // v7: rent per bed. A tenant now pays price / capacity, however many beds are taken, instead of

@@ -69,9 +69,9 @@ function recordMoveInPayment(PDO $pdo, int $tenantId, string $method, string $re
         // Paid on the move-in day; a move-in entered for a future date was paid today.
         $paidOn = min($tenant['move_in_date'], date('Y-m-d'));
         $paymentId = insertReturningId($pdo,
-            "INSERT INTO payments (tenant_id, amount, payment_date, reference_number, screenshot_path, payment_method, status, pay_for_room)
-             VALUES (?, ?, ?, ?, NULL, ?, 'verified', ?)",
-            [$tenantId, $due['amount'], $paidOn, $reference !== '' ? substr($reference, 0, 100) : 'MOVE-IN', $method, dbBool(false)]
+            "INSERT INTO payments (tenant_id, amount, payment_date, reference_number, screenshot_path, payment_method, status, pay_for_room, created_at)
+             VALUES (?, ?, ?, ?, NULL, ?, 'verified', ?, ?)",
+            [$tenantId, $due['amount'], $paidOn, $reference !== '' ? substr($reference, 0, 100) : 'MOVE-IN', $method, dbBool(false), date('Y-m-d H:i:s')]
         );
         $pdo->prepare("UPDATE tenants SET balance = balance - ? WHERE id = ?")->execute([$due['amount'], $tenantId]);
         $pdo->commit();

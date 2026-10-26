@@ -77,8 +77,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'send_
             $subtract->execute([$payerShare, $payment['tenant_id']]);
 
             $payMethodStr = 'Covered by ' . $payment['first_name'];
-            $insCoveredSql = "INSERT INTO payments (tenant_id, amount, payment_date, reference_number, screenshot_path, payment_method, status, pay_for_room, covered_by_payment_id)
-                              VALUES (?, ?, ?, ?, ?, ?, 'verified', ?, ?)";
+            $insCoveredSql = "INSERT INTO payments (tenant_id, amount, payment_date, reference_number, screenshot_path, payment_method, status, pay_for_room, covered_by_payment_id, created_at)
+                              VALUES (?, ?, ?, ?, ?, ?, 'verified', ?, ?, ?)";
             foreach ($boardmateShares as $s) {
                 $bm = $s['bm'];
                 $subtract->execute([$s['share'], $bm['id']]);
@@ -87,7 +87,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'send_
                 // so it isn't counted as extra revenue.
                 $newPaymentId = insertReturningId($pdo, $insCoveredSql, [
                     $bm['id'], $s['share'], $payment['payment_date'], $payment['reference_number'],
-                    $payment['screenshot_path'], $payMethodStr, dbBool(false), $paymentId
+                    $payment['screenshot_path'], $payMethodStr, dbBool(false), $paymentId, $payment['created_at'] ?? date('Y-m-d H:i:s')
                 ]);
 
                 $bmFullName = $bm['first_name'] . ' ' . $bm['last_name'];
@@ -236,32 +236,48 @@ uksort($collectedByRoom, 'strnatcasecmp');
 // Filtering and paging happen in SQL. The page used to send every payment row and let
 // JavaScript hide all but five, which meant megabytes of HTML for a five-row table.
 $filterSearch = queryParam('q');
-$filterStatus = queryParam('status', 'all') ?: 'all';
-$filterDate = queryParam('date');
+$filterStatus = in_array(queryParam('status'), ['pending', 'verified', 'rejected'], true) ? queryParam('status') : 'all';
+$filterMethod = in_array(queryParam('method'), ['gcash', 'cash'], true) ? queryParam('method') : 'all';
+$validDate = function (string $d): string {
+    $o = DateTime::createFromFormat('Y-m-d', $d);
+    return $o && $o->format('Y-m-d') === $d ? $d : '';
+};
+$filterFrom = $validDate(queryParam('from'));
+$filterTo = $validDate(queryParam('to'));
+if ($filterFrom === '' && $filterTo === '' && $validDate(queryParam('date')) !== '') {
+    $filterFrom = $filterTo = queryParam('date');   // older links filtered on one day
+}
 
 $where = [];
 $params = [];
 
 if ($filterSearch !== '') {
     $where[] = "(LOWER(t.first_name) LIKE ? OR LOWER(t.last_name) LIKE ?
-                 OR LOWER(CONCAT(t.first_name, ' ', t.last_name)) LIKE ? OR LOWER(p.reference_number) LIKE ?)";
+                 OR LOWER(CONCAT(t.first_name, ' ', t.last_name)) LIKE ? OR LOWER(p.reference_number) LIKE ?
+                 OR LOWER(r.room_number) LIKE ?)";
     $like = '%' . strtolower($filterSearch) . '%';
-    array_push($params, $like, $like, $like, $like);
+    array_push($params, $like, $like, $like, $like, $like);
 }
-if ($filterStatus === 'verified' || $filterStatus === 'pending' || $filterStatus === 'rejected') {
+if ($filterStatus !== 'all') {
     $where[] = "p.status = ?";
     $params[] = $filterStatus;
-} elseif ($filterStatus === 'unpaid') {
-    // The table shows anything not yet verified as "Unpaid".
-    $where[] = "p.status <> 'verified'";
 }
-if ($filterDate !== '' && DateTime::createFromFormat('Y-m-d', $filterDate)) {
-    $where[] = "p.payment_date = ?";
-    $params[] = $filterDate;
+if ($filterMethod !== 'all') {
+    $where[] = "p.payment_method = ?";
+    $params[] = $filterMethod;
+}
+if ($filterFrom !== '') {
+    $where[] = "p.payment_date >= ?";
+    $params[] = $filterFrom;
+}
+if ($filterTo !== '') {
+    $where[] = "p.payment_date <= ?";
+    $params[] = $filterTo;
 }
 $whereSql = $where ? 'WHERE ' . implode(' AND ', $where) : '';
+$filtered = $filterSearch !== '' || $filterStatus !== 'all' || $filterMethod !== 'all' || $filterFrom !== '' || $filterTo !== '';
 
-$countStmt = $pdo->prepare("SELECT COUNT(*) FROM payments p JOIN tenants t ON p.tenant_id = t.id $whereSql");
+$countStmt = $pdo->prepare("SELECT COUNT(*) FROM payments p JOIN tenants t ON p.tenant_id = t.id LEFT JOIN rooms r ON t.room_id = r.id $whereSql");
 $countStmt->execute($params);
 $pager = paginate((int)$countStmt->fetchColumn(), 10);
 
@@ -275,6 +291,30 @@ $paymentsStmt = $pdo->prepare("
 ");
 $paymentsStmt->execute($params);
 $payments = $paymentsStmt->fetchAll();
+
+// Right-hand column: this month's money by method, and the latest payments entered.
+$countByMethod = [];
+foreach ($monthPayments as $mp) {
+    $label = paymentMethodLabel($mp['payment_method'] ?? 'gcash');
+    $countByMethod[$label] = ($countByMethod[$label] ?? 0) + 1;
+}
+$recentActivity = $pdo->query("SELECT p.*, t.first_name, t.last_name FROM payments p JOIN tenants t ON t.id = p.tenant_id
+                               WHERE p.covered_by_payment_id IS NULL ORDER BY p.id DESC LIMIT 4")->fetchAll();
+
+/** "Paid" / "Pending Verification" / "Rejected", with its colour. */
+function paymentStatusLabel(string $status): array {
+    return match ($status) {
+        'verified' => ['Paid', 'success'],
+        'rejected' => ['Rejected', 'danger'],
+        default    => ['Pending Verification', 'warning'],
+    };
+}
+
+/** The date as "Oct 03, 2026" and, under it, the time it was entered (older payments: the weekday). */
+function paymentWhen(array $p): array {
+    return [date('M d, Y', strtotime($p['payment_date'])),
+            !empty($p['created_at']) ? date('h:i A', strtotime($p['created_at'])) : date('l', strtotime($p['payment_date']))];
+}
 
 // Who the "Send rent reminders" button would text right now.
 require_once '../includes/sms_reminders.php';
@@ -311,17 +351,30 @@ require_once 'header.php';
     .table-compact td { font-size: 0.72rem; vertical-align: middle; padding: 0.5rem 0.5rem; border-bottom: 1px solid #f1f5f9; }
 
     /* Payments list */
-    .payments-table { font-size: 0.78rem; }
-    .payments-table thead th { font-size: 0.64rem; text-transform: uppercase; letter-spacing: 0.5px; color: #64748b; font-weight: 700; background: #f8fafc; border-bottom: 1px solid #e2e8f0; padding: 0.65rem 0.6rem; white-space: nowrap; }
-    .payments-table td { padding: 0.6rem; border-bottom: 1px solid #f1f5f9; }
+    .payments-table { font-size: 0.8rem; }
+    .payments-table>thead>tr>th { font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.5px; color: #64748b; font-weight: 600; background: #f8fafc; border-bottom: 0; padding: 0.75rem 0.6rem; white-space: nowrap; }
+    .payments-table>tbody>tr>td { padding: 0.7rem 0.5rem; border-bottom: 1px solid #f1f5f9; }
+    .payments-table>thead>tr>th { padding: 0.75rem 0.5rem; }
     .payments-table tbody tr:hover { background-color: #f8fafc; }
-    .payments-table .cell-sub { font-size: 0.68rem; color: #94a3b8; }
-    .method-pill { display: inline-flex; align-items: center; border-radius: 999px; padding: 0.2rem 0.6rem; font-size: 0.7rem; font-weight: 600; }
-    .ref-no { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.74rem; color: #334155; }
-    .screenshot-thumb { width: 32px; height: 40px; display: inline-block; background-color: #f1f5f9; background-size: cover; background-position: center; border: 1px solid #e2e8f0; border-radius: 6px; vertical-align: middle; }
-    .screenshot-thumb:hover { outline: 2px solid #93c5fd; }
+    .payments-table .cell-sub { font-size: 0.7rem; color: #94a3b8; margin-top: 2px; }
+    .method-pill { display: inline-flex; align-items: center; border-radius: 8px; padding: 0.25rem 0.55rem; font-size: 0.7rem; font-weight: 600; line-height: 1.2; text-align: left; }
+    .status-pill { display: inline-block; border-radius: 8px; padding: 0.25rem 0.55rem; font-size: 0.7rem; font-weight: 600; line-height: 1.25; text-align: center; }
+    .payments-table .status-pill { max-width: 92px; }
+    .ref-no { font-size: 0.76rem; color: #334155; }
+    .btn-view { background: #eff6ff; color: #2563eb; border: 0; font-weight: 600; }
+    .btn-view:hover { background: #dbeafe; color: #1d4ed8; }
+    .chart-container-donut { position: relative; height: 120px; width: 120px; }
+    .donut-center-text { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center; }
+    .side-row { display: flex; justify-content: space-between; align-items: center; padding: 0.35rem 0; font-size: 0.8rem; }
+    .method-icon { width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1rem; flex-shrink: 0; }
+    .activity-row { display: flex; gap: 0.6rem; padding: 0.55rem 0; border-bottom: 1px solid #f1f5f9; }
+    .activity-row:last-child { border-bottom: 0; }
+    .proof-box { height: 280px; border: 1px solid #e2e8f0; border-radius: 12px; background: #f8fafc; overflow: hidden; }
+    .pm-list { display: grid; grid-template-columns: 110px 1fr; row-gap: 0.45rem; font-size: 0.82rem; }
+    .pm-list dt { color: #64748b; font-weight: 500; }
+    .pm-list dd { margin: 0; color: #0f172a; font-weight: 600; }
 
-    .dot { width: 5px; height: 5px; border-radius: 50%; display: inline-block; margin-right: 5px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 8px; }
 
 </style>
 
@@ -341,174 +394,361 @@ require_once 'header.php';
 
 <!-- Header -->
 <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center mb-3 gap-2">
-    <div>
-        <p class="text-muted mb-0" style="font-size: 0.8rem;">Track and manage all tenant payments and verify manual GCash payments.</p>
-    </div>
+    <p class="text-muted mb-0" style="font-size: 0.85rem;">Track and manage tenant payments and verify GCash transactions.</p>
     <div class="d-flex gap-2">
-        <button type="button" class="btn btn-outline-primary fw-semibold btn-sm px-2 py-1 rounded-2" style="font-size:0.75rem;" data-bs-toggle="modal" data-bs-target="#remindersModal">
-            <i class="fa-solid fa-comment-sms me-1"></i> Send Rent Reminders<?php if ($pendingReminders): ?> <span class="badge bg-primary rounded-pill ms-1"><?= count($pendingReminders) ?></span><?php endif; ?>
+        <button type="button" class="btn btn-primary fw-semibold px-3 shadow-sm" style="font-size:0.8rem;" data-bs-toggle="modal" data-bs-target="#remindersModal">
+            <i class="fa-solid fa-paper-plane me-1"></i> Send Rent Reminders<?php if ($pendingReminders): ?> <span class="badge bg-white text-primary rounded-pill ms-1"><?= count($pendingReminders) ?></span><?php endif; ?>
         </button>
-        <a href="export_payments.php" class="btn btn-primary fw-semibold btn-sm px-2 py-1 rounded-2" style="font-size:0.75rem;"><i class="fa-solid fa-download me-1"></i> Export Data</a>
+        <a href="export_payments.php" class="btn btn-light border bg-white fw-semibold px-3 shadow-sm" style="font-size:0.8rem;"><i class="fa-solid fa-download me-1"></i> Export Data</a>
     </div>
 </div>
 
 <!-- Top Stats Row: each card opens the list behind its figure -->
 <?= statCards([
-    ['label' => 'Collected (This Month)', 'value' => peso((float)$totalCollected), 'sub' => $collectedTrend,
+    ['label' => 'Total Collected (This Month)', 'value' => peso((float)$totalCollected), 'sub' => $collectedTrend,
      'subClass' => $totalCollected >= $lastMonthCollected ? 'text-success' : 'text-danger',
-     'icon' => 'fa-solid fa-wallet', 'color' => 'primary', 'modal' => 'statCollectedModal', 'aria' => "Show how this month's collections break down"],
+     'icon' => 'fa-solid fa-wallet', 'color' => 'success', 'modal' => 'statCollectedModal', 'aria' => "Show how this month's collections break down"],
     ['label' => 'Due Soon', 'value' => peso((float)$dueSoonAmount),
-     'sub' => $dueSoonCount . ' ' . ($dueSoonCount == 1 ? 'tenant' : 'tenants') . ' · due ' . date('M j', strtotime(billingDueDate(date('Y-m')))), 'subClass' => 'text-warning',
-     'icon' => 'fa-regular fa-clock', 'color' => 'warning', 'modal' => 'statDueModal', 'aria' => 'Show who has rent coming due'],
+     'sub' => $dueSoonCount . ' ' . ($dueSoonCount == 1 ? 'tenant' : 'tenants') . ' · due ' . date('M j', strtotime(billingDueDate(date('Y-m')))), 'subClass' => 'text-muted',
+     'icon' => 'fa-regular fa-clock', 'color' => 'primary', 'modal' => 'statDueModal', 'aria' => 'Show who has rent coming due'],
     ['label' => 'Overdue', 'value' => peso((float)$actualOverdueAmount),
      'sub' => $actualOverdueCount . ' ' . ($actualOverdueCount == 1 ? 'tenant' : 'tenants'), 'subClass' => $actualOverdueCount ? 'text-danger' : 'text-muted',
      'icon' => 'fa-solid fa-triangle-exclamation', 'color' => 'danger', 'modal' => 'statOverdueModal', 'aria' => 'Show who is overdue'],
-    ['label' => 'Paid Payments', 'value' => $paidCount, 'sub' => 'This month', 'subClass' => 'text-success',
-     'icon' => 'fa-regular fa-circle-check', 'color' => 'success', 'modal' => 'statPaidModal', 'aria' => "Show this month's paid payments"],
+    ['label' => 'Payments Received', 'value' => $paidCount, 'sub' => 'This month',
+     'icon' => 'fa-regular fa-circle-check', 'color' => 'info', 'modal' => 'statPaidModal', 'aria' => "Show this month's payments"],
 ]) ?>
 
-<!-- Payments list: the full width of the page -->
-<div class="card border-0 shadow-sm rounded-3">
-    <div class="card-header bg-white border-0 p-3 pb-2 d-flex flex-wrap justify-content-between align-items-center gap-2">
-        <div>
-            <h6 class="fw-bold text-dark mb-0" style="font-size:0.85rem;"><i class="fa-solid fa-list text-primary me-2"></i>Payments List</h6>
-            <small class="text-muted" style="font-size:0.7rem;">GCash payments are made outside the system: check the reference number and screenshot, then verify or reject.</small>
+<div class="row g-3">
+    <!-- Left: filters, the list, and the verification note -->
+    <div class="col-xxl-8">
+        <form method="GET" id="filterForm" class="card border-0 shadow-sm rounded-3 mb-3">
+            <div class="card-body p-3">
+                <div class="row g-2 align-items-center">
+                    <div class="col-md-5">
+                        <div class="input-group input-group-sm border rounded-2 bg-white">
+                            <span class="input-group-text bg-transparent border-0"><i class="fa-solid fa-magnifying-glass text-muted"></i></span>
+                            <input type="text" name="q" id="searchInput" value="<?= htmlspecialchars($filterSearch) ?>" class="form-control border-0 shadow-none ps-0" placeholder="Search tenant name, room, or reference..." style="font-size:0.8rem;">
+                        </div>
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <select name="status" class="form-select form-select-sm" style="font-size:0.8rem;" onchange="this.form.submit()" aria-label="Status">
+                            <option value="all">All Status</option>
+                            <option value="verified" <?= $filterStatus === 'verified' ? 'selected' : '' ?>>Paid</option>
+                            <option value="pending" <?= $filterStatus === 'pending' ? 'selected' : '' ?>>Pending Verification</option>
+                            <option value="rejected" <?= $filterStatus === 'rejected' ? 'selected' : '' ?>>Rejected</option>
+                        </select>
+                    </div>
+                    <div class="col-6 col-md-4">
+                        <select name="method" class="form-select form-select-sm" style="font-size:0.8rem;" onchange="this.form.submit()" aria-label="Method">
+                            <option value="all">All Methods</option>
+                            <option value="cash" <?= $filterMethod === 'cash' ? 'selected' : '' ?>>Cash</option>
+                            <option value="gcash" <?= $filterMethod === 'gcash' ? 'selected' : '' ?>>GCash (Manual)</option>
+                        </select>
+                    </div>
+                    <div class="col-md-7">
+                        <div class="input-group input-group-sm">
+                            <span class="input-group-text bg-white"><i class="fa-regular fa-calendar text-muted"></i></span>
+                            <input type="date" name="from" value="<?= htmlspecialchars($filterFrom) ?>" class="form-control" aria-label="Start date" title="Start date" style="font-size:0.8rem;">
+                            <span class="input-group-text bg-white text-muted" style="font-size:0.75rem;">to</span>
+                            <input type="date" name="to" value="<?= htmlspecialchars($filterTo) ?>" class="form-control" aria-label="End date" title="End date" style="font-size:0.8rem;">
+                        </div>
+                    </div>
+                    <div class="col-md-5 d-flex justify-content-end align-items-center gap-3">
+                        <?php if ($filtered): ?>
+                            <a href="payments.php" class="text-decoration-none fw-semibold" style="font-size:0.78rem;"><i class="fa-solid fa-rotate-right me-1"></i>Clear Filters</a>
+                        <?php endif; ?>
+                        <button type="submit" class="btn btn-sm btn-primary px-3" style="font-size:0.8rem;"><i class="fa-solid fa-magnifying-glass me-1"></i> Search</button>
+                    </div>
+                </div>
+            </div>
+        </form>
+
+        <div class="card border-0 shadow-sm rounded-3 mb-3">
+            <div class="card-header bg-white border-0 p-3 pb-2 d-flex align-items-center gap-2">
+                <i class="fa-regular fa-credit-card text-primary fs-5"></i>
+                <h6 class="fw-bold text-dark mb-0" style="font-size:0.95rem;">Payments List</h6>
+            </div>
+            <div class="table-responsive px-2">
+                <table id="paymentsTable" class="table payments-table align-middle mb-0">
+                    <thead>
+                        <tr>
+                            <th class="ps-3">Date</th>
+                            <th>Tenant</th>
+                            <th>Room</th>
+                            <th>Amount</th>
+                            <th>Method</th>
+                            <th>Reference</th>
+                            <th>Status</th>
+                            <th class="pe-3">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php if (count($payments) === 0): ?>
+                            <tr><td colspan="8" class="text-center py-5 text-muted">No payments found.</td></tr>
+                        <?php endif; ?>
+                        <?php foreach ($payments as $p):
+                            $method = $p['payment_method'] ?? 'gcash';
+                            $isCovered = stripos($method, 'covered by') === 0;
+                            $ref = (string)($p['reference_number'] ?? '');
+                            $refText = ($ref === '' || str_starts_with($ref, 'CASH-')) ? '-' : ($ref === 'MOVE-IN' ? 'Move-in' : $ref);
+                            [$statusText, $statusColor] = paymentStatusLabel($p['status']);
+                            [$dateText, $timeText] = paymentWhen($p);
+                            $name = $p['first_name'] . ' ' . $p['last_name'];
+                            $details = htmlspecialchars(json_encode([
+                                'id' => (int)$p['id'], 'tenant' => $name, 'tenant_id' => (int)$p['tenant_id'],
+                                'phone' => $p['contact_number'] ?? '', 'room' => $p['room_number'] ? 'Room ' . $p['room_number'] : 'Moved out',
+                                'amount' => '₱' . number_format((float)$p['amount'], 2), 'date' => $dateText, 'time' => $timeText,
+                                'method' => $isCovered ? $method : ($method === 'cash' ? 'Cash' : 'GCash (Manual)'),
+                                'reference' => $refText, 'status' => $p['status'], 'status_text' => $statusText, 'status_color' => $statusColor,
+                                'room_payment' => !empty($p['pay_for_room']),
+                                'proof' => uploadSrc($p['screenshot_path'] ?? '', '../'), 'receipt' => uploadSrc($p['receipt_path'] ?? '', '../'),
+                            ]), ENT_QUOTES);
+                        ?>
+                        <tr class="payment-row" data-payment="<?= $details ?>">
+                            <td class="ps-3 text-nowrap">
+                                <div class="text-dark"><?= $dateText ?></div>
+                                <div class="cell-sub"><?= $timeText ?></div>
+                            </td>
+                            <td>
+                                <a href="tenant_details.php?id=<?= (int)$p['tenant_id'] ?>" class="text-decoration-none">
+                                    <div class="fw-semibold text-dark text-nowrap"><?= htmlspecialchars($name) ?></div>
+                                    <?php if (!empty($p['contact_number'])): ?><div class="cell-sub text-nowrap"><i class="fa-solid fa-phone me-1" style="font-size:0.6rem;"></i><?= htmlspecialchars($p['contact_number']) ?></div><?php endif; ?>
+                                </a>
+                            </td>
+                            <td class="text-nowrap"><?= $p['room_number'] ? 'Room ' . htmlspecialchars($p['room_number']) : '<span class="text-muted fst-italic">Moved out</span>' ?></td>
+                            <td class="text-nowrap fw-semibold text-dark">₱<?= number_format((float)$p['amount'], 2) ?></td>
+                            <td class="text-nowrap">
+                                <?php if ($isCovered): ?>
+                                    <span class="method-pill bg-light text-muted" title="Part of a roommate's payment"><i class="fa-solid fa-people-arrows me-1"></i>Roommate</span>
+                                <?php elseif ($method === 'cash'): ?>
+                                    <span class="method-pill bg-success-subtle text-success"><i class="fa-solid fa-money-bill-wave me-1"></i>Cash</span>
+                                <?php else: ?>
+                                    <span class="method-pill bg-primary-subtle text-primary" title="GCash (Manual)"><i class="fa-solid fa-g me-1"></i>GCash</span>
+                                <?php endif; ?>
+                            </td>
+                            <td class="text-nowrap ref-no"><?= htmlspecialchars($refText) ?></td>
+                            <td><span class="status-pill bg-<?= $statusColor ?>-subtle text-<?= $statusColor ?>-emphasis"><?= $statusText ?></span></td>
+                            <td class="pe-3 text-nowrap">
+                                <?php if ($p['status'] === 'pending'): ?>
+                                    <button type="button" class="btn btn-sm btn-primary px-3" onclick="openPayment(this)"><i class="fa-solid fa-check me-1"></i>Verify</button>
+                                <?php else: ?>
+                                    <button type="button" class="btn btn-sm btn-view px-3" onclick="openPayment(this)"><i class="fa-regular fa-eye me-1"></i>View</button>
+                                <?php endif; ?>
+                            </td>
+                        </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+            <div class="card-footer bg-white border-0 p-3 d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <span class="text-muted" style="font-size:0.78rem;"><?= str_replace(' to ', ' - ', paginationSummary($pager, 'payments')) ?></span>
+                <nav><ul class="pagination pagination-sm mb-0"><?= paginationControls($pager) ?></ul></nav>
+            </div>
         </div>
-        <?php if ($pendingCount > 0 && $filterStatus !== 'pending'): ?>
-            <a href="payments.php?status=pending" class="badge rounded-pill bg-warning-subtle text-warning-emphasis border border-warning-subtle text-decoration-none px-3 py-2" style="font-size:0.72rem;">
-                <i class="fa-solid fa-hourglass-half me-1"></i><?= $pendingCount ?> waiting for verification
-            </a>
-        <?php endif; ?>
+
+        <!-- How verification works -->
+        <div class="card border-0 shadow-sm rounded-3">
+            <div class="card-body p-3 d-flex align-items-center gap-3 flex-wrap flex-md-nowrap">
+                <i class="fa-solid fa-shield-halved text-primary fs-3"></i>
+                <div class="flex-grow-1" style="min-width: 220px;">
+                    <div class="fw-bold text-dark" style="font-size:0.85rem;">Manual GCash Verification</div>
+                    <div class="text-muted" style="font-size:0.75rem;">Review the transaction reference and proof of payment before marking a payment as verified.</div>
+                </div>
+                <a href="payments.php?status=pending" class="btn btn-primary btn-sm px-3 text-nowrap">View Pending Payments<?= $pendingCount ? " ($pendingCount)" : '' ?> <i class="fa-solid fa-chevron-right ms-1" style="font-size:0.65rem;"></i></a>
+            </div>
+        </div>
     </div>
 
-    <!-- Filter Bar -->
-    <form method="GET" id="filterForm" class="d-flex flex-wrap gap-2 px-3 pb-3 align-items-center border-bottom">
-        <div class="input-group input-group-sm rounded-2 border bg-white flex-grow-1" style="max-width:320px;">
-            <span class="input-group-text bg-transparent border-0 pe-1"><i class="fa-solid fa-magnifying-glass text-muted" style="font-size:0.7rem;"></i></span>
-            <input type="text" name="q" id="searchInput" value="<?= htmlspecialchars($filterSearch) ?>" class="form-control border-0 shadow-none px-1" placeholder="Search tenant name or reference..." style="font-size:0.75rem;">
+    <!-- Right: this month at a glance (under the list on narrower screens) -->
+    <div class="col-xxl-4">
+        <div class="row g-3 row-cols-1 row-cols-md-3 row-cols-xxl-1">
+        <div class="col">
+        <div class="card border-0 shadow-sm rounded-3 h-100">
+            <div class="card-body p-3">
+                <h6 class="fw-bold text-dark mb-3" style="font-size:0.9rem;"><i class="fa-solid fa-chart-pie text-primary me-2"></i>Payment Overview</h6>
+                <div class="d-flex align-items-center gap-3">
+                    <div class="chart-container-donut flex-shrink-0">
+                        <canvas id="paymentDonut" role="img" aria-label="Payments by status"></canvas>
+                        <div class="donut-center-text">
+                            <div class="fw-bold text-dark" style="font-size:0.9rem; line-height:1.1;"><?= peso((float)$totalCollected) ?></div>
+                            <div class="text-muted" style="font-size:0.62rem;">Collected</div>
+                        </div>
+                    </div>
+                    <div class="flex-grow-1">
+                        <?php foreach ([['Paid', $paidCount, '#22c55e'], ['Due Soon', $dueSoonCount, '#3b82f6'], ['Overdue', $actualOverdueCount, '#ef4444'], ['Pending Verification', $pendingCount, '#f59e0b']] as [$label, $n, $color]): ?>
+                        <div class="side-row">
+                            <span class="text-dark"><span class="dot" style="background: <?= $color ?>;"></span><?= $label ?></span>
+                            <span class="fw-bold text-dark"><?= $n ?></span>
+                        </div>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+            </div>
         </div>
-        <select name="status" class="form-select form-select-sm border rounded-2 shadow-none" style="width:150px; font-size:0.75rem;" onchange="this.form.submit()" aria-label="Status">
-            <option value="all" <?= $filterStatus === 'all' ? 'selected' : '' ?>>All statuses</option>
-            <option value="pending" <?= $filterStatus === 'pending' ? 'selected' : '' ?>>Pending</option>
-            <option value="verified" <?= $filterStatus === 'verified' ? 'selected' : '' ?>>Verified</option>
-            <option value="rejected" <?= $filterStatus === 'rejected' ? 'selected' : '' ?>>Rejected</option>
-        </select>
-        <input type="date" name="date" value="<?= htmlspecialchars($filterDate) ?>" class="form-control form-control-sm border rounded-2 shadow-none" style="width:150px; font-size:0.75rem;" onchange="this.form.submit()" aria-label="Payment date">
-        <button type="submit" class="btn btn-sm btn-primary rounded-2 px-3" style="font-size:0.72rem;"><i class="fa-solid fa-magnifying-glass me-1"></i> Search</button>
-        <?php if ($filterSearch !== '' || $filterStatus !== 'all' || $filterDate !== ''): ?>
-            <a href="payments.php" class="btn btn-link btn-sm text-decoration-none fw-semibold ms-auto" style="font-size:0.72rem;"><i class="fa-solid fa-rotate-right me-1"></i> Clear filters</a>
-        <?php endif; ?>
-    </form>
 
-    <div class="table-responsive">
-        <table id="paymentsTable" class="table payments-table align-middle mb-0">
-            <thead>
-                <tr>
-                    <th class="ps-3">Date</th>
-                    <th>Tenant</th>
-                    <th>Room</th>
-                    <th class="text-end">Amount</th>
-                    <th>Method</th>
-                    <th>Reference No.</th>
-                    <th class="text-center">Proof</th>
-                    <th>Status</th>
-                    <th class="text-end pe-3">Action</th>
-                </tr>
-            </thead>
-            <tbody>
-                <?php if (count($payments) === 0): ?>
-                    <tr><td colspan="9" class="text-center py-5 text-muted">No payments found.</td></tr>
+        </div>
+        <div class="col">
+        <div class="card border-0 shadow-sm rounded-3 h-100">
+            <div class="card-body p-3">
+                <h6 class="fw-bold text-dark mb-3" style="font-size:0.9rem;"><i class="fa-regular fa-credit-card text-primary me-2"></i>Payment Method <span class="text-muted fw-normal" style="font-size:0.72rem;">· this month</span></h6>
+                <?php if (!$collectedByMethod): ?>
+                    <div class="text-muted" style="font-size:0.78rem;">No payments received yet this month.</div>
                 <?php endif; ?>
-
-                <?php foreach ($payments as $p):
-                    $method = $p['payment_method'] ?? 'gcash';
-                    $isCovered = stripos($method, 'covered by') === 0;
-                    $ref = (string)($p['reference_number'] ?? '');
-                    [$statusText, $statusColor, $statusIcon] = match ($p['status']) {
-                        'verified' => ['Verified', 'success', 'fa-circle-check'],
-                        'rejected' => ['Rejected', 'danger', 'fa-circle-xmark'],
-                        default    => ['Pending', 'warning', 'fa-hourglass-half'],
-                    };
-                    $proof = uploadSrc($p['screenshot_path'] ?? '', '../');
-                    $receipt = uploadSrc($p['receipt_path'] ?? '', '../');
-                ?>
-                <tr class="payment-row">
-                    <td class="ps-3 text-nowrap">
-                        <div class="fw-semibold text-dark"><?= date('M j, Y', strtotime($p['payment_date'])) ?></div>
-                        <div class="cell-sub"><?= date('l', strtotime($p['payment_date'])) ?></div>
-                    </td>
-                    <td>
-                        <a href="tenant_details.php?id=<?= (int)$p['tenant_id'] ?>" class="d-flex align-items-center text-decoration-none">
-                            <?= avatarHtml($p['first_name'] . ' ' . $p['last_name'], 28, 'me-2 shadow-sm', $p['profile_picture'] ?? null, '../') ?>
-                            <span>
-                                <span class="d-block fw-bold text-dark text-nowrap"><?= htmlspecialchars($p['first_name'] . ' ' . $p['last_name']) ?></span>
-                                <span class="d-block cell-sub text-nowrap"><?= htmlspecialchars($p['contact_number'] ?? '') ?></span>
-                            </span>
-                        </a>
-                    </td>
-                    <td class="text-nowrap"><?= $p['room_number'] ? 'Room ' . htmlspecialchars($p['room_number']) : '<span class="text-muted fst-italic">Moved out</span>' ?></td>
-                    <td class="text-end text-nowrap">
-                        <div class="fw-bold text-dark">₱<?= number_format((float)$p['amount'], 2) ?></div>
-                        <?php if (!empty($p['pay_for_room'])): ?><div class="cell-sub">Whole room</div><?php endif; ?>
-                    </td>
-                    <td class="text-nowrap">
-                        <?php if ($isCovered): ?>
-                            <span class="method-pill bg-light text-muted" title="Part of a roommate's payment"><i class="fa-solid fa-people-arrows me-1"></i><?= htmlspecialchars($method) ?></span>
-                        <?php elseif ($method === 'cash'): ?>
-                            <span class="method-pill bg-success-subtle text-success"><i class="fa-solid fa-money-bill-wave me-1"></i>Cash</span>
-                        <?php else: ?>
-                            <span class="method-pill bg-primary-subtle text-primary"><i class="fa-solid fa-mobile-screen me-1"></i>GCash</span>
-                        <?php endif; ?>
-                    </td>
-                    <td class="text-nowrap">
-                        <?php if ($ref === '' || str_starts_with($ref, 'CASH-')): ?>
-                            <span class="text-muted">—</span>
-                        <?php elseif ($ref === 'MOVE-IN'): ?>
-                            <span class="text-muted">Move-in</span>
-                        <?php else: ?>
-                            <span class="ref-no"><?= htmlspecialchars($ref) ?></span>
-                        <?php endif; ?>
-                    </td>
-                    <td class="text-center">
-                        <?php if ($proof): ?>
-                            <a href="<?= htmlspecialchars($proof) ?>" target="_blank" rel="noopener" title="Open the screenshot" class="d-inline-block">
-                                <span class="screenshot-thumb" style="background-image: url('<?= htmlspecialchars($proof, ENT_QUOTES) ?>');"></span>
-                            </a>
-                        <?php else: ?>
-                            <span class="text-muted">—</span>
-                        <?php endif; ?>
-                    </td>
-                    <td><span class="badge rounded-pill bg-<?= $statusColor ?>-subtle text-<?= $statusColor ?> border border-<?= $statusColor ?>-subtle px-2 py-1"><i class="fa-solid <?= $statusIcon ?> me-1"></i><?= $statusText ?></span></td>
-                    <td class="text-end pe-3 text-nowrap">
-                        <?php if ($p['status'] === 'pending'): ?>
-                            <form method="POST" class="d-inline">
-                                <input type="hidden" name="payment_id" value="<?= (int)$p['id'] ?>">
-                                <input type="hidden" name="action" value="verify">
-                                <button type="submit" class="btn btn-sm btn-success px-2 py-1" onclick="return confirm('Verify this payment of ₱<?= number_format((float)$p['amount'], 2) ?>?');"><i class="fa-solid fa-check me-1"></i>Verify</button>
-                            </form>
-                            <form method="POST" class="d-inline">
-                                <input type="hidden" name="payment_id" value="<?= (int)$p['id'] ?>">
-                                <input type="hidden" name="action" value="reject">
-                                <button type="submit" class="btn btn-sm btn-outline-danger px-2 py-1" title="Reject" aria-label="Reject" onclick="return confirm('Reject this payment?');"><i class="fa-solid fa-xmark"></i></button>
-                            </form>
-                        <?php elseif ($receipt): ?>
-                            <a href="<?= htmlspecialchars($receipt) ?>" target="_blank" rel="noopener" class="btn btn-sm btn-light border px-2 py-1"><i class="fa-solid fa-receipt me-1 text-primary"></i>Receipt</a>
-                        <?php else: ?>
-                            <span class="text-muted">—</span>
-                        <?php endif; ?>
-                    </td>
-                </tr>
+                <?php foreach ($collectedByMethod as $label => $sum): $isCash = $label === 'Cash'; ?>
+                <div class="d-flex align-items-center gap-3 mb-2">
+                    <div class="method-icon <?= $isCash ? 'bg-success-subtle text-success' : 'bg-primary text-white' ?>"><i class="fa-solid <?= $isCash ? 'fa-money-bill-wave' : 'fa-g' ?>"></i></div>
+                    <div class="flex-grow-1">
+                        <div class="fw-semibold text-dark" style="font-size:0.82rem;"><?= $isCash ? 'Cash' : 'GCash (Manual)' ?></div>
+                        <div class="text-muted" style="font-size:0.7rem;"><?= $countByMethod[$label] ?? 0 ?> <?= ($countByMethod[$label] ?? 0) === 1 ? 'payment' : 'payments' ?></div>
+                    </div>
+                    <div class="fw-semibold text-dark" style="font-size:0.82rem;"><?= peso((float)$sum) ?></div>
+                </div>
                 <?php endforeach; ?>
-            </tbody>
-        </table>
-    </div>
-    <div class="card-footer bg-white border-top p-2 px-3 d-flex justify-content-between align-items-center flex-wrap gap-2">
-        <span class="text-muted" style="font-size:0.72rem;"><?= paginationSummary($pager, 'payments') ?></span>
-        <nav>
-            <ul class="pagination pagination-sm mb-0"><?= paginationControls($pager) ?></ul>
-        </nav>
+            </div>
+        </div>
+
+        </div>
+        <div class="col">
+        <div class="card border-0 shadow-sm rounded-3 h-100">
+            <div class="card-body p-3">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <h6 class="fw-bold text-dark mb-0" style="font-size:0.9rem;"><i class="fa-regular fa-bell text-primary me-2"></i>Recent Activity</h6>
+                    <a href="payments.php" class="text-decoration-none" style="font-size:0.75rem;">View All</a>
+                </div>
+                <?php if (!$recentActivity): ?>
+                    <div class="text-muted" style="font-size:0.78rem;">No payments yet.</div>
+                <?php endif; ?>
+                <?php foreach ($recentActivity as $a):
+                    $who = $a['first_name'] . ' ' . $a['last_name'];
+                    $how = paymentMethodLabel($a['payment_method'] ?? 'gcash');
+                    [$what, $dot] = match ($a['status']) {
+                        'verified' => ["Payment received from $who ($how)", 'success'],
+                        'rejected' => ["Payment rejected ($who)", 'danger'],
+                        default    => ["$how payment pending verification ($who)", 'warning'],
+                    };
+                    [$aDate, $aTime] = paymentWhen($a);
+                ?>
+                <div class="activity-row">
+                    <span class="dot bg-<?= $dot ?> mt-1 flex-shrink-0"></span>
+                    <div>
+                        <div class="text-dark" style="font-size:0.78rem;"><?= htmlspecialchars($what) ?></div>
+                        <div class="text-muted" style="font-size:0.68rem;"><?= $aDate ?> · <?= $aTime ?></div>
+                    </div>
+                </div>
+                <?php endforeach; ?>
+            </div>
+        </div>
+        </div>
+        </div>
     </div>
 </div>
+
+<!-- One payment: proof, details, and Verify / Reject for pending ones -->
+<div class="modal fade" id="paymentModal" tabindex="-1" aria-labelledby="paymentModalTitle" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content border-0 shadow rounded-4">
+            <div class="modal-header border-0 pb-0">
+                <h6 class="modal-title fw-bold" id="paymentModalTitle"><i class="fa-solid fa-receipt text-primary me-2"></i>Payment Details</h6>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div class="row g-3">
+                    <div class="col-md-5">
+                        <a id="pmProofLink" href="#" target="_blank" rel="noopener" class="d-block proof-box">
+                            <img id="pmProof" alt="Proof of payment" class="w-100 h-100" style="object-fit: contain;">
+                        </a>
+                        <div id="pmNoProof" class="proof-box d-flex flex-column align-items-center justify-content-center text-muted">
+                            <i class="fa-regular fa-image fs-2 mb-2 opacity-50"></i><span style="font-size:0.8rem;">No screenshot (cash payment)</span>
+                        </div>
+                    </div>
+                    <div class="col-md-7">
+                        <div class="d-flex justify-content-between align-items-start mb-2">
+                            <div>
+                                <div class="fw-bold text-dark fs-5" id="pmAmount"></div>
+                                <span class="status-pill" id="pmStatus"></span>
+                            </div>
+                        </div>
+                        <dl class="pm-list mb-0">
+                            <dt>Tenant</dt><dd><a href="#" id="pmTenant" class="text-decoration-none"></a></dd>
+                            <dt>Contact</dt><dd id="pmPhone"></dd>
+                            <dt>Room</dt><dd id="pmRoom"></dd>
+                            <dt>Payment date</dt><dd id="pmDate"></dd>
+                            <dt>Method</dt><dd id="pmMethod"></dd>
+                            <dt>Reference no.</dt><dd id="pmRef" class="ref-no"></dd>
+                        </dl>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer border-0 bg-light d-flex justify-content-between">
+                <a href="#" id="pmReceipt" target="_blank" rel="noopener" class="btn btn-light border btn-sm"><i class="fa-solid fa-receipt me-1 text-primary"></i>Open Receipt</a>
+                <div class="d-flex gap-2 ms-auto" id="pmActions">
+                    <form method="POST" class="m-0" onsubmit="return confirm('Reject this payment? The tenant is told by SMS to check it and submit again.');">
+                        <input type="hidden" name="action" value="reject">
+                        <input type="hidden" name="payment_id" class="pm-id">
+                        <button type="submit" class="btn btn-outline-danger btn-sm px-3"><i class="fa-solid fa-xmark me-1"></i>Reject</button>
+                    </form>
+                    <form method="POST" class="m-0" onsubmit="return confirm('Mark this payment as verified? A receipt is made and the tenant gets an SMS.');">
+                        <input type="hidden" name="action" value="verify">
+                        <input type="hidden" name="payment_id" class="pm-id">
+                        <button type="submit" class="btn btn-success btn-sm px-3"><i class="fa-solid fa-check me-1"></i>Verify Payment</button>
+                    </form>
+                </div>
+                <button type="button" class="btn btn-light border btn-sm" data-bs-dismiss="modal" id="pmClose">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+function openPayment(el) {
+    const p = JSON.parse(el.closest('[data-payment]').dataset.payment);
+    document.getElementById('pmAmount').textContent = p.amount + (p.room_payment ? ' (whole room)' : '');
+    const status = document.getElementById('pmStatus');
+    status.textContent = p.status_text;
+    status.className = 'status-pill bg-' + p.status_color + '-subtle text-' + p.status_color + '-emphasis';
+    const tenant = document.getElementById('pmTenant');
+    tenant.textContent = p.tenant;
+    tenant.href = 'tenant_details.php?id=' + p.tenant_id;
+    document.getElementById('pmPhone').textContent = p.phone || '-';
+    document.getElementById('pmRoom').textContent = p.room;
+    document.getElementById('pmDate').textContent = p.date + ' · ' + p.time;
+    document.getElementById('pmMethod').textContent = p.method;
+    document.getElementById('pmRef').textContent = p.reference;
+    document.getElementById('pmProofLink').classList.toggle('d-none', !p.proof);
+    document.getElementById('pmNoProof').classList.toggle('d-none', !!p.proof);
+    if (p.proof) {
+        document.getElementById('pmProofLink').href = p.proof;
+        document.getElementById('pmProof').src = p.proof;
+    }
+    const receipt = document.getElementById('pmReceipt');
+    receipt.classList.toggle('d-none', !p.receipt);
+    if (p.receipt) receipt.href = p.receipt;
+    const pending = p.status === 'pending';
+    document.getElementById('pmActions').classList.toggle('d-none', !pending);
+    document.getElementById('pmClose').classList.toggle('d-none', pending);
+    document.querySelectorAll('#paymentModal .pm-id').forEach(i => i.value = p.id);
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('paymentModal')).show();
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+    if (window.Chart) {
+        new Chart(document.getElementById('paymentDonut'), {
+            type: 'doughnut',
+            data: {
+                labels: ['Paid', 'Due Soon', 'Overdue', 'Pending Verification'],
+                datasets: [{
+                    data: <?= json_encode([$paidCount, $dueSoonCount, $actualOverdueCount, $pendingCount]) ?>,
+                    backgroundColor: ['#22c55e', '#3b82f6', '#ef4444', '#f59e0b'],
+                    borderWidth: 0,
+                    cutout: '74%'
+                }]
+            },
+            options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
+        });
+    }
+});
+</script>
 
 <script>
 // Typing in the search box submits the form after a short pause, so the server can filter.

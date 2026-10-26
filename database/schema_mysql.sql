@@ -101,6 +101,7 @@ CREATE TABLE IF NOT EXISTS payments (
     status VARCHAR(20) DEFAULT 'pending',
     receipt_path VARCHAR(255),
     covered_by_payment_id INT,                        -- roommate's share of a room payment (not extra revenue)
+    created_at TIMESTAMP NULL DEFAULT NULL,           -- when it was entered
     CONSTRAINT chk_payments_status CHECK (status IN ('pending', 'verified', 'rejected')),
     FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
     FOREIGN KEY (covered_by_payment_id) REFERENCES payments(id) ON DELETE CASCADE
@@ -192,6 +193,17 @@ CREATE TABLE IF NOT EXISTS report_exports (
     date_to DATE NULL,
     row_count INT NOT NULL DEFAULT 0,
     created_at TIMESTAMP NULL DEFAULT NULL
+) ENGINE=InnoDB;
+
+-- Files the admin keeps for a tenant: IDs, contracts (the Documents tab)
+CREATE TABLE IF NOT EXISTS tenant_documents (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    tenant_id INT NOT NULL,
+    title VARCHAR(120) NOT NULL,
+    file_path VARCHAR(255) NOT NULL,
+    file_type VARCHAR(10) NOT NULL,                   -- jpg | png | webp | pdf
+    uploaded_at TIMESTAMP NULL DEFAULT NULL,
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS settings (
