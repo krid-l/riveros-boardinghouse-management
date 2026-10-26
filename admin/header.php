@@ -34,8 +34,8 @@ $pageTitle = $pageTitles[$current_page] ?? ucwords(str_replace(['.php', '_'], ['
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <!-- FontAwesome for Professional Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <!-- Custom Theme CSS -->
-    <link rel="stylesheet" href="../assets/css/custom.css">
+    <!-- Custom Theme CSS (?v= changes whenever the file does, so browsers never keep an old copy) -->
+    <link rel="stylesheet" href="../assets/css/custom.css?v=<?= (int)@filemtime(__DIR__ . '/../assets/css/custom.css') ?>">
 </head>
 <body>
     <div class="d-flex h-100">
