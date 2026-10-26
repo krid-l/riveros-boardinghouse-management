@@ -215,7 +215,6 @@ body {
     .stat-value { font-size: 1.05rem; }
     .stat-chevron { display: none; }
 }
-}
 
 /* Tenant profile form sections (includes/tenant_profile.php) */
 .profile-section-title { font-size: 0.65rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #64748b; margin: 0.25rem 0 0.5rem; padding-bottom: 0.3rem; border-bottom: 1px solid #f1f5f9; }

@@ -55,6 +55,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'edit_
     }
 }
 
+// Documents: files the admin keeps for the tenant (a photo of an ID, a signed contract).
+$docMessage = '';
+$docError = '';
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'upload_document' && (int)($_POST['tenant_id'] ?? 0) === $tenantId) {
+    $title = mb_substr(trim((string)($_POST['title'] ?? '')), 0, 120);
+    $upload = isset($_FILES['document']) ? storeUploadedDocument($_FILES['document']) : ['path' => null, 'error' => 'Choose a file.'];
+    if ($title === '') {
+        $docError = 'Give the document a name, e.g. "Valid ID" or "Lease contract".';
+        if ($upload['path']) deleteLocalUpload($upload['path']);
+    } elseif ($upload['error'] || !$upload['path']) {
+        $docError = $upload['error'] ?: 'Choose a file.';
+    } else {
+        $ext = strtolower(pathinfo(parse_url($upload['path'], PHP_URL_PATH) ?: $upload['path'], PATHINFO_EXTENSION));
+        $pdo->prepare("INSERT INTO tenant_documents (tenant_id, title, file_path, file_type, uploaded_at) VALUES (?, ?, ?, ?, ?)")
+            ->execute([$tenantId, $title, $upload['path'], $ext, date('Y-m-d H:i:s')]);
+        $docMessage = 'Document saved.';
+    }
+}
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delete_document' && (int)($_POST['tenant_id'] ?? 0) === $tenantId) {
+    $doc = $pdo->prepare("SELECT file_path FROM tenant_documents WHERE id = ? AND tenant_id = ?");
+    $doc->execute([(int)($_POST['document_id'] ?? 0), $tenantId]);
+    $path = $doc->fetchColumn();
+    if ($path !== false) {
+        $pdo->prepare("DELETE FROM tenant_documents WHERE id = ?")->execute([(int)$_POST['document_id']]);
+        deleteLocalUpload($path);
+        $docMessage = 'Document deleted.';
+    }
+}
+
 // The admin's own notes on the tenant (only the admin sees them).
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_notes' && (int)($_POST['tenant_id'] ?? 0) === $tenantId) {
     $notes = trim((string)($_POST['admin_notes'] ?? ''));
@@ -203,6 +232,11 @@ foreach ($credits as $c) {
 }
 usort($ledger, fn($a, $b) => [$a['date'], $a['order']] <=> [$b['date'], $b['order']]);
 
+$docStmt = $pdo->prepare("SELECT * FROM tenant_documents WHERE tenant_id = ? ORDER BY uploaded_at DESC, id DESC");
+$docStmt->execute([$tenantId]);
+$documents = $docStmt->fetchAll();
+$openTab = ($docMessage || $docError) ? 'documents' : 'overview';
+
 // Room history
 $histStmt = $pdo->prepare("
     SELECT rt.*, rf.room_number AS from_room, rto.room_number AS to_room
@@ -218,135 +252,175 @@ require_once 'header.php';
 ?>
 
 <style>
-    body { background-color: #f8fafc; }
-    
-    /* Top Profile Card */
-    .profile-card { border-radius: 12px; border: 1px solid #f1f5f9; }
-    .avatar-wrapper { position: relative; width: 80px; height: 80px; flex: 0 0 80px; }
+    /* Header: who, standing, the four key facts, then the balance strip */
+    .profile-card { border-radius: 12px; border: 1px solid #eef2f7; }
+    .avatar-wrapper { position: relative; width: 84px; height: 84px; flex: 0 0 84px; }
     /* Fits either an uploaded photo or the initials placeholder to the wrapper. */
     .avatar-wrapper img, .avatar-wrapper .avatar-initials {
         width: 100% !important; height: 100% !important; object-fit: cover; border-radius: 50%;
     }
-    .status-badge-overlap {
-        position: absolute; bottom: -8px; left: 50%; transform: translateX(-50%);
-        font-size: 0.6rem; padding: 2px 10px; border: 2px solid white;
+    .standing-badge { display: inline-block; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.04em; padding: 0.3em 0.9em; border-radius: 999px; }
+    .profile-id { min-width: 0; }
+    .fact-box { border: 1px solid #eef2f7; border-radius: 10px; padding: 0.75rem 0.85rem; height: 100%; background: #fff; }
+    .fact-icon { width: 30px; height: 30px; border-radius: 50%; background: #eff6ff; color: #2563eb; display: inline-flex; align-items: center; justify-content: center; font-size: 0.8rem; margin-bottom: 0.4rem; }
+    .fact-label { font-size: 0.72rem; color: #64748b; }
+    .fact-value { font-size: 0.95rem; font-weight: 700; color: #0f172a; line-height: 1.3; }
+    .fact-sub { font-size: 0.66rem; color: #64748b; line-height: 1.3; margin-top: 2px; }
+
+    .balance-strip { border-radius: 10px; padding: 0.85rem 1.1rem; display: flex; align-items: center; gap: 1.25rem; flex-wrap: wrap; border: 1px solid transparent; }
+    .strip-icon { width: 38px; height: 38px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 0.95rem; flex-shrink: 0; }
+    .strip-label { font-size: 0.75rem; font-weight: 600; }
+    .strip-amount { font-size: 1.35rem; font-weight: 800; line-height: 1.2; }
+    .strip-divider { width: 1px; align-self: stretch; background: currentColor; opacity: 0.2; }
+    .strip-detail { font-size: 0.82rem; }
+    .strip-danger  { background: #fef2f2; border-color: #fecaca; color: #b91c1c; }
+    .strip-danger .strip-icon  { background: #dc2626; color: #fff; }
+    .strip-info    { background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; }
+    .strip-info .strip-icon    { background: #2563eb; color: #fff; }
+    .strip-success { background: #f0fdf4; border-color: #bbf7d0; color: #15803d; }
+    .strip-success .strip-icon { background: #16a34a; color: #fff; }
+    .strip-muted   { background: #f8fafc; border-color: #e2e8f0; color: #475569; }
+    .strip-muted .strip-icon   { background: #64748b; color: #fff; }
+    @media (max-width: 575.98px) {
+        .balance-strip { gap: 0.75rem; }
+        .strip-divider { display: none; }
+        .strip-detail { flex-basis: 100%; }
     }
-    
+
     .breadcrumb-sm { font-size: 0.75rem; }
     .breadcrumb-sm a { color: #0d6efd; text-decoration: none; }
     .breadcrumb-sm a:hover { text-decoration: underline; }
-    
-    .tab-nav { border-bottom: 1px solid #e2e8f0; display: flex; gap: 2rem; margin-bottom: 1.5rem; }
-    .tab-item { 
-        padding: 0.75rem 0; font-size: 0.75rem; font-weight: 600; color: #64748b; 
-        cursor: pointer; border-bottom: 2px solid transparent; 
-    }
-    .tab-item.active { color: #0d6efd; border-bottom: 2px solid #0d6efd; }
-    
-    /* Content Blocks */
-    .section-card { border-radius: 10px; border: 1px solid #f1f5f9; background: white; margin-bottom: 1rem; }
-    .section-header { padding: 1rem; border-bottom: 1px solid #f8fafc; display: flex; justify-content: space-between; align-items: center; }
-    .section-title { font-size: 0.8rem; font-weight: 700; color: #1e293b; margin: 0; }
-    
-    .info-grid { padding: 1rem; display: grid; grid-template-columns: 120px 1fr; row-gap: 0.75rem; font-size: 0.7rem; }
+
+    /* Tabs: underlined, scroll sideways on phones */
+    .tenant-tabs { border-bottom: 1px solid #e2e8f0; flex-wrap: nowrap; overflow-x: auto; gap: 0.25rem; scrollbar-width: none; }
+    .tenant-tabs .nav-link { border: 0; border-bottom: 2px solid transparent; border-radius: 0; color: #64748b; font-size: 0.8rem; font-weight: 600; padding: 0.7rem 0.9rem; white-space: nowrap; background: none; }
+    .tenant-tabs .nav-link:hover { color: #1e293b; }
+    .tenant-tabs .nav-link.active { color: #2563eb; border-bottom-color: #2563eb; }
+
+    /* Content blocks */
+    .section-card { border-radius: 10px; border: 1px solid #eef2f7; background: white; margin-bottom: 1rem; }
+    .section-header { padding: 0.85rem 1rem; border-bottom: 1px solid #f1f5f9; display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; }
+    .section-title { font-size: 0.85rem; font-weight: 700; color: #1e293b; margin: 0; }
+
+    .info-grid { padding: 1rem; display: grid; grid-template-columns: 150px 1fr; row-gap: 0.7rem; column-gap: 1rem; font-size: 0.8rem; }
     .info-label { color: #64748b; }
-    .info-value { color: #1e293b; font-weight: 500; }
-    
-    /* Transactions */
-    .tx-item { padding: 0.75rem 1rem; border-bottom: 1px solid #f8fafc; display: flex; justify-content: space-between; align-items: center; }
-    .tx-item:last-child { border-bottom: none; }
-    .tx-icon { width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.75rem; }
-    
-    /* Receipt Cards */
-    .receipt-scroll { display: flex; gap: 1rem; padding: 1rem; overflow-x: auto; }
-    .receipt-card { 
-        min-width: 150px; border: 1px solid #f1f5f9; border-radius: 8px; padding: 0.75rem;
-        background: white; display: flex; flex-direction: column;
-    }
-    .receipt-thumb { 
-        height: 60px; background-color: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 4px;
-        margin: 0.5rem 0; display: flex; align-items: center; justify-content: center; color: #94a3b8;
-    }
-    
-    /* Balance Summary */
-    .balance-row { display: flex; justify-content: space-between; font-size: 0.7rem; margin-bottom: 0.5rem; }
-    
+    .info-value { color: #1e293b; font-weight: 500; min-width: 0; }
+    @media (max-width: 575.98px) { .info-grid { grid-template-columns: 1fr; row-gap: 0.15rem; } .info-value { margin-bottom: 0.5rem; } }
+
+    .mini-table>thead>tr>th { font-size: 0.68rem; padding: 0.6rem 0.75rem; text-transform: none; letter-spacing: 0; background: #f8fafc; }
+    .mini-table>tbody>tr>td { font-size: 0.78rem; padding: 0.6rem 0.75rem; }
+    .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 0.5rem; }
+    .soft-pill { display: inline-block; font-size: 0.68rem; font-weight: 600; padding: 0.2em 0.7em; border-radius: 999px; white-space: nowrap; }
+
+    .empty-state { text-align: center; padding: 1.75rem 1rem; font-size: 0.78rem; color: #64748b; }
+    .empty-state > span { width: 52px; height: 52px; border-radius: 50%; background: #eff6ff; color: #2563eb; display: inline-flex; align-items: center; justify-content: center; font-size: 1.2rem; margin-bottom: 0.6rem; }
+
+    /* Receipt cards */
+    .receipt-scroll { display: flex; gap: 0.75rem; padding: 1rem; overflow-x: auto; }
+    .receipt-card { min-width: 150px; border: 1px solid #eef2f7; border-radius: 8px; padding: 0.75rem; background: white; display: flex; flex-direction: column; }
+    .receipt-thumb { height: 56px; background-color: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 4px; margin: 0.4rem 0; display: flex; align-items: center; justify-content: center; }
+
+    /* Balance summary */
+    .balance-row { display: flex; justify-content: space-between; font-size: 0.8rem; margin-bottom: 0.55rem; }
+    .balance-total { display: flex; justify-content: space-between; align-items: center; font-size: 0.85rem; font-weight: 700; border-radius: 8px; padding: 0.65rem 0.8rem; margin-top: 0.4rem; }
+    .method-box { display: flex; align-items: center; gap: 0.75rem; border: 1px solid #eef2f7; border-radius: 8px; padding: 0.6rem 0.75rem; font-size: 0.82rem; }
+    .method-icon { width: 34px; height: 34px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; font-weight: 800; }
+
+    /* Documents */
+    .doc-row { display: flex; align-items: center; gap: 0.75rem; padding: 0.7rem 1rem; border-bottom: 1px solid #f1f5f9; font-size: 0.8rem; }
+    .doc-row:last-child { border-bottom: 0; }
+    .doc-icon { width: 38px; height: 38px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
 </style>
 
-<div class="d-flex justify-content-between align-items-center mb-3">
-    <div>
-        <div class="breadcrumb-sm text-muted">
-            <a href="dashboard.php">Dashboard</a> &rsaquo; <a href="tenants.php">Tenants</a> &rsaquo; <?= htmlspecialchars($tenant['first_name'] . ' ' . $tenant['last_name']) ?>
-        </div>
-    </div>
+<div class="breadcrumb-sm text-muted mb-3">
+    <a href="dashboard.php">Dashboard</a> &rsaquo; <a href="tenants.php">Tenants</a> &rsaquo; <?= htmlspecialchars($tenant['first_name'] . ' ' . $tenant['last_name']) ?>
 </div>
 
+<?php
+// The tenant's standing, as the header badge and the balance strip show it.
+$upcomingDue = upcomingDueDate($pdo, $tenantId);
+[$standingLabel, $standingColor] = match ($billing['key']) {
+    'overdue'     => ['OVERDUE', 'danger'],
+    'due'         => ['NOT YET DUE', 'primary'],
+    'deactivated' => ['MOVED OUT', 'secondary'],
+    default       => ['PAID', 'success'],
+};
+?>
+
 <!-- Top Profile Card -->
-<div class="card profile-card shadow-sm mb-4 bg-white">
-    <div class="card-body p-4">
-        <div class="row align-items-center">
-            <!-- Left: Avatar & Contact -->
-            <div class="col-md-4 d-flex align-items-center border-end border-light">
-                <div class="avatar-wrapper me-3">
-                    <?= avatarHtml($tenant['first_name'] . ' ' . $tenant['last_name'], 80, '', $tenant['profile_picture'] ?? null, '../') ?>
-                    <span class="badge bg-<?= $billing['color'] ?>-subtle text-<?= $billing['color'] ?> rounded-pill status-badge-overlap"><?= $billing['label'] ?></span>
+<div class="card profile-card shadow-sm mb-3 bg-white">
+    <div class="card-body p-3 p-md-4">
+        <div class="row g-3 align-items-center">
+            <div class="col-xl-4 d-flex align-items-center gap-3 profile-id">
+                <div class="avatar-wrapper"><?= avatarHtml($tenant['first_name'] . ' ' . $tenant['last_name'], 84, '', $tenant['profile_picture'] ?? null, '../') ?></div>
+                <div style="min-width: 0;">
+                    <h4 class="fw-bold mb-1 text-dark text-truncate"><?= htmlspecialchars($tenant['first_name'] . ' ' . $tenant['last_name']) ?></h4>
+                    <div class="text-muted mb-2" style="font-size: 0.85rem;"><i class="fa-solid fa-phone me-2"></i><?= htmlspecialchars($tenant['contact_number'] ?: 'No number') ?></div>
+                    <span class="standing-badge bg-<?= $standingColor ?>-subtle text-<?= $standingColor ?>-emphasis"><?= $standingLabel ?></span>
                 </div>
+            </div>
+            <div class="col-xl-8">
+                <div class="row g-2">
+                    <div class="col-6 col-md-3">
+                        <div class="fact-box">
+                            <span class="fact-icon"><i class="fa-solid fa-bed"></i></span>
+                            <div class="fact-label"><?= $isDeactivated ? 'Room' : 'Assigned Room' ?></div>
+                            <div class="fact-value"><?= $isDeactivated ? 'Moved out' : ($tenant['room_number'] ? 'Room ' . htmlspecialchars($tenant['room_number']) : 'Unassigned') ?></div>
+                        </div>
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <div class="fact-box">
+                            <span class="fact-icon"><i class="fa-regular fa-calendar"></i></span>
+                            <div class="fact-label"><?= $isDeactivated && $tenant['deactivated_at'] ? 'Moved Out' : 'Move-in Date' ?></div>
+                            <div class="fact-value"><?= $isDeactivated && $tenant['deactivated_at'] ? date('M j, Y', strtotime($tenant['deactivated_at'])) : $moveInDisplay ?></div>
+                        </div>
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <div class="fact-box">
+                            <span class="fact-icon"><i class="fa-solid fa-circle-dollar-to-slot"></i></span>
+                            <div class="fact-label">Monthly Rent</div>
+                            <div class="fact-value">₱<?= number_format($monthlyRent, 2) ?></div>
+                            <?php if ($rentSplitNote): ?><div class="fact-sub"><?= $rentSplitNote ?></div><?php endif; ?>
+                        </div>
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <div class="fact-box">
+                            <span class="fact-icon"><i class="fa-solid fa-shield-halved"></i></span>
+                            <div class="fact-label">Deposit</div>
+                            <div class="fact-value">₱<?= number_format($depositHeld, 2) ?></div>
+                            <div class="fact-sub">For the last month</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Balance strip: red when something is overdue, blue while the next bill isn't due yet -->
+        <?php
+        $stripClass = match ($billing['key']) {
+            'overdue' => 'strip-danger', 'due' => 'strip-info', 'deactivated' => 'strip-muted', default => 'strip-success',
+        };
+        ?>
+        <div class="balance-strip <?= $stripClass ?> mt-3">
+            <div class="d-flex align-items-center gap-3">
+                <span class="strip-icon"><i class="fa-solid <?= $billing['key'] === 'overdue' ? 'fa-exclamation' : 'fa-wallet' ?>"></i></span>
                 <div>
-                    <h5 class="fw-bold mb-2 text-dark"><?= htmlspecialchars($tenant['first_name'] . ' ' . $tenant['last_name']) ?></h5>
-                    <div class="d-flex flex-column gap-1 text-muted" style="font-size: 0.7rem;">
-                        <span><i class="fa-solid fa-phone me-2"></i><?= htmlspecialchars($tenant['contact_number'] ?: 'N/A') ?></span>
-                        <span><i class="fa-solid fa-user me-2"></i><?= htmlspecialchars($tenant['username'] ?? '') ?></span>
-                    </div>
+                    <div class="strip-label">Current Balance</div>
+                    <div class="strip-amount">₱<?= number_format(max(0, $currentBalance), 2) ?></div>
                 </div>
             </div>
-            
-            <!-- Middle: Room Info -->
-            <div class="col-md-5 border-end border-light px-4">
-                <div class="d-flex flex-column gap-2" style="font-size: 0.75rem;">
-                    <div class="d-flex justify-content-between">
-                        <span class="text-muted">Room</span>
-                        <span class="fw-bold text-dark"><?= $isDeactivated ? 'Moved out' : ($tenant['room_number'] ? 'Room ' . htmlspecialchars($tenant['room_number'] ?? '') : 'Unassigned') ?></span>
-                    </div>
-                    <div class="d-flex justify-content-between">
-                        <span class="text-muted">Move-in Date</span>
-                        <span class="fw-bold text-dark"><i class="fa-regular fa-calendar me-1"></i><?= $moveInDisplay ?></span>
-                    </div>
-                    <?php if ($isDeactivated && $tenant['deactivated_at']): ?>
-                    <div class="d-flex justify-content-between">
-                        <span class="text-muted">Move-out Date</span>
-                        <span class="fw-bold text-dark"><i class="fa-regular fa-calendar-xmark me-1"></i><?= date('M j, Y', strtotime($tenant['deactivated_at'])) ?></span>
-                    </div>
-                    <?php endif; ?>
-                    <div class="d-flex justify-content-between">
-                        <span class="text-muted">Monthly Rent</span>
-                        <span class="fw-bold text-dark text-end">₱<?= number_format($monthlyRent, 2) ?>
-                            <?php if ($rentSplitNote): ?><br><span class="text-muted fw-normal" style="font-size:0.7rem;"><?= $rentSplitNote ?></span><?php endif; ?>
-                        </span>
-                    </div>
-                    <?php if ($depositHeld > 0): ?>
-                    <div class="d-flex justify-content-between">
-                        <span class="text-muted">Deposit</span>
-                        <span class="fw-bold text-dark text-end">₱<?= number_format($depositHeld, 2) ?>
-                            <br><span class="text-muted fw-normal" style="font-size:0.7rem;">Pays for the last month of stay</span>
-                        </span>
-                    </div>
-                    <?php endif; ?>
-                </div>
-            </div>
-            
-            <!-- Right: Balance -->
-            <div class="col-md-3 px-4 text-center text-md-end">
-                <div class="text-muted mb-1" style="font-size: 0.75rem;">Current Balance</div>
-                <?php if ($currentBalance <= 0): ?>
-                    <h3 class="fw-bold text-success mb-1">₱<?= number_format(0, 2) ?></h3>
-                    <div class="text-success fw-bold" style="font-size: 0.7rem;"><i class="fa-solid fa-check me-1"></i>Fully Paid<?= $currentBalance < 0 ? ' · ₱' . number_format(-$currentBalance, 2) . ($isDeactivated ? ' to refund' : ' credit') : '' ?></div>
-                <?php elseif ($billing['overdue'] > 0): ?>
-                    <h3 class="fw-bold text-danger mb-1">₱<?= number_format($currentBalance, 2) ?></h3>
-                    <div class="text-danger fw-bold" style="font-size: 0.7rem;"><i class="fa-solid fa-triangle-exclamation me-1"></i>₱<?= number_format($billing['overdue'], 2) ?> overdue<?= $overdueSince ? ' since ' . date('M j, Y', strtotime($overdueSince)) : '' ?></div>
+            <div class="strip-divider"></div>
+            <div class="d-flex align-items-center gap-2 strip-detail">
+                <?php if ($billing['key'] === 'overdue'): ?>
+                    <span><strong>Overdue: ₱<?= number_format($billing['overdue'], 2) ?></strong><?= $overdueSince ? ' since ' . date('M j, Y', strtotime($overdueSince)) : '' ?></span>
+                <?php elseif ($billing['key'] === 'due'): ?>
+                    <i class="fa-regular fa-calendar"></i>
+                    <span>Next payment due:<br><strong><?= $upcomingDue ? date('M j, Y', strtotime($upcomingDue)) : '—' ?></strong></span>
+                <?php elseif ($billing['key'] === 'deactivated'): ?>
+                    <span><?= $currentBalance > 0 ? 'Still owes <strong>₱' . number_format($currentBalance, 2) . '</strong>' : ($currentBalance < 0 ? '<strong>₱' . number_format(-$currentBalance, 2) . '</strong> to refund' : 'Settled') ?></span>
                 <?php else: ?>
-                    <?php $upcomingDue = upcomingDueDate($pdo, $tenantId); ?>
-                    <h3 class="fw-bold text-warning mb-1">₱<?= number_format($currentBalance, 2) ?></h3>
-                    <div class="text-muted fw-semibold" style="font-size: 0.7rem;"><i class="fa-regular fa-clock me-1"></i>Next bill<?= $upcomingDue ? ', due ' . dueDateLabel($upcomingDue) : '' ?> &middot; nothing overdue</div>
+                    <i class="fa-solid fa-circle-check"></i>
+                    <span><strong>Fully paid</strong><?= $currentBalance < 0 ? ' · ₱' . number_format(-$currentBalance, 2) . ' credit for the next bill' : '' ?><?= $nextDue ? '<br>Next bill due ' . date('M j, Y', strtotime($nextDue)) : '' ?></span>
                 <?php endif; ?>
             </div>
         </div>
@@ -354,71 +428,46 @@ require_once 'header.php';
 </div>
 
 <!-- Tabs -->
-<ul class="nav nav-tabs px-2 mb-3 border-0" id="tenantTabs" role="tablist">
+<ul class="nav tenant-tabs mb-3" id="tenantTabs" role="tablist">
+    <?php foreach ([['overview', 'fa-regular fa-user', 'Overview'], ['transactions', 'fa-regular fa-file-lines', 'Transactions'],
+                    ['payments', 'fa-solid fa-wallet', 'Payments & Receipts'], ['ledger', 'fa-solid fa-book-open', 'Ledger'],
+                    ['documents', 'fa-regular fa-file', 'Documents' . ($documents ? ' (' . count($documents) . ')' : '')]] as [$id, $icon, $label]): ?>
     <li class="nav-item" role="presentation">
-        <button class="nav-link active custom-tab me-2" id="overview-tab" data-bs-toggle="tab" data-bs-target="#overview" type="button" role="tab"><i class="fa-solid fa-users text-primary me-2"></i>Overview</button>
+        <button class="nav-link <?= $openTab === $id ? 'active' : '' ?>" id="<?= $id ?>-tab" data-bs-toggle="tab" data-bs-target="#<?= $id ?>" type="button" role="tab"><i class="<?= $icon ?> me-2"></i><?= $label ?></button>
     </li>
-    <li class="nav-item" role="presentation">
-        <button class="nav-link custom-tab me-2" id="transactions-tab" data-bs-toggle="tab" data-bs-target="#transactions" type="button" role="tab"><i class="fa-solid fa-arrow-right-arrow-left me-2"></i>Transactions</button>
-    </li>
-    <li class="nav-item" role="presentation">
-        <button class="nav-link custom-tab me-2" id="payments-tab" data-bs-toggle="tab" data-bs-target="#payments" type="button" role="tab"><i class="fa-solid fa-box-archive me-2"></i>Payments & Receipts</button>
-    </li>
-    <li class="nav-item" role="presentation">
-        <button class="nav-link custom-tab me-2" id="ledger-tab" data-bs-toggle="tab" data-bs-target="#ledger" type="button" role="tab"><i class="fa-solid fa-book me-2"></i>Ledger</button>
-    </li>
+    <?php endforeach; ?>
 </ul>
-
-<style>
-/* Style for custom tabs */
-.custom-tab {
-    background-color: transparent !important;
-    border: 0 !important;
-    color: #64748b !important;
-    font-weight: 600 !important;
-    font-size: 0.75rem !important;
-    padding: 0.5rem 1rem !important;
-    border-radius: 0.5rem !important;
-    transition: all 0.2s ease;
-}
-.custom-tab.active {
-    background-color: #ffffff !important;
-    color: #1e293b !important;
-    box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075) !important;
-}
-.custom-tab:hover:not(.active) {
-    color: #0d6efd !important;
-}
-</style>
 
 <!-- Main Content Grid -->
 <div class="tab-content" id="tenantTabsContent">
-    
+
     <!-- OVERVIEW TAB -->
-    <div class="tab-pane fade show active" id="overview" role="tabpanel" aria-labelledby="overview-tab">
+    <div class="tab-pane fade <?= $openTab === 'overview' ? 'show active' : '' ?>" id="overview" role="tabpanel" aria-labelledby="overview-tab">
         <div class="row g-3">
-    
-    <!-- Left Column (30%) -->
-    <div class="col-lg-3">
-        
+
+    <!-- Left: who they are, what they paid -->
+    <div class="col-lg-7">
+
         <!-- Tenant Information -->
         <div class="section-card shadow-sm">
             <div class="section-header">
-                <h6 class="section-title"><i class="fa-solid fa-house-user text-muted me-2"></i>Tenant Information</h6>
-                <button type="button" class="btn btn-sm btn-outline-primary py-0 px-2" style="font-size:0.65rem;" data-bs-toggle="modal" data-bs-target="#editProfileModal">Edit</button>
+                <h6 class="section-title"><i class="fa-regular fa-user text-primary me-2"></i>Tenant Information</h6>
+                <button type="button" class="btn btn-sm btn-outline-primary py-0 px-2" style="font-size:0.7rem;" data-bs-toggle="modal" data-bs-target="#editProfileModal"><i class="fa-solid fa-pen me-1"></i>Edit</button>
             </div>
-            <?php $na = '<span class="text-black-50 fst-italic">Not provided</span>'; $age = tenantAge($tenant['date_of_birth'] ?? null); $emergency = tenantEmergencyText($tenant); ?>
+            <?php $na = '<span class="text-black-50 fst-italic fw-normal">Not provided</span>'; $age = tenantAge($tenant['date_of_birth'] ?? null); $emergency = tenantEmergencyText($tenant); ?>
             <div class="info-grid">
                 <span class="info-label">Full Name</span><span class="info-value"><?= htmlspecialchars(trim($tenant['first_name'] . ' ' . ($tenant['middle_name'] ?? '') . ' ' . $tenant['last_name'])) ?></span>
+                <span class="info-label">Contact Number</span><span class="info-value"><?= !empty($tenant['contact_number']) ? htmlspecialchars($tenant['contact_number']) : $na ?></span>
+                <span class="info-label">Username</span>
+                <span class="info-value d-flex align-items-center gap-2"><span id="usernameText"><?= htmlspecialchars($tenant['username'] ?? '') ?></span>
+                    <button type="button" class="btn btn-link p-0 text-muted" title="Copy username" aria-label="Copy username" onclick="navigator.clipboard.writeText(document.getElementById('usernameText').textContent); this.innerHTML='<i class=&quot;fa-solid fa-check text-success&quot;></i>';"><i class="fa-regular fa-copy"></i></button></span>
+                <span class="info-label">Occupation</span><span class="info-value"><?= !empty($tenant['occupation']) ? htmlspecialchars($tenant['occupation']) : $na ?></span>
+                <span class="info-label">Emergency Contact</span><span class="info-value"><?= $emergency !== '' ? htmlspecialchars($emergency) : $na ?></span>
+                <span class="info-label">Email</span><span class="info-value text-break"><?= !empty($tenant['email']) ? htmlspecialchars($tenant['email']) : $na ?></span>
                 <span class="info-label">Gender</span><span class="info-value"><?= !empty($tenant['gender']) ? htmlspecialchars($tenant['gender']) : $na ?></span>
                 <span class="info-label">Date of Birth</span><span class="info-value"><?= !empty($tenant['date_of_birth']) ? date('M j, Y', strtotime($tenant['date_of_birth'])) . " <span class=\"text-muted fw-normal\">($age years old)</span>" : $na ?></span>
-                <span class="info-label">Mobile Number</span><span class="info-value"><?= !empty($tenant['contact_number']) ? htmlspecialchars($tenant['contact_number']) : $na ?></span>
-                <span class="info-label">Email</span><span class="info-value text-break"><?= !empty($tenant['email']) ? htmlspecialchars($tenant['email']) : $na ?></span>
                 <span class="info-label">Home Address</span><span class="info-value"><?= !empty($tenant['address']) ? nl2br(htmlspecialchars($tenant['address'])) : $na ?></span>
-                <span class="info-label">Occupation / School</span><span class="info-value"><?= !empty($tenant['occupation']) ? htmlspecialchars($tenant['occupation']) : $na ?></span>
-                <span class="info-label">Emergency Contact</span><span class="info-value"><?= $emergency !== '' ? htmlspecialchars($emergency) : $na ?></span>
-                <span class="info-label">Username</span><span class="info-value"><?= htmlspecialchars($tenant['username'] ?? '') ?></span>
-                <span class="info-label">Temporary Password</span><span class="info-value"><?= !empty($tenant['temp_password']) ? '<span class="badge bg-warning text-dark fw-bold" style="font-family: monospace; font-size:0.7rem;">' . htmlspecialchars($tenant['temp_password'] ?? '') . '</span>' : '<span class="text-success fst-italic fw-semibold" style="font-size:0.7rem;"><i class="fa-solid fa-check"></i> Changed by tenant</span>' ?></span>
+                <span class="info-label">Temporary Password</span><span class="info-value"><?= !empty($tenant['temp_password']) ? '<span class="badge bg-warning text-dark fw-bold" style="font-family: monospace; font-size:0.75rem;">' . htmlspecialchars($tenant['temp_password'] ?? '') . '</span>' : '<span class="text-success fst-italic fw-semibold" style="font-size:0.75rem;"><i class="fa-solid fa-check"></i> Changed by tenant</span>' ?></span>
             </div>
         </div>
 
@@ -447,30 +496,133 @@ require_once 'header.php';
                 </div>
             </div>
         </div>
-        
-        <!-- Room Information -->
+
+        <!-- Recent Transactions -->
         <div class="section-card shadow-sm">
             <div class="section-header">
-                <h6 class="section-title"><i class="fa-solid fa-building-user text-muted me-2"></i>Room Information</h6>
+                <h6 class="section-title"><i class="fa-solid fa-arrows-rotate text-primary me-2"></i>Recent Transactions</h6>
+                <a href="#transactions" onclick="document.getElementById('transactions-tab').click(); return false;" class="text-primary text-decoration-none" style="font-size:0.75rem; font-weight:600;">View All</a>
             </div>
-            <div class="info-grid">
-                <span class="info-label">Room Number</span><span class="info-value"><?= $tenant['room_number'] ? 'Room ' . htmlspecialchars($tenant['room_number'] ?? '') : 'N/A' ?></span>
-                <span class="info-label">Monthly Rent</span><span class="info-value">₱<?= number_format($monthlyRent, 2) ?><?= $rentSplitNote ? ' <span class="text-muted fw-normal" style="font-size:0.7rem;">(' . $rentSplitNote . ')</span>' : '' ?></span>
-                <span class="info-label">Deposit</span><span class="info-value"><?= $depositHeld > 0 ? '₱' . number_format($depositHeld, 2) . ' <span class="text-muted fw-normal" style="font-size:0.7rem;">(pays for the last month)</span>' : '<span class="text-muted">None on record</span>' ?></span>
-                <span class="info-label">Rent Due</span><span class="info-value">First month and deposit on moving in, then every 30th</span>
-                <span class="info-label">Status</span>
-                <span class="info-value">
-                    <?php if ($isDeactivated): ?>
-                        <span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle">Deactivated</span>
-                    <?php elseif ($tenant['room_id']): ?>
-                        <span class="badge bg-success-subtle text-success border border-success-subtle">Occupied</span>
-                    <?php else: ?>
-                        <span class="badge bg-warning-subtle text-warning border border-warning-subtle">No room</span>
+            <?php if (empty($payments)): ?>
+                <div class="empty-state"><span><i class="fa-regular fa-file-lines"></i></span><div class="fw-semibold text-dark">No transactions yet.</div><div>Payments will appear here once the tenant pays.</div></div>
+            <?php else: ?>
+            <div class="table-responsive px-2 pb-2">
+                <table class="table mini-table mb-0">
+                    <thead><tr><th>Type</th><th>Date</th><th>Description</th><th>Amount</th><th>Status</th></tr></thead>
+                    <tbody>
+                    <?php foreach (array_slice($payments, 0, 5) as $p):
+                        [$typeText, $typeDot] = match ($p['status']) {
+                            'verified' => ['Payment Received', 'success'],
+                            'rejected' => ['Payment Rejected', 'danger'],
+                            default    => ['Payment Pending', 'warning'],
+                        };
+                        $desc = ($p['reference_number'] ?? '') === 'MOVE-IN' ? 'Advance + Deposit'
+                              : (stripos($p['payment_method'] ?? '', 'covered by') === 0 ? $p['payment_method']
+                              : (!empty($p['pay_for_room']) ? 'Room Rent (whole room)' : 'Room Rent'));
+                        [$stText, $stColor] = match ($p['status']) {
+                            'verified' => ['Paid', 'success'], 'rejected' => ['Rejected', 'danger'], default => ['Pending', 'warning'],
+                        };
+                    ?>
+                        <tr>
+                            <td class="text-nowrap"><span class="dot bg-<?= $typeDot ?>"></span><?= $typeText ?></td>
+                            <td class="text-nowrap"><?= date('M j, Y', strtotime($p['payment_date'])) ?></td>
+                            <td><?= htmlspecialchars($desc) ?></td>
+                            <td class="text-nowrap fw-semibold">₱<?= number_format((float)$p['amount'], 2) ?></td>
+                            <td><span class="soft-pill bg-<?= $stColor ?>-subtle text-<?= $stColor ?>-emphasis"><?= $stText ?></span></td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+            <?php endif; ?>
+        </div>
+
+        <!-- Payment & Receipts -->
+        <?php $verifiedPayments = array_values(array_filter($payments, fn($p) => $p['status'] === 'verified')); ?>
+        <div class="section-card shadow-sm">
+            <div class="section-header">
+                <h6 class="section-title"><i class="fa-solid fa-receipt text-primary me-2"></i>Payment & Receipts</h6>
+                <a href="#payments" onclick="document.getElementById('payments-tab').click(); return false;" class="text-primary text-decoration-none" style="font-size:0.75rem; font-weight:600;">View All Receipts</a>
+            </div>
+            <?php if (!$verifiedPayments): ?>
+                <div class="empty-state"><span><i class="fa-regular fa-credit-card"></i></span><div class="fw-semibold text-dark">No receipts available yet.</div><div>Receipts will appear here once a payment is made.</div></div>
+            <?php else: ?>
+            <div class="receipt-scroll">
+                <?php foreach (array_slice($verifiedPayments, 0, 6) as $p): ?>
+                <div class="receipt-card">
+                    <span class="soft-pill bg-success-subtle text-success-emphasis align-self-start mb-1">Paid</span>
+                    <div class="receipt-thumb"><i class="fa-solid fa-file-invoice text-primary opacity-50 fs-3"></i></div>
+                    <div class="fw-bold text-dark mb-1" style="font-size:0.7rem;">RCP-<?= str_pad($p['id'], 6, '0', STR_PAD_LEFT) ?></div>
+                    <div class="text-muted" style="font-size:0.68rem;"><?= date('M j, Y', strtotime($p['payment_date'])) ?></div>
+                    <div class="fw-bold text-dark" style="font-size:0.8rem;">₱<?= number_format((float)$p['amount'], 2) ?></div>
+                    <?php if (!empty($p['receipt_path'])): ?>
+                    <a href="<?= htmlspecialchars(uploadSrc($p['receipt_path'], '../')) ?>" target="_blank" rel="noopener" class="btn btn-outline-primary btn-sm w-100 mt-2 py-0" style="font-size:0.68rem;">View Receipt</a>
                     <?php endif; ?>
-                </span>
+                </div>
+                <?php endforeach; ?>
+            </div>
+            <?php endif; ?>
+        </div>
+    </div>
+
+    <!-- Right: money, deposit, notes, actions -->
+    <div class="col-lg-5">
+
+        <!-- Balance Summary -->
+        <div class="section-card shadow-sm">
+            <div class="section-header"><h6 class="section-title"><i class="fa-solid fa-wallet text-primary me-2"></i>Balance Summary</h6></div>
+            <div class="p-3">
+                <div class="balance-row"><span class="text-muted">Total Charges</span><span class="fw-semibold">₱<?= number_format($totalCharges, 2) ?></span></div>
+                <div class="balance-row"><span class="text-muted">Total Payments</span><span class="fw-semibold">₱<?= number_format($totalPayments, 2) ?></span></div>
+                <?php if ($billing['key'] === 'overdue'): ?>
+                    <div class="balance-row"><span class="text-muted">Overdue</span><span class="fw-bold text-danger">₱<?= number_format($billing['overdue'], 2) ?></span></div>
+                    <div class="balance-total bg-danger-subtle text-danger-emphasis"><span>Current Balance</span><span>₱<?= number_format($currentBalance, 2) ?></span></div>
+                <?php else: ?>
+                    <div class="balance-row"><span class="text-muted">Outstanding Balance</span><span class="fw-semibold">₱<?= number_format(max(0, $currentBalance), 2) ?></span></div>
+                    <div class="balance-total bg-<?= $standingColor ?>-subtle text-<?= $standingColor ?>-emphasis">
+                        <span><i class="fa-regular fa-calendar me-2"></i>Payment Status</span>
+                        <span class="soft-pill bg-white text-<?= $standingColor ?>-emphasis"><?= ucwords(strtolower($standingLabel)) ?></span>
+                    </div>
+                    <?php if ($currentBalance < 0): ?>
+                        <div class="text-success mt-2" style="font-size:0.75rem;">₱<?= number_format(-$currentBalance, 2) ?> <?= $isDeactivated ? 'to refund' : 'credit toward the next bill' ?></div>
+                    <?php endif; ?>
+                <?php endif; ?>
+                <?php if ($ledgerMismatch): ?>
+                    <div class="alert alert-warning border-0 py-1 px-2 mt-2 mb-0" style="font-size:0.68rem;">
+                        <i class="fa-solid fa-triangle-exclamation me-1"></i>Ledger total (₱<?= number_format($ledgerBalance, 2) ?>) doesn't match the stored balance. Please review this account.
+                    </div>
+                <?php endif; ?>
             </div>
         </div>
 
+        <!-- How this tenant pays -->
+        <?php
+        $methodCounts = [];
+        foreach ($payments as $p) {
+            if ($p['status'] !== 'verified' || !empty($p['covered_by_payment_id'])) continue;
+            $label = paymentMethodLabel($p['payment_method'] ?? 'gcash');
+            $methodCounts[$label] = ($methodCounts[$label] ?? 0) + 1;
+        }
+        arsort($methodCounts);
+        $usual = $methodCounts ? array_key_first($methodCounts) : null;
+        ?>
+        <div class="section-card shadow-sm">
+            <div class="section-header"><h6 class="section-title"><i class="fa-regular fa-credit-card text-primary me-2"></i>Payment Method</h6></div>
+            <div class="p-3">
+                <?php if ($usual === null): ?>
+                    <div class="text-muted" style="font-size:0.8rem;">No verified payments yet.</div>
+                <?php else: $isCash = $usual === 'Cash'; ?>
+                    <div class="method-box">
+                        <span class="method-icon <?= $isCash ? 'bg-success-subtle text-success' : 'bg-primary text-white' ?>"><i class="fa-solid <?= $isCash ? 'fa-money-bill-wave' : 'fa-g' ?>"></i></span>
+                        <div class="flex-grow-1 fw-semibold text-dark"><?= $isCash ? 'Cash' : 'GCash (Manual)' ?></div>
+                        <span class="soft-pill <?= $isCash ? 'bg-success-subtle text-success-emphasis' : 'bg-primary-subtle text-primary-emphasis' ?>"><?= $methodCounts[$usual] ?> <?= $methodCounts[$usual] === 1 ? 'payment' : 'payments' ?></span>
+                    </div>
+                    <?php foreach (array_slice($methodCounts, 1, null, true) as $label => $n): ?>
+                        <div class="d-flex justify-content-between mt-2" style="font-size:0.78rem;"><span class="text-muted">Also by <?= htmlspecialchars($label === 'GCash' ? 'GCash (Manual)' : $label) ?></span><span><?= $n ?> <?= $n === 1 ? 'payment' : 'payments' ?></span></div>
+                    <?php endforeach; ?>
+                <?php endif; ?>
+            </div>
+        </div>
         <!-- Deposit: held for the last month; the tenant can ask to use it -->
         <?php
         $depositUsed = depositAppliedThisStay($pdo, $tenant);
@@ -530,133 +682,6 @@ require_once 'header.php';
             </div>
         </div>
         
-    </div>
-    
-    <!-- Middle Column (45%) -->
-    <div class="col-lg-6">
-        
-        <!-- Recent Transactions -->
-        <div class="section-card shadow-sm">
-            <div class="section-header">
-                <h6 class="section-title">Recent Transactions</h6>
-                <a href="#transactions" onclick="document.getElementById('transactions-tab').click(); return false;" class="text-primary text-decoration-none" style="font-size:0.65rem; font-weight:600;">View All</a>
-            </div>
-            <div>
-                <?php if(empty($payments)): ?>
-                    <div class="p-4 text-center text-muted" style="font-size:0.75rem;">No transactions recorded.</div>
-                <?php else: ?>
-                    <?php foreach(array_slice($payments, 0, 4) as $p): 
-                        $isVerified = $p['status'] == 'verified';
-                        $iconClass = $isVerified ? 'fa-arrow-down text-success' : 'fa-clock text-warning';
-                        $bgClass = $isVerified ? 'bg-success bg-opacity-10' : 'bg-warning bg-opacity-10';
-                        $title = $isVerified ? 'Payment Received' : 'Payment Pending';
-                        $subtitle = date('F Y', strtotime($p['payment_date'])) . ' Rent';
-                        $badge = $isVerified ? '<span class="badge bg-success-subtle text-success border border-success-subtle">Paid</span>' : '<span class="badge bg-warning-subtle text-warning border border-warning-subtle">Pending</span>';
-                    ?>
-                    <div class="tx-item">
-                        <div class="d-flex align-items-center">
-                            <div class="tx-icon <?= $bgClass ?> me-3"><i class="fa-solid <?= $iconClass ?>"></i></div>
-                            <div>
-                                <div class="fw-bold text-dark" style="font-size:0.75rem;"><?= $title ?></div>
-                                <div class="text-muted" style="font-size:0.65rem;"><?= $subtitle ?></div>
-                            </div>
-                        </div>
-                        <div class="text-end">
-                            <div class="text-muted" style="font-size:0.6rem; margin-bottom:2px;"><?= date('M j, Y', strtotime($p['payment_date'])) ?></div>
-                            <div class="fw-bold <?= $isVerified ? 'text-success' : 'text-warning' ?>" style="font-size:0.75rem;">₱<?= number_format($p['amount'], 2) ?></div>
-                        </div>
-                        <div><?= $badge ?></div>
-                    </div>
-                    <?php endforeach; ?>
-                <?php endif; ?>
-            </div>
-        </div>
-        
-        <!-- Payment & Receipts -->
-        <div class="section-card shadow-sm">
-            <div class="section-header">
-                <h6 class="section-title">Payment & Receipts</h6>
-                <a href="#payments" onclick="document.getElementById('payments-tab').click(); return false;" class="text-primary text-decoration-none" style="font-size:0.65rem; font-weight:600;">View All Receipts</a>
-            </div>
-            <div class="receipt-scroll">
-                <?php if(empty($payments)): ?>
-                    <div class="text-muted w-100 text-center py-3" style="font-size:0.75rem;">No receipts available.</div>
-                <?php else: ?>
-                    <?php foreach($payments as $p): 
-                        if($p['status'] !== 'verified') continue;
-                    ?>
-                    <div class="receipt-card">
-                        <span class="badge bg-success-subtle text-success border border-success-subtle align-self-start mb-1" style="font-size:0.55rem;">Paid</span>
-                        <div class="receipt-thumb"><i class="fa-solid fa-file-invoice text-primary opacity-50 fs-3"></i></div>
-                        <div class="fw-bold text-dark mb-1" style="font-size:0.6rem;">Receipt No.<br>R-<?= str_pad($p['id'], 6, '0', STR_PAD_LEFT) ?></div>
-                        <div class="text-muted" style="font-size:0.55rem;">Date<br><span class="text-dark fw-semibold"><?= date('M j, Y', strtotime($p['payment_date'])) ?></span></div>
-                        <div class="text-muted mt-1" style="font-size:0.55rem;">Amount<br><span class="text-dark fw-bold">₱<?= number_format($p['amount'], 2) ?></span></div>
-                        <a href="<?= htmlspecialchars(uploadSrc($p['receipt_path'] ?? '', '../')) ?>" target="_blank" class="btn btn-outline-primary btn-sm w-100 mt-2 py-0" style="font-size:0.6rem;">View Receipt</a>
-                    </div>
-                    <?php endforeach; ?>
-                <?php endif; ?>
-            </div>
-        </div>
-        
-    </div>
-    
-    <!-- Right Column (25%) -->
-    <div class="col-lg-3">
-        
-        <!-- Balance Summary -->
-        <div class="section-card shadow-sm">
-            <div class="section-header"><h6 class="section-title"><i class="fa-solid fa-user text-muted me-2"></i>Balance Summary</h6></div>
-            <div class="p-3">
-                <div class="balance-row"><span class="text-muted">Total Charges</span><span class="fw-semibold">₱<?= number_format($totalCharges, 2) ?></span></div>
-                <div class="balance-row"><span class="text-muted">Total Payments</span><span class="fw-semibold text-success">₱<?= number_format($totalPayments, 2) ?></span></div>
-                <div class="balance-row"><span class="text-muted">Overdue</span><span class="fw-semibold <?= $billing['overdue'] > 0 ? 'text-danger' : '' ?>">₱<?= number_format($billing['overdue'], 2) ?></span></div>
-                <hr class="my-2 border-light">
-                <div class="d-flex justify-content-between align-items-center mt-2">
-                    <span class="fw-bold text-dark" style="font-size:0.75rem;">Current Balance</span>
-                    <span class="fw-bold <?= $currentBalance > 0 ? 'text-danger' : 'text-success' ?> fs-6">₱<?= number_format(abs($currentBalance), 2) ?><?= $currentBalance < 0 ? ' <span class="fw-semibold" style="font-size:0.7rem;">' . ($isDeactivated ? 'to refund' : 'credit') . '</span>' : '' ?></span>
-                </div>
-                <?php if ($ledgerMismatch): ?>
-                    <div class="alert alert-warning border-0 py-1 px-2 mt-2 mb-0" style="font-size:0.62rem;">
-                        <i class="fa-solid fa-triangle-exclamation me-1"></i>Ledger total (₱<?= number_format($ledgerBalance, 2) ?>) doesn't match the stored balance. Please review this account.
-                    </div>
-                <?php endif; ?>
-            </div>
-        </div>
-        
-        <!-- How this tenant pays -->
-        <?php
-        $methodCounts = [];
-        foreach ($payments as $p) {
-            if ($p['status'] !== 'verified' || !empty($p['covered_by_payment_id'])) continue;
-            $label = paymentMethodLabel($p['payment_method'] ?? 'gcash');
-            $methodCounts[$label] = ($methodCounts[$label] ?? 0) + 1;
-        }
-        arsort($methodCounts);
-        $lastPaid = null;
-        foreach ($payments as $p) {
-            if ($p['status'] === 'verified') { $lastPaid = $p; break; }
-        }
-        ?>
-        <div class="section-card shadow-sm">
-            <div class="section-header"><h6 class="section-title"><i class="fa-solid fa-wallet text-muted me-2"></i>Payment Method</h6></div>
-            <div class="p-3" style="font-size:0.7rem;">
-                <?php if (!$methodCounts): ?>
-                    <span class="text-muted">No verified payments yet.</span>
-                <?php else: ?>
-                    <div class="d-flex justify-content-between align-items-center mb-2">
-                        <span class="text-muted">Usually pays by</span>
-                        <span class="fw-bold text-primary"><?= htmlspecialchars(array_key_first($methodCounts)) ?></span>
-                    </div>
-                    <?php foreach ($methodCounts as $label => $n): ?>
-                    <div class="d-flex justify-content-between mb-1"><span class="text-muted"><?= htmlspecialchars($label) ?></span><span><?= $n ?> <?= $n === 1 ? 'payment' : 'payments' ?></span></div>
-                    <?php endforeach; ?>
-                    <?php if ($lastPaid): ?>
-                    <div class="d-flex justify-content-between mt-2 pt-2 border-top"><span class="text-muted">Last payment</span><span class="fw-semibold">₱<?= number_format((float)$lastPaid['amount'], 2) ?> · <?= date('M j, Y', strtotime($lastPaid['payment_date'])) ?></span></div>
-                    <?php endif; ?>
-                <?php endif; ?>
-            </div>
-        </div>
-
         <!-- Notes: the admin's own, not shown to the tenant -->
         <div class="section-card shadow-sm" id="notes">
             <div class="section-header">
@@ -775,7 +800,11 @@ require_once 'header.php';
                                 <td class="text-muted" style="font-size:0.7rem;">RCP-<?= str_pad($vp['id'], 6, '0', STR_PAD_LEFT) ?></td>
                                 <td class="fw-bold text-dark" style="font-size:0.7rem;">PHP <?= number_format($vp['amount'], 2) ?></td>
                                 <td class="text-end">
-                                    <button class="btn btn-sm btn-outline-primary py-0 px-2" style="font-size:0.65rem;"><i class="fa-solid fa-download me-1"></i> Download</button>
+                                    <?php if (!empty($vp['receipt_path'])): ?>
+                                    <a href="<?= htmlspecialchars(uploadSrc($vp['receipt_path'], '../')) ?>" target="_blank" rel="noopener" class="btn btn-sm btn-outline-primary py-0 px-2" style="font-size:0.65rem;"><i class="fa-solid fa-download me-1"></i> Download</a>
+                                    <?php else: ?>
+                                    <span class="text-muted" style="font-size:0.65rem;">No file</span>
+                                    <?php endif; ?>
                                 </td>
                             </tr>
                         <?php endforeach; endif; ?>
@@ -818,6 +847,56 @@ require_once 'header.php';
                         <?php endforeach; ?>
                     </tbody>
                 </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- DOCUMENTS TAB -->
+    <div class="tab-pane fade <?= $openTab === 'documents' ? 'show active' : '' ?>" id="documents" role="tabpanel" aria-labelledby="documents-tab">
+        <div class="row g-3">
+            <div class="col-lg-5 order-lg-2">
+                <div class="section-card shadow-sm">
+                    <div class="section-header"><h6 class="section-title"><i class="fa-solid fa-upload text-primary me-2"></i>Add a Document</h6></div>
+                    <form method="POST" enctype="multipart/form-data" class="p-3 form-compact">
+                        <input type="hidden" name="action" value="upload_document">
+                        <input type="hidden" name="tenant_id" value="<?= $tenantId ?>">
+                        <?php if ($docError): ?><div class="alert alert-danger py-2 px-3" style="font-size:0.78rem;"><?= htmlspecialchars($docError) ?></div><?php endif; ?>
+                        <?php if ($docMessage): ?><div class="alert alert-success py-2 px-3" style="font-size:0.78rem;"><?= htmlspecialchars($docMessage) ?></div><?php endif; ?>
+                        <div class="mb-2">
+                            <label for="docTitle">Name</label>
+                            <input type="text" id="docTitle" name="title" class="form-control" maxlength="120" required placeholder="e.g. Valid ID, Lease contract" value="<?= $docError ? htmlspecialchars($_POST['title'] ?? '') : '' ?>">
+                        </div>
+                        <div class="mb-3">
+                            <label for="docFile">File</label>
+                            <input type="file" id="docFile" name="document" class="form-control" required accept="image/jpeg,image/png,image/webp,application/pdf">
+                            <div class="form-text" style="font-size:0.7rem;">Photo (JPG, PNG, WEBP) or PDF, up to 5MB. The tenant doesn't see these here.</div>
+                        </div>
+                        <button type="submit" class="btn btn-primary btn-sm w-100"><i class="fa-solid fa-upload me-1"></i>Upload</button>
+                    </form>
+                </div>
+            </div>
+            <div class="col-lg-7 order-lg-1">
+                <div class="section-card shadow-sm">
+                    <div class="section-header"><h6 class="section-title"><i class="fa-regular fa-folder-open text-primary me-2"></i>Documents</h6></div>
+                    <?php if (!$documents): ?>
+                        <div class="empty-state"><span><i class="fa-regular fa-file"></i></span><div class="fw-semibold text-dark">No documents yet.</div><div>Keep a copy of the tenant's ID or signed contract here.</div></div>
+                    <?php else: foreach ($documents as $d): $isPdf = $d['file_type'] === 'pdf'; ?>
+                        <div class="doc-row">
+                            <span class="doc-icon <?= $isPdf ? 'bg-danger-subtle text-danger' : 'bg-primary-subtle text-primary' ?>"><i class="fa-regular <?= $isPdf ? 'fa-file-pdf' : 'fa-file-image' ?>"></i></span>
+                            <div class="flex-grow-1" style="min-width:0;">
+                                <div class="fw-semibold text-dark text-truncate"><?= htmlspecialchars($d['title']) ?></div>
+                                <div class="text-muted" style="font-size:0.7rem;"><?= strtoupper(htmlspecialchars($d['file_type'])) ?><?= $d['uploaded_at'] ? ' · Added ' . date('M j, Y', strtotime($d['uploaded_at'])) : '' ?></div>
+                            </div>
+                            <a href="<?= htmlspecialchars(uploadSrc($d['file_path'], '../')) ?>" target="_blank" rel="noopener" class="btn btn-sm btn-outline-primary py-0 px-2" style="font-size:0.7rem;">View</a>
+                            <form method="POST" class="m-0" onsubmit="return confirm('Delete this document?');">
+                                <input type="hidden" name="action" value="delete_document">
+                                <input type="hidden" name="tenant_id" value="<?= $tenantId ?>">
+                                <input type="hidden" name="document_id" value="<?= (int)$d['id'] ?>">
+                                <button type="submit" class="btn btn-sm btn-outline-danger py-0 px-2" style="font-size:0.7rem;" aria-label="Delete <?= htmlspecialchars($d['title']) ?>"><i class="fa-regular fa-trash-can"></i></button>
+                            </form>
+                        </div>
+                    <?php endforeach; endif; ?>
+                </div>
             </div>
         </div>
     </div>

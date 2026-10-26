@@ -25,6 +25,26 @@ function allowedImageTypes(): array {
  *               path is a public URL (Supabase) or a project-relative path (local).
  */
 function storeUploadedImage(array $file, string $folder): array {
+    return storeUploadedFile($file, $folder, allowedImageTypes(), 'The file must be an image (JPG, PNG, WEBP or GIF).');
+}
+
+/**
+ * A tenant document: an image (a photo of an ID) or a PDF (a contract). Images and PDFs go to
+ * different storage buckets (payments / receipts), each of which already holds that kind of file.
+ */
+function storeUploadedDocument(array $file): array {
+    $type = isset($file['tmp_name']) && is_file($file['tmp_name']) ? @mime_content_type($file['tmp_name']) : '';
+    $folder = $type === 'application/pdf' ? 'receipts/documents' : 'payments/documents';
+    $allowed = allowedImageTypes() + ['application/pdf' => 'pdf'];
+    unset($allowed['image/gif']);
+    return storeUploadedFile($file, $folder, $allowed, 'The file must be a photo (JPG, PNG, WEBP) or a PDF.');
+}
+
+/**
+ * Validate and store an uploaded file of one of the allowed types (MIME => extension).
+ * @return array ['path' => string|null, 'error' => string|null]
+ */
+function storeUploadedFile(array $file, string $folder, array $allowed, string $typeError): array {
     if (!isset($file['error']) || $file['error'] === UPLOAD_ERR_NO_FILE) {
         return ['path' => null, 'error' => null];   // nothing was chosen
     }
@@ -35,14 +55,13 @@ function storeUploadedImage(array $file, string $folder): array {
         return ['path' => null, 'error' => 'Invalid upload.'];
     }
     if ($file['size'] > UPLOAD_MAX_BYTES) {
-        return ['path' => null, 'error' => 'The image must be 5MB or smaller.'];
+        return ['path' => null, 'error' => 'The file must be 5MB or smaller.'];
     }
 
     // Trust the file's contents, never the name or the browser-supplied type.
     $mimeType = @mime_content_type($file['tmp_name']);
-    $allowed = allowedImageTypes();
     if (!isset($allowed[$mimeType])) {
-        return ['path' => null, 'error' => 'The file must be an image (JPG, PNG, WEBP or GIF).'];
+        return ['path' => null, 'error' => $typeError];
     }
 
     // We name the file ourselves, so a crafted filename can't put it anywhere unexpected
@@ -145,7 +164,7 @@ function deleteLocalUpload(?string $path): void {
     $path = trim((string)$path);
     if ($path === '' || preg_match('#^https?://#i', $path)) return;
     // Only ever touch files inside uploads/.
-    if (!preg_match('#^uploads/[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+$#', $path)) return;
+    if (!preg_match('#^uploads/[A-Za-z0-9_-]+/(?:[A-Za-z0-9_-]+/)?[A-Za-z0-9_.-]+$#', $path) || str_contains($path, '..')) return;
     $full = __DIR__ . '/../' . $path;
     if (is_file($full)) @unlink($full);
 }
