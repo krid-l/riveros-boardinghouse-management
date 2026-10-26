@@ -4,12 +4,10 @@ require_once '../includes/notifications.php';
 require_once '../includes/complaints.php';
 require_once '../includes/uploads.php';
 
-const TENANT_COMPLAINT_CATEGORIES = ['Maintenance & Repair', 'Noise Complaint', 'Cleanliness', 'Security', 'Others'];
-
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['subject'])) {
     $subject = mb_substr(trim((string)($_POST['subject'] ?? '')), 0, 100);
     $message = mb_substr(trim((string)($_POST['message'] ?? '')), 0, 500);
-    $category = in_array($_POST['category'] ?? '', TENANT_COMPLAINT_CATEGORIES, true) ? $_POST['category'] : 'Others';
+    $category = array_key_exists($_POST['category'] ?? '', COMPLAINT_CATEGORIES) ? $_POST['category'] : 'Others';
 
     if ($subject === '' || $message === '') {
         $error = 'Please fill in the subject and the details.';
@@ -139,7 +137,7 @@ $complaints = $stmt->fetchAll();
                 <div class="mb-3">
                     <label class="form-label-custom">Category</label>
                     <select name="category" class="form-control-custom w-100">
-                        <?php foreach (TENANT_COMPLAINT_CATEGORIES as $cat): ?>
+                        <?php foreach (array_keys(COMPLAINT_CATEGORIES) as $cat): ?>
                             <option <?= ($error ?? '') && ($_POST['category'] ?? '') === $cat ? 'selected' : '' ?>><?= htmlspecialchars($cat) ?></option>
                         <?php endforeach; ?>
                     </select>

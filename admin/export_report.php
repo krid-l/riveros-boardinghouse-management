@@ -15,8 +15,11 @@ $type = array_key_exists($_GET['type'] ?? '', REPORT_TYPES) ? $_GET['type'] : 'f
 $format = ($_GET['format'] ?? 'csv') === 'pdf' ? 'pdf' : 'csv';
 $usesRange = REPORT_TYPES[$type][1];
 
-// No dates given: from the first payment ever (all time) to today.
-$firstDay = $pdo->query("SELECT MIN(payment_date) FROM payments")->fetchColumn() ?: date('Y-m-01');
+// No dates given: all time, from the first payment (or complaint) ever to today.
+$firstDay = $type === 'complaints'
+    ? $pdo->query("SELECT MIN(created_at) FROM complaints")->fetchColumn()
+    : $pdo->query("SELECT MIN(payment_date) FROM payments")->fetchColumn();
+$firstDay = $firstDay ? date('Y-m-d', strtotime($firstDay)) : date('Y-m-01');
 $from = reportDate($_GET['from'] ?? null, $firstDay);
 $to = reportDate($_GET['to'] ?? null, date('Y-m-d'));
 if ($from > $to) {

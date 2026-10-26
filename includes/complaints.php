@@ -7,9 +7,18 @@
 
 const COMPLAINT_PRIORITIES = [
     // value  => [label,   colour]
-    'low'    => ['Low',    'secondary'],
-    'normal' => ['Normal', 'primary'],
+    'low'    => ['Low',    'success'],
+    'normal' => ['Medium', 'warning'],
     'high'   => ['High',   'danger'],
+];
+
+/** What tenants can complain about, with an icon for each. */
+const COMPLAINT_CATEGORIES = [
+    'Maintenance & Repair' => 'fa-screwdriver-wrench',
+    'Noise Complaint'      => 'fa-volume-high',
+    'Cleanliness'          => 'fa-broom',
+    'Security'             => 'fa-shield-halved',
+    'Others'               => 'fa-ellipsis',
 ];
 
 const COMPLAINT_PENDING_SQL = "c.status <> 'resolved' AND (c.admin_response IS NULL OR c.admin_response = '')";
