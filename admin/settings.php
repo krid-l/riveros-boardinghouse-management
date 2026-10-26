@@ -54,6 +54,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         updateSetting($pdo, 'gcash_name', $_POST['gcash_name'] ?? '');
         updateSetting($pdo, 'gcash_number', $_POST['gcash_number'] ?? '');
         updateSetting($pdo, 'gcash_instructions', $_POST['gcash_instructions'] ?? '');
+        $minPay = $_POST['min_payment_amount'] ?? '';
+        if (is_numeric($minPay) && (float)$minPay >= 0) {
+            updateSetting($pdo, 'min_payment_amount', (string)round((float)$minPay, 2));
+        }
         $success = 'Payment settings saved successfully.';
 
         // GCash QR code image. Tenants see it on the payment page.
@@ -69,6 +73,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $success = 'Payment settings and GCash QR code saved successfully.';
             }
         }
+    } elseif ($action === 'update_recovery') {
+        // Where a "Forgot password?" code for this admin is texted.
+        $mobile = trim((string)($_POST['recovery_mobile'] ?? ''));
+        if ($mobile !== '' && !normalizePhMobile($mobile)) {
+            $error = 'Enter a Philippine mobile number, like 0917 123 4567.';
+        } else {
+            $pdo->prepare("UPDATE users SET recovery_mobile = ? WHERE id = ?")->execute([$mobile !== '' ? $mobile : null, $_SESSION['user_id']]);
+            $success = $mobile !== ''
+                ? 'Recovery mobile number saved. "Forgot password?" codes will be texted to it.'
+                : 'Recovery mobile number removed.';
+        }
+    } elseif ($action === 'update_login_bg') {
+        // Photo behind the login page. Kept with the other site images (the "qr" folder, which
+        // already exists as a storage bucket on the deployed site).
+        $upload = isset($_FILES['login_bg']) ? storeUploadedImage($_FILES['login_bg'], 'qr') : ['path' => null, 'error' => null];
+        if ($upload['error']) {
+            $error = $upload['error'];
+        } elseif ($upload['path']) {
+            deleteLocalUpload(readSetting($pdo, 'login_bg_path'));
+            updateSetting($pdo, 'login_bg_path', $upload['path']);
+            $success = 'Login page background updated.';
+        } else {
+            $error = 'Choose an image to upload.';
+        }
+    } elseif ($action === 'delete_login_bg') {
+        deleteLocalUpload(readSetting($pdo, 'login_bg_path'));
+        updateSetting($pdo, 'login_bg_path', '');
+        $success = 'Login page background removed; the default design is back.';
     } elseif ($action === 'delete_qr') {
         deleteLocalUpload(readSetting($pdo, 'gcash_qr_path'));
         updateSetting($pdo, 'gcash_qr_path', '');
@@ -124,12 +156,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         updateSetting($pdo, 'address', $_POST['address'] ?? '');
         updateSetting($pdo, 'contact_number', $_POST['contact_number'] ?? '');
         $success = 'Business information updated successfully.';
-    } elseif ($action === 'update_prefs') {
-        updateSetting($pdo, 'rent_due_date', $_POST['rent_due_date'] ?? '');
-        updateSetting($pdo, 'currency', $_POST['currency'] ?? '');
-        updateSetting($pdo, 'date_format', $_POST['date_format'] ?? '');
-        updateSetting($pdo, 'time_zone', $_POST['time_zone'] ?? '');
-        $success = 'System preferences updated successfully.';
     }
 }
 
@@ -150,6 +176,7 @@ $s = function($key) use ($settingsMap) {
 
 // GCash QR code: a Supabase URL when deployed, an uploads/ path when run locally.
 $qrSrc = uploadSrc($settingsMap['gcash_qr_path'] ?? '', '../');
+$loginBgSrc = uploadSrc($settingsMap['login_bg_path'] ?? '', '../');   // null: the default photo is used
 
 // SMS: whether a token is saved (the token itself never goes back to the browser), and the
 // latest texts, so the admin can see what went out and why anything didn't.
@@ -161,10 +188,13 @@ $smsLog = $pdo->query("SELECT l.*, t.first_name, t.last_name FROM sms_log l
                        ORDER BY l.created_at DESC, l.id DESC LIMIT 15")->fetchAll();
 $smsPurposeLabels = [
     'payment_verified' => 'Payment verified', 'payment_covered' => 'Paid by roommate', 'move_in_payment' => 'Move-in payment',
-    'payment_rejected' => 'Payment rejected', 'reminder_due' => 'Rent due soon',
-    'reminder_overdue' => 'Rent overdue', 'announcement' => 'Announcement', 'test' => 'Test',
+    'password_reset' => 'Password reset code', 'registration' => 'Welcome / login details',
+    'payment_rejected' => 'Payment rejected', 'reminder_due' => 'Rent due soon', 'reminder_due_today' => 'Rent due today',
+    'reminder_overdue' => 'Rent overdue', 'announcement' => 'Announcement', 'test' => 'Test', 'deposit_request' => 'Deposit request answer',
 ];
 $qrUploadedAt = $settingsMap['gcash_qr_uploaded_at'] ?? '';
+require_once '../includes/daily_jobs.php';
+$lastAutoRun = lastDailyRun($pdo);
 
 require_once 'header.php';
 ?>
@@ -291,6 +321,19 @@ require_once 'header.php';
                     </div>
                 </div>
             </form>
+            <form method="POST" class="settings-body border-top">
+                <input type="hidden" name="action" value="update_recovery">
+                <div class="row g-2 align-items-end">
+                    <div class="col-md-7">
+                        <label class="form-label">Recovery Mobile Number</label>
+                        <input type="text" name="recovery_mobile" class="form-control" value="<?= htmlspecialchars($user['recovery_mobile'] ?? '') ?>" placeholder="e.g., 0917 123 4567">
+                        <div class="form-text">If you forget your password, a reset code is texted here (needs SMS set up).</div>
+                    </div>
+                    <div class="col-md-5 text-md-end">
+                        <button type="submit" class="btn btn-outline-primary btn-save"><i class="fa-solid fa-mobile-screen me-1"></i>Save Number</button>
+                    </div>
+                </div>
+            </form>
         </div>
         
         <!-- GCash Payment Information -->
@@ -307,11 +350,11 @@ require_once 'header.php';
                     <div class="row g-3 mb-3">
                         <div class="col-md-4">
                             <label class="form-label">GCash Registered Name</label>
-                            <input type="text" class="form-control" name="gcash_name" value="<?= $s('gcash_name') ?>">
+                            <input type="text" class="form-control" name="gcash_name" value="<?= $s('gcash_name') ?>" placeholder="e.g., Juan D.">
                         </div>
                         <div class="col-md-4">
                             <label class="form-label">GCash Mobile Number</label>
-                            <input type="text" class="form-control" name="gcash_number" value="<?= $s('gcash_number') ?>">
+                            <input type="text" class="form-control" name="gcash_number" value="<?= $s('gcash_number') ?>" placeholder="e.g., 0917 123 4567">
                         </div>
                         <div class="col-md-4">
                             <label class="form-label">GCash QR Code (Optional)</label>
@@ -341,15 +384,27 @@ require_once 'header.php';
                         </div>
                     </div>
                     
-                    <div class="mb-3">
-                        <label class="form-label">Payment Instructions (Shown to Tenants)</label>
-                        <textarea class="form-control" name="gcash_instructions" rows="2"><?= $s('gcash_instructions') ?></textarea>
+                    <div class="row g-3 mb-3">
+                        <div class="col-md-8">
+                            <label class="form-label">Payment Instructions (Shown to Tenants)</label>
+                            <textarea class="form-control" name="gcash_instructions" rows="2" placeholder="e.g., Send the exact amount, then upload the screenshot with the reference number showing."><?= $s('gcash_instructions') ?></textarea>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">Minimum Payment (PHP)</label>
+                            <input type="number" class="form-control" name="min_payment_amount" min="0" step="0.01" value="<?= htmlspecialchars((string)minimumPayment($pdo)) ?>">
+                            <div class="form-text">Tenants can't submit less, unless what they owe is less.</div>
+                        </div>
                     </div>
                     
                     <div class="d-flex justify-content-between align-items-center border-top pt-3 mt-1">
                         <div class="d-flex align-items-center">
+                            <?php if (trim((string)($settingsMap['gcash_number'] ?? '')) !== ''): ?>
                             <span class="badge-active me-2"><i class="fa-solid fa-circle-check me-1"></i> Active</span>
-                            <span class="text-muted" style="font-size:0.65rem;">Tenants can view this payment information.</span>
+                            <span class="text-muted" style="font-size:0.65rem;">Tenants see this on their payment page.</span>
+                            <?php else: ?>
+                            <span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle me-2">Not set</span>
+                            <span class="text-muted" style="font-size:0.65rem;">Add your GCash number so tenants know where to pay.</span>
+                            <?php endif; ?>
                         </div>
                         <button type="submit" class="btn btn-primary btn-save shadow-sm"><i class="fa-regular fa-floppy-disk me-2" style="font-size:0.65rem;"></i>Save Payment Settings</button>
                     </div>
@@ -364,7 +419,7 @@ require_once 'header.php';
                 <div class="settings-header">
                     <div>
                         <h6 class="card-title-lg"><i class="fa-solid fa-comment-sms icon-header text-primary"></i> SMS Notifications (PhilSMS)</h6>
-                        <div class="card-subtitle-sm">Texts tenants when payments are verified or rejected, rent reminders, and announcements.</div>
+                        <div class="card-subtitle-sm">Texts tenants their login details, payment confirmations, automatic rent reminders and announcements.</div>
                     </div>
                     <?php if ($smsTokenSaved || $smsTokenFromEnv): ?>
                         <span class="badge badge-soft-success align-self-start"><i class="fa-solid fa-circle-check me-1"></i>Set up</span>
@@ -430,6 +485,24 @@ require_once 'header.php';
             </div>
 
             <div class="settings-body border-top">
+                <div class="d-flex gap-3 align-items-start">
+                    <div class="bg-primary bg-opacity-10 text-primary rounded-3 d-flex align-items-center justify-content-center flex-shrink-0" style="width: 36px; height: 36px;"><i class="fa-solid fa-clock-rotate-left"></i></div>
+                    <div style="font-size: 0.78rem;">
+                        <div class="fw-semibold text-dark">Automatic rent reminders</div>
+                        <div class="text-muted">Every day from <?= date('g A', mktime(DAILY_JOBS_HOUR, 0)) ?>, tenants are texted <?= REMINDER_DAYS_BEFORE ?> days before their rent is due, again on the due date, and once a week while it is overdue. Nobody gets the same reminder twice.</div>
+                        <div class="mt-1 <?= $lastAutoRun ? 'text-dark' : 'text-muted' ?>">
+                            <?php if ($lastAutoRun): ?>
+                                Last run: <strong><?= date('M j, Y g:i A', strtotime($lastAutoRun['at'])) ?></strong>
+                                · <?= $lastAutoRun['sent'] ?> sent<?= $lastAutoRun['not_sent'] ? ' · <span class="text-danger">' . $lastAutoRun['not_sent'] . ' not sent</span>' : '' ?>
+                            <?php else: ?>
+                                Hasn't run yet. It starts with the first page opened after <?= date('g A', mktime(DAILY_JOBS_HOUR, 0)) ?>.
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="settings-body border-top">
                 <div class="fw-semibold text-dark mb-2" style="font-size: 0.8rem;">Recent SMS</div>
                 <?php if (empty($smsLog)): ?>
                     <div class="text-muted small">No texts yet.</div>
@@ -481,7 +554,7 @@ require_once 'header.php';
                 <div class="settings-header">
                     <div>
                         <h6 class="card-title-lg"><i class="fa-regular fa-building icon-header text-primary"></i> Business Information</h6>
-                        <div class="card-subtitle-sm">Update your boarding house details.</div>
+                        <div class="card-subtitle-sm">Shown on receipts, exported reports and text messages.</div>
                     </div>
                 </div>
                 <div class="settings-body pt-2">
@@ -491,17 +564,45 @@ require_once 'header.php';
                     </div>
                     <div class="mb-2">
                         <label class="form-label">Address</label>
-                        <textarea name="address" class="form-control" rows="2"><?= $s('address') ?></textarea>
+                        <textarea name="address" class="form-control" rows="2" placeholder="Street, barangay, town / city, province"><?= $s('address') ?></textarea>
                     </div>
                     <div class="mb-3">
                         <label class="form-label">Contact Number</label>
-                        <input type="text" name="contact_number" class="form-control" value="<?= $s('contact_number') ?>">
+                        <input type="text" name="contact_number" class="form-control" value="<?= $s('contact_number') ?>" placeholder="e.g., 0917 123 4567">
                     </div>
                     <button type="submit" class="btn btn-primary btn-save shadow-sm w-100"><i class="fa-regular fa-floppy-disk me-2" style="font-size:0.65rem;"></i>Update Information</button>
                 </div>
             </form>
         </div>
         
+        <!-- Login Page -->
+        <div class="settings-card shadow-sm" id="login-page">
+            <form method="POST" enctype="multipart/form-data">
+                <input type="hidden" name="action" value="update_login_bg">
+                <div class="settings-header">
+                    <div>
+                        <h6 class="card-title-lg"><i class="fa-regular fa-image icon-header text-primary"></i> Login Page</h6>
+                        <div class="card-subtitle-sm">The photo shown behind the login form, e.g. your boarding house.</div>
+                    </div>
+                </div>
+                <div class="settings-body pt-2">
+                    <div class="rounded-3 border mb-2 d-flex align-items-center justify-content-center bg-light" style="height: 130px; overflow: hidden;">
+                        <img src="<?= htmlspecialchars($loginBgSrc ?: '../' . DEFAULT_LOGIN_BG) ?>" alt="Login page background" style="width: 100%; height: 100%; object-fit: cover;">
+                    </div>
+                    <div class="form-text mb-2"><?= $loginBgSrc ? 'Your uploaded photo.' : 'The default boarding house photo. Upload one to replace it.' ?></div>
+                    <input type="file" name="login_bg" class="form-control mb-1" accept="image/png,image/jpeg,image/webp" required>
+                    <div class="form-text mb-2">JPG, PNG or WebP, up to 5MB. A wide photo works best.</div>
+                    <button type="submit" class="btn btn-primary btn-save shadow-sm w-100"><i class="fa-solid fa-upload me-2" style="font-size:0.65rem;"></i>Upload Background</button>
+                </div>
+            </form>
+            <?php if ($loginBgSrc): ?>
+            <form method="POST" class="px-4 pb-3 text-center" onsubmit="return confirm('Remove your photo and go back to the default one?');">
+                <input type="hidden" name="action" value="delete_login_bg">
+                <button type="submit" class="btn btn-link text-danger text-decoration-none p-0" style="font-size:0.75rem;">Remove photo (use the default)</button>
+            </form>
+            <?php endif; ?>
+        </div>
+
         <!-- Account Information -->
         <div class="settings-card shadow-sm">
             <div class="settings-header">
@@ -515,15 +616,17 @@ require_once 'header.php';
                     <span class="text-dark">Administrator</span>
                 </div>
                 <div class="info-row">
+                    <span class="text-muted fw-semibold">Account Created</span>
+                    <span class="text-dark"><?= !empty($user['created_at']) ? date('M j, Y', strtotime($user['created_at'])) : '—' ?></span>
+                </div>
+                <div class="info-row">
                     <span class="text-muted fw-semibold">Last Login</span>
-                    <span class="text-dark">Aug 26, 2025 10:30 AM</span>
+                    <span class="text-dark"><?= !empty($user['last_login_at']) ? date('M j, Y g:i A', strtotime($user['last_login_at'])) : '—' ?></span>
                 </div>
-                <div class="info-row mb-4">
-                    <span class="text-muted fw-semibold">Account Status</span>
-                    <span class="badge-active px-2 py-1">Active</span>
+                <div class="info-row">
+                    <span class="text-muted fw-semibold">Recovery Mobile</span>
+                    <span class="text-dark"><?= ($rm = normalizePhMobile($user['recovery_mobile'] ?? '')) ? formatPhMobile($rm) : '<span class="text-muted">Not set</span>' ?></span>
                 </div>
-                
-                <button class="btn btn-outline-danger shadow-none w-100 py-2 rounded-2 fw-semibold" style="font-size:0.7rem; border-color: #fca5a5; color: #ef4444;"><i class="fa-regular fa-trash-can me-2"></i>Deactivate Account</button>
             </div>
         </div>
         

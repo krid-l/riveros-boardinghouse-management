@@ -4,6 +4,9 @@ require_once '../includes/auth.php';
 require_once '../includes/billing.php';
 require_once '../includes/tenant_actions.php';
 require_once '../includes/pagination.php';
+require_once '../includes/sms_reminders.php';   // REMINDER_DAYS_BEFORE, for "due soon"
+require_once '../includes/ui.php';
+require_once '../includes/tenant_profile.php';
 requireAdmin();
 
 $error = '';
@@ -21,7 +24,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 }
 // After a failed add, the pop-up opens again with what was typed.
 $addOld = ($_SERVER['REQUEST_METHOD'] === 'POST' && ($action ?? '') === 'add' && !empty($error)) ? $_POST : [];
-// The dashboard's "Add Tenant" button links here with ?add=1.
+// The dashboard's "Add Tenant" button links here with ?add=1 (and a room's details with &room=id).
 $openAddModal = $addOld || queryParam('add') === '1';
 if (empty($success) && !empty($_GET['msg'])) {
     $success = htmlspecialchars($_GET['msg'] ?? '');
@@ -30,8 +33,20 @@ if (empty($success) && !empty($_GET['msg'])) {
 // Fetch stats
 $totalTenants = $pdo->query("SELECT COUNT(*) FROM tenants WHERE status = 'active'")->fetchColumn();
 $occupiedRooms = $pdo->query("SELECT COUNT(DISTINCT room_id) FROM tenants WHERE room_id IS NOT NULL AND status = 'active'")->fetchColumn();
-// Includes deactivated tenants who still owe money: it's still money owed to the house.
-$totalOutstanding = $pdo->query("SELECT SUM(CASE WHEN balance > 0 THEN balance ELSE 0 END) FROM tenants")->fetchColumn() ?: 0;
+
+// Active tenants by billing state, for the summary cards (each one filters the list).
+$tenantCounts = ['paid' => 0, 'due' => 0, 'overdue' => 0];
+$tenantAmounts = ['due' => 0.0, 'overdue' => 0.0];
+$cardNotYetDue = chargesNotYetDue($pdo);
+foreach ($pdo->query("SELECT id, balance, status FROM tenants WHERE status = 'active'")->fetchAll() as $t) {
+    $billing = tenantBillingStatus($t, $cardNotYetDue);
+    $tenantCounts[$billing['key']]++;
+    if ($billing['key'] === 'overdue') {
+        $tenantAmounts['overdue'] += $billing['balance'];
+    } elseif ($billing['key'] === 'due') {
+        $tenantAmounts['due'] += $billing['balance'];
+    }
+}
 
 // Total paid this month
 $monthStart = date('Y-m-01');
@@ -49,7 +64,7 @@ $filterStatus = queryParam('status', 'all') ?: 'all';
 // Deactivated tenants are hidden by default: they are former tenants and just clutter the
 // list. The "Show deactivated" button brings them back with ?deactivated=1, and picking
 // Deactivated from the status dropdown obviously has to show them too.
-$showDeactivated = queryParam('deactivated') === '1' || $filterStatus === 'deactivated';
+$showDeactivated = queryParam('deactivated') === '1' || $filterStatus === 'deactivated' || $filterStatus === 'unpaid';
 
 // not_yet_due is the part of a tenant's balance that isn't past its due date yet. It is what
 // tenantBillingStatus() uses to tell "Unpaid" from "Overdue", expressed here so the same
@@ -83,6 +98,15 @@ switch ($filterStatus) {
         $where[] = "x.status = 'active' AND x.balance > 0 AND (x.balance - x.not_yet_due) > 0.005"; break;
     case 'due':
         $where[] = "x.status = 'active' AND x.balance > 0 AND (x.balance - x.not_yet_due) <= 0.005"; break;
+    case 'due_soon':
+        // Nothing late yet, and a bill falls due within the reminder window.
+        $where[] = "x.status = 'active' AND x.balance > 0 AND (x.balance - x.not_yet_due) <= 0.005
+                    AND EXISTS (SELECT 1 FROM charges c WHERE c.tenant_id = x.id AND c.amount > 0 AND c.due_date BETWEEN ? AND ?)";
+        array_push($params, date('Y-m-d'), date('Y-m-d', strtotime('+' . REMINDER_DAYS_BEFORE . ' days')));
+        break;
+    case 'unpaid':
+        // Anyone who owes money, moved-out tenants included (the dashboard's "Total Unpaid Rent").
+        $where[] = "x.balance > 0"; break;
 }
 if (!$showDeactivated) {
     $where[] = "x.status <> 'deactivated'";
@@ -114,13 +138,15 @@ $tenants = $tenantsStmt->fetchAll();
 $notYetDue = chargesNotYetDue($pdo);
 
 // Fetch available rooms for the dropdown (only active tenants take up beds)
-$roomsStmt = $pdo->query("SELECT r.id, r.room_number, r.capacity, r.price_per_month, (SELECT COUNT(*) FROM tenants t WHERE t.room_id = r.id AND t.status = 'active') as occupied FROM rooms r");
+// Rooms under maintenance aren't offered at all.
+$roomsStmt = $pdo->query("SELECT r.id, r.room_number, r.capacity, r.price_per_month, (SELECT COUNT(*) FROM tenants t WHERE t.room_id = r.id AND t.status = 'active') as occupied FROM rooms r WHERE r.status <> 'maintenance'");
 $allRooms = $roomsStmt->fetchAll();
 usort($allRooms, fn($a, $b) => strnatcasecmp((string)$a['room_number'], (string)$b['room_number']));   // 1, 2, 10 - not 1, 10, 2
 
 require_once 'header.php';
 ?>
 
+<?php if (!empty($error) || !empty($success)): ?>
 <div class="container-fluid mb-3">
     <?php if (!empty($error)): ?>
         <div class="alert alert-danger alert-dismissible fade show shadow-sm border-0" role="alert" style="font-size: 0.85rem;">
@@ -135,6 +161,7 @@ require_once 'header.php';
         </div>
     <?php endif; ?>
 </div>
+<?php endif; ?>
 
 <style>
     .compact-table th {
@@ -161,16 +188,6 @@ require_once 'header.php';
         display: inline-block;
         margin-right: 4px;
     }
-    .form-compact label {
-        font-size: 0.75rem;
-        font-weight: 600;
-        color: #475569;
-        margin-bottom: 0.25rem;
-    }
-    .form-compact .form-control, .form-compact .form-select {
-        font-size: 0.8rem;
-        padding: 0.4rem 0.75rem;
-    }
     tr.tenant-row[data-href] { cursor: pointer; }
     tr.tenant-row[data-href] .row-actions { cursor: default; }
     tr.tenant-row[data-href]:hover .tenant-link { color: #2563eb !important; text-decoration: underline !important; }
@@ -179,64 +196,24 @@ require_once 'header.php';
 </style>
 
 <!-- Header Section -->
-<div class="row align-items-center mb-4">
-    <div class="col-xl-4 col-lg-5 mb-3 mb-lg-0">
-        <p class="text-muted mb-2" style="font-size: 0.85rem;">Add new tenants and manage existing tenant information.</p>
-        <button type="button" class="btn btn-primary shadow-sm fw-semibold px-4" data-bs-toggle="modal" data-bs-target="#addTenantModal">
-            <i class="fa-solid fa-user-plus me-2"></i> Add New Tenant
-        </button>
-    </div>
-    
-    <!-- Stats Cards in Header -->
-    <div class="col-xl-8 col-lg-7">
-        <div class="card border-0 shadow-sm rounded-3">
-            <div class="card-body p-0">
-                <div class="row g-0">
-                    <!-- Metric 1 -->
-                    <div class="col-6 col-md-3 p-2 d-flex align-items-center border-end border-light">
-                        <div class="bg-primary bg-opacity-10 text-primary rounded d-flex justify-content-center align-items-center me-2 me-xl-3 flex-shrink-0" style="width: 35px; height: 35px;">
-                            <i class="fa-solid fa-users"></i>
-                        </div>
-                        <div>
-                            <h5 class="mb-0 fw-bold text-dark fs-6"><?= $totalTenants ?></h5>
-                            <small class="text-muted" style="font-size:0.6rem; font-weight:600;">Total Tenants</small>
-                        </div>
-                    </div>
-                    <!-- Metric 2 -->
-                    <div class="col-6 col-md-3 p-2 d-flex align-items-center border-end border-light">
-                        <div class="bg-success bg-opacity-10 text-success rounded d-flex justify-content-center align-items-center me-2 me-xl-3 flex-shrink-0" style="width: 35px; height: 35px;">
-                            <i class="fa-solid fa-bed"></i>
-                        </div>
-                        <div>
-                            <h5 class="mb-0 fw-bold text-dark fs-6"><?= $occupiedRooms ?></h5>
-                            <small class="text-muted" style="font-size:0.6rem; font-weight:600;">Occupied Rooms</small>
-                        </div>
-                    </div>
-                    <!-- Metric 3 -->
-                    <div class="col-6 col-md-3 p-2 d-flex align-items-center border-end border-light">
-                        <div class="bg-danger bg-opacity-10 text-danger rounded d-flex justify-content-center align-items-center me-2 me-xl-3 flex-shrink-0" style="width: 35px; height: 35px;">
-                            <i class="fa-solid fa-wallet"></i>
-                        </div>
-                        <div>
-                            <h5 class="mb-0 fw-bold text-dark fs-6">₱<?= number_format($totalOutstanding, 2) ?></h5>
-                            <small class="text-muted" style="font-size:0.6rem; font-weight:600;">Total Unpaid Rent</small>
-                        </div>
-                    </div>
-                    <!-- Metric 4 -->
-                    <div class="col-6 col-md-3 p-2 d-flex align-items-center">
-                        <div class="bg-success bg-opacity-10 text-success rounded d-flex justify-content-center align-items-center me-2 me-xl-3 flex-shrink-0" style="width: 35px; height: 35px;">
-                            <i class="fa-solid fa-money-bill-trend-up"></i>
-                        </div>
-                        <div>
-                            <h5 class="mb-0 fw-bold text-dark fs-6">₱<?= number_format($totalPaidThisMonth, 2) ?></h5>
-                            <small class="text-muted" style="font-size:0.6rem; font-weight:600;">Paid (This Month)</small>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
+<div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+    <p class="text-muted mb-0" style="font-size: 0.85rem;">Add new tenants and manage existing tenant information.</p>
+    <button type="button" class="btn btn-primary shadow-sm fw-semibold px-4" data-bs-toggle="modal" data-bs-target="#addTenantModal">
+        <i class="fa-solid fa-user-plus me-2"></i> Add New Tenant
+    </button>
 </div>
+
+<!-- Summary cards: each one filters the list below -->
+<?= statCards([
+    ['label' => 'Active Tenants', 'value' => (int)$totalTenants, 'sub' => "In $occupiedRooms " . ((int)$occupiedRooms === 1 ? 'room' : 'rooms'),
+     'icon' => 'fa-solid fa-users', 'color' => 'primary', 'href' => 'tenants.php', 'active' => $filterStatus === 'all', 'aria' => 'Show all tenants'],
+    ['label' => 'Paid', 'value' => $tenantCounts['paid'], 'sub' => peso((float)$totalPaidThisMonth) . ' paid this month', 'subClass' => 'text-success',
+     'icon' => 'fa-solid fa-circle-check', 'color' => 'success', 'href' => 'tenants.php?status=paid', 'active' => $filterStatus === 'paid', 'aria' => 'Show tenants who are paid up'],
+    ['label' => 'Unpaid', 'value' => $tenantCounts['due'], 'sub' => peso($tenantAmounts['due']) . ' not yet due', 'subClass' => 'text-warning',
+     'icon' => 'fa-regular fa-clock', 'color' => 'warning', 'href' => 'tenants.php?status=due', 'active' => $filterStatus === 'due', 'aria' => 'Show tenants with rent not yet due'],
+    ['label' => 'Overdue', 'value' => $tenantCounts['overdue'], 'sub' => peso($tenantAmounts['overdue']) . ' owed', 'subClass' => $tenantCounts['overdue'] ? 'text-danger' : 'text-muted',
+     'icon' => 'fa-solid fa-triangle-exclamation', 'color' => 'danger', 'href' => 'tenants.php?status=overdue', 'active' => $filterStatus === 'overdue', 'aria' => 'Show overdue tenants'],
+]) ?>
 
 <!-- Main Content Grid -->
 <div class="row g-4">
@@ -268,7 +245,9 @@ require_once 'header.php';
                         <option value="all" <?= $filterStatus === 'all' ? 'selected' : '' ?>>All Status</option>
                         <option value="paid" <?= $filterStatus === 'paid' ? 'selected' : '' ?>>Paid</option>
                         <option value="due" <?= $filterStatus === 'due' ? 'selected' : '' ?>>Unpaid</option>
+                        <option value="due_soon" <?= $filterStatus === 'due_soon' ? 'selected' : '' ?>>Due in <?= REMINDER_DAYS_BEFORE ?> days</option>
                         <option value="overdue" <?= $filterStatus === 'overdue' ? 'selected' : '' ?>>Overdue</option>
+                        <option value="unpaid" <?= $filterStatus === 'unpaid' ? 'selected' : '' ?>>All unpaid</option>
                         <option value="deactivated" <?= $filterStatus === 'deactivated' ? 'selected' : '' ?>>Deactivated</option>
                     </select>
 
@@ -334,9 +313,7 @@ require_once 'header.php';
                                 'name' => $t['first_name'] . ' ' . $t['last_name'],
                                 'first_name' => $t['first_name'],
                                 'last_name' => $t['last_name'],
-                                'contact' => $t['contact_number'] ?? '',
-                                'occupation' => $t['occupation'] ?? '',
-                                'emergency_contact' => $t['emergency_contact'] ?? '',
+                                'profile' => array_combine(TENANT_PROFILE_COLUMNS, array_map(fn($c) => $t[$c] ?? '', TENANT_PROFILE_COLUMNS)),
                                 'room_id' => $t['room_id'] ? (int)$t['room_id'] : null,
                                 'room_number' => $t['room_number'],
                                 'has_move_in' => !empty($t['move_in_date']),
@@ -467,34 +444,11 @@ function moveInPaymentFields(string $id, bool $startHidden = false): string {
                         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                     </div>
                     <div class="modal-body p-4 form-compact">
-                    <div class="row g-4">
-                    <div class="col-md-6">
-                    <div class="small fw-bold text-muted text-uppercase mb-2" style="font-size:0.65rem; letter-spacing:0.5px;">Tenant details</div>
+                    <?= tenantProfileFormFields($addOld, 'add') ?>
 
-                    <div class="mb-2">
-                        <label>First Name</label>
-                        <input type="text" class="form-control" name="first_name" placeholder="e.g., Juan" value="<?= htmlspecialchars($addOld['first_name'] ?? '') ?>" required>
-                    </div>
-                    <div class="mb-2">
-                        <label>Last Name</label>
-                        <input type="text" class="form-control" name="last_name" placeholder="e.g., Dela Cruz" value="<?= htmlspecialchars($addOld['last_name'] ?? '') ?>" required>
-                    </div>
-                    <div class="mb-2">
-                        <label>Contact Number</label>
-                        <input type="text" class="form-control" name="contact_number" placeholder="e.g., 0912 345 6789" value="<?= htmlspecialchars($addOld['contact_number'] ?? '') ?>">
-                    </div>
-                    <div class="mb-2">
-                        <label>Occupation</label>
-                        <input type="text" class="form-control" name="occupation" placeholder="e.g., Student" value="<?= htmlspecialchars($addOld['occupation'] ?? '') ?>">
-                    </div>
-                    <div class="mb-2">
-                        <label>Emergency Contact</label>
-                        <input type="text" class="form-control" name="emergency_contact" placeholder="Name & Number" value="<?= htmlspecialchars($addOld['emergency_contact'] ?? '') ?>">
-                    </div>
-
-                    </div>
-                    <div class="col-md-6">
-                    <div class="small fw-bold text-muted text-uppercase mb-2" style="font-size:0.65rem; letter-spacing:0.5px;">Room &amp; move-in</div>
+                    <div class="profile-section-title">Room &amp; move-in</div>
+                    <div class="row g-2">
+                    <div class="col-sm-7">
                     <div class="mb-3">
                         <label>Assign Room <span class="text-muted fw-normal">(Optional)</span></label>
                         <select class="form-select" name="room_id">
@@ -512,19 +466,21 @@ function moveInPaymentFields(string $id, bool $startHidden = false): string {
                                         $label .= " (Avail: $avail | ₱" . number_format($share, 2) . " per tenant)";
                                     }
                                 ?>
-                                <option value="<?= $r['id'] ?>" <?= (int)($addOld['room_id'] ?? 0) === (int)$r['id'] && !$isFull ? 'selected' : '' ?> data-share="<?= $isFull ? '' : rentShare((float)$r['price_per_month'], (int)$r['capacity']) ?>" <?= $isFull ? 'disabled' : '' ?>><?= $label ?></option>
+                                <option value="<?= $r['id'] ?>" <?= (int)($addOld['room_id'] ?? queryParam('room', '0')) === (int)$r['id'] && !$isFull ? 'selected' : '' ?> data-share="<?= $isFull ? '' : rentShare((float)$r['price_per_month'], (int)$r['capacity']) ?>" <?= $isFull ? 'disabled' : '' ?>><?= $label ?></option>
                             <?php endforeach; ?>
                         </select>
                     </div>
+                    </div>
+                    <div class="col-sm-5">
                     <div class="mb-3">
                         <label>Move-in Date</label>
                         <input type="date" class="form-control" name="move_in_date" value="<?= htmlspecialchars($addOld['move_in_date'] ?? date('Y-m-d')) ?>">
                         <small class="text-muted d-block mt-1" style="font-size:0.62rem;">Used when a room is assigned. Day 1–15: full first month. Day 16+: half. Due every 30th.</small>
                     </div>
+                    </div>
+                    </div>
                     <?= moveInPaymentFields('add_movein', true) ?>
-                    <small class="text-muted d-block" style="font-size:0.65rem;"><i class="fa-solid fa-key me-1"></i>A username and password are created automatically and shown after saving.</small>
-                    </div>
-                    </div>
+                    <small class="text-muted d-block" style="font-size:0.65rem;"><i class="fa-solid fa-key me-1"></i>A username and temporary password are created automatically, shown after saving and texted to the tenant.</small>
                     </div>
                     <div class="modal-footer border-0 bg-light">
                         <button type="button" class="btn btn-light border" data-bs-dismiss="modal" style="font-size:0.8rem;">Cancel</button>
@@ -535,39 +491,20 @@ function moveInPaymentFields(string $id, bool $startHidden = false): string {
     </div>
 </div>
 
-<!-- Edit Tenant Modal -->
+<!-- Edit Tenant Modal: the same fields as Add Tenant (and the tenant's own Profile Settings) -->
 <div class="modal fade" id="editTenantModal" tabindex="-1">
-    <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
         <div class="modal-content border-0 shadow">
-            <form method="POST">
+            <form method="POST" id="editTenantForm">
                 <input type="hidden" name="action" value="edit">
                 <input type="hidden" name="tenant_id" id="edit_tenant_id">
                 <div class="modal-header bg-light border-0">
-                    <h6 class="modal-title fw-bold">Edit Tenant Details</h6>
+                    <h6 class="modal-title fw-bold"><i class="fa-solid fa-user-pen text-primary me-2"></i>Edit Tenant Details</h6>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body p-4 form-compact">
-                    <div class="mb-3">
-                        <label>First Name</label>
-                        <input type="text" class="form-control" name="first_name" id="edit_first_name" required>
-                    </div>
-                    <div class="mb-3">
-                        <label>Last Name</label>
-                        <input type="text" class="form-control" name="last_name" id="edit_last_name" required>
-                    </div>
-                    <div class="mb-3">
-                        <label>Contact Number</label>
-                        <input type="text" class="form-control" name="contact_number" id="edit_contact">
-                    </div>
-                    <div class="mb-3">
-                        <label>Occupation</label>
-                        <input type="text" class="form-control" name="occupation" id="edit_occupation">
-                    </div>
-                    <div class="mb-3">
-                        <label>Emergency Contact</label>
-                        <input type="text" class="form-control" name="emergency_contact" id="edit_emergency_contact">
-                    </div>
-                    <small class="text-muted" style="font-size:0.65rem;"><i class="fa-solid fa-circle-info me-1"></i>To move the tenant, use the <i class="fa-solid fa-right-left"></i> Change Room button.</small>
+                    <?= tenantProfileFormFields([], 'edit') ?>
+                    <small class="text-muted d-block mt-2" style="font-size:0.65rem;"><i class="fa-solid fa-circle-info me-1"></i>To move the tenant, use the <i class="fa-solid fa-right-left"></i> Change Room button.</small>
                 </div>
                 <div class="modal-footer border-0 bg-light">
                     <button type="button" class="btn btn-light border" data-bs-dismiss="modal" style="font-size:0.8rem;">Cancel</button>
@@ -742,11 +679,10 @@ function peso(n) {
 function openEditModal(btn) {
     const t = tenantData(btn);
     document.getElementById('edit_tenant_id').value = t.id;
-    document.getElementById('edit_first_name').value = t.first_name;
-    document.getElementById('edit_last_name').value = t.last_name;
-    document.getElementById('edit_contact').value = t.contact || '';
-    document.getElementById('edit_occupation').value = t.occupation || '';
-    document.getElementById('edit_emergency_contact').value = t.emergency_contact || '';
+    const form = document.getElementById('editTenantForm');
+    for (const [key, value] of Object.entries(t.profile)) {
+        if (form.elements[key]) form.elements[key].value = value ?? '';
+    }
     showModal('editTenantModal');
 }
 

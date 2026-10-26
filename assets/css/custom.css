@@ -172,3 +172,52 @@ body {
 @media (max-width: 767.98px) {
     .topbar .page-title { font-size: 1rem; }
 }
+
+/* Notification bell (admin top bar) */
+.notif-badge { font-size: 0.6rem; padding: 0.25em 0.45em; }
+.notif-panel { width: 340px; max-width: calc(100vw - 24px); border-radius: 12px; overflow: hidden; }
+.notif-list { max-height: 360px; overflow-y: auto; }
+.notif-item { color: #1e293b; border-bottom: 1px solid #f1f5f9; }
+.notif-item:last-child { border-bottom: 0; }
+.notif-item:hover { background: #f8fafc; }
+.notif-item.unread { background: #eff6ff; }
+.notif-item.unread:hover { background: #e0edff; }
+.notif-icon { width: 32px; height: 32px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 0.8rem; }
+.notif-title { font-size: 0.8rem; font-weight: 600; line-height: 1.25; }
+.notif-item.unread .notif-title { font-weight: 700; }
+.notif-msg { font-size: 0.72rem; color: #64748b; }
+.notif-time { font-size: 0.68rem; color: #94a3b8; margin-top: 2px; }
+.notif-dot { width: 8px; height: 8px; border-radius: 50%; background: #2563eb; margin-top: 6px; }
+
+/* Summary cards: one size on every admin page (includes/ui.php statCards()) */
+.stat-card { border: 1px solid #eef2f7 !important; min-height: 112px; transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s; }
+.stat-card:hover { transform: translateY(-2px); box-shadow: 0 6px 14px -6px rgba(15, 23, 42, 0.12) !important; border-color: #bfdbfe !important; }
+.stat-card.active { border-color: #2563eb !important; box-shadow: 0 0 0 1px #2563eb inset !important; }
+.stat-card .card-body { padding: 1rem 1.1rem; gap: 0.9rem; }
+.stat-icon { width: 50px; height: 50px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1.25rem; flex-shrink: 0; }
+.stat-text { min-width: 0; flex: 1 1 auto; }
+.stat-label { font-size: 0.82rem; font-weight: 600; color: #1e293b; line-height: 1.25; }
+.stat-value { font-size: 1.45rem; font-weight: 700; color: #0f2a5c; line-height: 1.3; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stat-sub { font-size: 0.72rem; font-weight: 500; line-height: 1.3; margin-top: 2px; }
+.stat-chevron { font-size: 0.6rem; color: #cbd5e1; flex-shrink: 0; }
+.stat-card:hover .stat-chevron { color: #2563eb; }
+.stat-link { border: 0; background: transparent; padding: 0; }
+.stat-card:has(.stat-link:focus-visible) { outline: 2px solid #2563eb; outline-offset: 2px; }
+.stat-link:focus-visible { outline: none; box-shadow: none; }
+@media (max-width: 1399.98px) {
+    .stat-value { font-size: 1.25rem; }
+}
+@media (max-width: 575.98px) {
+    .stat-card { min-height: 92px; }
+    .stat-card .card-body { padding: 0.75rem; gap: 0.55rem; }
+    .stat-icon { width: 36px; height: 36px; font-size: 0.9rem; }
+    .stat-label { font-size: 0.72rem; }
+    .stat-value { font-size: 1.05rem; }
+    .stat-chevron { display: none; }
+}
+
+/* Tenant profile form sections (includes/tenant_profile.php) */
+.profile-section-title { font-size: 0.65rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #64748b; margin: 0.25rem 0 0.5rem; padding-bottom: 0.3rem; border-bottom: 1px solid #f1f5f9; }
+.profile-section-title:not(:first-child) { margin-top: 1rem; }
+.form-compact label { font-size: 0.75rem; font-weight: 600; color: #475569; margin-bottom: 0.25rem; }
+.form-compact .form-control, .form-compact .form-select { font-size: 0.8rem; padding: 0.4rem 0.75rem; }

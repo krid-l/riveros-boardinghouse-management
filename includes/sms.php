@@ -81,10 +81,10 @@ function normalizePhMobile(?string $number): ?string {
  * A contact number entered in a form: blank is allowed, anything else has to be a mobile number
  * that can receive texts. Stored the way it was typed (trimmed); normalised only when sending.
  */
-function validatedMobileInput($value): string {
+function validatedMobileInput($value, string $what = 'contact number'): string {
     $value = trim(is_scalar($value) ? (string)$value : '');
     if ($value !== '' && normalizePhMobile($value) === null) {
-        throw new Exception('The contact number must be a Philippine mobile number, like 0917 123 4567, so SMS notifications can reach it.');
+        throw new Exception("The $what must be a Philippine mobile number, like 0917 123 4567, so SMS notifications can reach it.");
     }
     return $value;
 }

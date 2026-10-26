@@ -9,7 +9,7 @@ require_once __DIR__ . '/billing.php';
 require_once __DIR__ . '/sql_compat.php';
 require_once __DIR__ . '/sms.php';
 
-const SCHEMA_VERSION = '7';
+const SCHEMA_VERSION = '13';
 
 function runMigrations(PDO $pdo): void {
     try {
@@ -43,6 +43,12 @@ function runMigrations(PDO $pdo): void {
         migrateToV5($pdo);
         migrateToV6($pdo);
         migrateToV7($pdo);
+        migrateToV8($pdo);
+        migrateToV9($pdo);
+        migrateToV10($pdo);
+        migrateToV11($pdo);
+        migrateToV12($pdo);
+        migrateToV13($pdo);
 
         $pdo->prepare("INSERT INTO settings (setting_key, setting_value) VALUES ('schema_version', ?)
                        " . sqlUpsert(['setting_key'], ['setting_value']))
@@ -85,6 +91,134 @@ function migrateBaseSchema(PDO $pdo): void {
 // v6: payments without a screenshot. Cash payments, and the advance and deposit the admin
 // records at move-in, have no GCash screenshot; databases created from the first schema
 // refused to store them.
+// v8: password reset codes (Forgot password), the admin's notifications, and tenants' requests
+// to have their deposit pay for their last month. Times in these tables are written by PHP
+// (Manila time), not the database clock, which is UTC on the deployed database.
+function migrateToV8(PDO $pdo): void {
+    // An admin's mobile number, for texting them a password reset code.
+    ensureColumn($pdo, 'users', 'recovery_mobile', 'VARCHAR(20)');
+    // Shown under Settings -> Account Information.
+    ensureColumn($pdo, 'users', 'last_login_at', 'TIMESTAMP NULL DEFAULT NULL');
+    $pdo->exec("CREATE TABLE IF NOT EXISTS password_resets (
+        id " . sqlSerialPk() . ",
+        user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        code_hash VARCHAR(255) NOT NULL,
+        attempts INT NOT NULL DEFAULT 0,
+        expires_at TIMESTAMP NULL DEFAULT NULL,
+        used_at TIMESTAMP NULL DEFAULT NULL,
+        created_at TIMESTAMP NULL DEFAULT NULL
+    )");
+    $pdo->exec("CREATE TABLE IF NOT EXISTS notifications (
+        id " . sqlSerialPk() . ",
+        type VARCHAR(40) NOT NULL,
+        title VARCHAR(150) NOT NULL,
+        message VARCHAR(255),
+        link VARCHAR(255),
+        ref VARCHAR(100),
+        is_read BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMP NULL DEFAULT NULL
+    )");
+    if (!indexExists($pdo, 'notifications', 'idx_notifications_ref')) {
+        $pdo->exec("CREATE INDEX idx_notifications_ref ON notifications (ref)");
+    }
+    $pdo->exec("CREATE TABLE IF NOT EXISTS deposit_requests (
+        id " . sqlSerialPk() . ",
+        tenant_id INT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        billing_month VARCHAR(7) NOT NULL,
+        status VARCHAR(12) NOT NULL DEFAULT 'pending',
+        note VARCHAR(255),
+        created_at TIMESTAMP NULL DEFAULT NULL,
+        decided_at TIMESTAMP NULL DEFAULT NULL
+    )");
+}
+
+// v9: the fuller tenant profile (includes/tenant_profile.php). The emergency contact becomes
+// name / relationship / number; what older records kept in the one field moves to the name.
+function migrateToV9(PDO $pdo): void {
+    ensureColumn($pdo, 'tenants', 'middle_name', 'VARCHAR(50)');
+    ensureColumn($pdo, 'tenants', 'gender', 'VARCHAR(20)');
+    ensureColumn($pdo, 'tenants', 'email', 'VARCHAR(120)');
+    ensureColumn($pdo, 'tenants', 'emergency_name', 'VARCHAR(100)');
+    ensureColumn($pdo, 'tenants', 'emergency_relationship', 'VARCHAR(50)');
+    ensureColumn($pdo, 'tenants', 'emergency_phone', 'VARCHAR(20)');
+    $pdo->exec("UPDATE tenants SET emergency_name = emergency_contact
+                WHERE emergency_name IS NULL AND emergency_contact IS NOT NULL AND emergency_contact <> ''");
+}
+
+// v10: complaints keep when they were last updated, first answered and resolved (for the
+// response-time figures), and a priority the admin sets. The status stays 'open' or 'resolved'
+// (both schemas check that); Pending / In Progress is whether the admin has replied yet.
+function migrateToV10(PDO $pdo): void {
+    ensureColumn($pdo, 'complaints', 'updated_at', 'TIMESTAMP NULL DEFAULT NULL');
+    ensureColumn($pdo, 'complaints', 'responded_at', 'TIMESTAMP NULL DEFAULT NULL');
+    ensureColumn($pdo, 'complaints', 'resolved_at', 'TIMESTAMP NULL DEFAULT NULL');
+    ensureColumn($pdo, 'complaints', 'priority', "VARCHAR(10) NOT NULL DEFAULT 'normal'");
+    ensureColumn($pdo, 'complaints', 'photo_path', 'VARCHAR(255)');
+}
+
+// v11: a record of each report exported from Reports & Analytics (the Exported Reports tab).
+function migrateToV11(PDO $pdo): void {
+    $pdo->exec("CREATE TABLE IF NOT EXISTS report_exports (
+        id " . sqlSerialPk() . ",
+        report_type VARCHAR(20) NOT NULL,
+        format VARCHAR(4) NOT NULL,
+        date_from DATE NULL,
+        date_to DATE NULL,
+        row_count INT NOT NULL DEFAULT 0,
+        created_at TIMESTAMP NULL DEFAULT NULL
+    )");
+}
+
+// v12: no sample data. The settings the database started with (an example address, phone
+// number and GCash account) are cleared where they were never changed, so tenants and receipts
+// don't show made-up details; settings nothing reads are dropped. Also the admin's notes on a
+// tenant (the Notes card on the tenant's page).
+function migrateToV12(PDO $pdo): void {
+    ensureColumn($pdo, 'tenants', 'admin_notes', 'TEXT');
+    $samples = [
+        ['address', '123 National Highway%'],
+        ['contact_number', '032 123 4567'],
+        ['gcash_name', 'Boarding House'],
+        ['gcash_number', '0917 123 4567'],
+    ];
+    $clear = $pdo->prepare("UPDATE settings SET setting_value = '' WHERE setting_key = ? AND setting_value LIKE ?");
+    foreach ($samples as $sample) {
+        $clear->execute($sample);
+    }
+    $pdo->exec("DELETE FROM settings WHERE setting_key IN ('rent_due_date', 'currency', 'date_format', 'time_zone', 'sms_provider')");
+}
+
+// v13: when a payment was entered (the time shown under its date), and files the admin keeps for
+// a tenant (the Documents tab: IDs, contracts).
+function migrateToV13(PDO $pdo): void {
+    // Postgres already had payments.created_at, filled in by the database. Like every other
+    // DEFAULT CURRENT_TIMESTAMP column there, it was written on the database's own clock: UTC on
+    // Supabase, 8 hours behind Manila. Connections now use Manila time (db.php); move what was
+    // stored before that forward to match. Only when the server's clock really is UTC.
+    if (isPgsql()) {
+        $serverZone = strtoupper((string)$pdo->query("SELECT reset_val FROM pg_settings WHERE name = 'TimeZone'")->fetchColumn());
+        if (in_array($serverZone, ['UTC', 'ETC/UTC', 'GMT', 'ETC/GMT', 'UCT', 'ETC/UCT', 'ZULU', 'UNIVERSAL'], true)) {
+            $columns = [['users', 'created_at'], ['payments', 'created_at'], ['charges', 'created_at'], ['room_transfers', 'created_at'],
+                        ['complaints', 'created_at'], ['complaints', 'updated_at'], ['announcements', 'created_at'], ['sms_log', 'created_at']];
+            foreach ($columns as [$table, $column]) {
+                if (tableExists($pdo, $table) && columnExists($pdo, $table, $column)) {
+                    $pdo->exec("UPDATE $table SET $column = $column + INTERVAL '8 hours' WHERE $column IS NOT NULL");
+                }
+            }
+        }
+    }
+    // MySQL never had it: older payments keep no time (pages show the weekday instead).
+    ensureColumn($pdo, 'payments', 'created_at', 'TIMESTAMP NULL DEFAULT NULL');
+    $pdo->exec("CREATE TABLE IF NOT EXISTS tenant_documents (
+        id " . sqlSerialPk() . ",
+        tenant_id INT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        title VARCHAR(120) NOT NULL,
+        file_path VARCHAR(255) NOT NULL,
+        file_type VARCHAR(10) NOT NULL,
+        uploaded_at TIMESTAMP NULL DEFAULT NULL
+    )");
+}
+
 // v7: rent per bed. A tenant now pays price / capacity, however many beds are taken, instead of
 // an equal split of the price among whoever lives there. Re-price the month in progress and the
 // deposits to match; months that already fell due keep what they were billed.

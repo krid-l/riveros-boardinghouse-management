@@ -6,6 +6,10 @@
 require_once __DIR__ . '/billing.php';
 require_once __DIR__ . '/sms.php';
 require_once __DIR__ . '/pdf_generator.php';
+require_once __DIR__ . '/notifications.php';
+require_once __DIR__ . '/tenant_profile.php';
+require_once __DIR__ . '/password_reset.php';   // generateTempPassword()
+require_once __DIR__ . '/sms_templates.php';
 
 function postedDate(string $field): string {
     $value = trim($_POST[$field] ?? '');
@@ -65,9 +69,9 @@ function recordMoveInPayment(PDO $pdo, int $tenantId, string $method, string $re
         // Paid on the move-in day; a move-in entered for a future date was paid today.
         $paidOn = min($tenant['move_in_date'], date('Y-m-d'));
         $paymentId = insertReturningId($pdo,
-            "INSERT INTO payments (tenant_id, amount, payment_date, reference_number, screenshot_path, payment_method, status, pay_for_room)
-             VALUES (?, ?, ?, ?, NULL, ?, 'verified', ?)",
-            [$tenantId, $due['amount'], $paidOn, $reference !== '' ? substr($reference, 0, 100) : 'MOVE-IN', $method, dbBool(false)]
+            "INSERT INTO payments (tenant_id, amount, payment_date, reference_number, screenshot_path, payment_method, status, pay_for_room, created_at)
+             VALUES (?, ?, ?, ?, NULL, ?, 'verified', ?, ?)",
+            [$tenantId, $due['amount'], $paidOn, $reference !== '' ? substr($reference, 0, 100) : 'MOVE-IN', $method, dbBool(false), date('Y-m-d H:i:s')]
         );
         $pdo->prepare("UPDATE tenants SET balance = balance - ? WHERE id = ?")->execute([$due['amount'], $tenantId]);
         $pdo->commit();
@@ -86,11 +90,10 @@ function recordMoveInPayment(PDO $pdo, int $tenantId, string $method, string $re
         error_log("Move-in receipt for payment $paymentId failed: " . $e->getMessage());   // the payment itself stands
     }
 
-    $parts = 'advance PHP ' . number_format($due['advance'], 2)
-           . ($due['deposit'] > 0 ? ' + deposit PHP ' . number_format($due['deposit'], 2) : '');
+    $balance = $pdo->prepare("SELECT balance FROM tenants WHERE id = ?");
+    $balance->execute([$tenantId]);
     $sms = sendSMS($pdo, $tenant['contact_number'],
-        smsConfig($pdo)['name'] . ": Hi {$tenant['first_name']}, welcome! We received your move-in payment of PHP "
-        . number_format($due['amount'], 2) . " ($parts). Receipt: RCP-" . str_pad($paymentId, 6, '0', STR_PAD_LEFT) . '.',
+        smsPaymentVerifiedMessage($pdo, $name, $due['amount'], paymentMethodLabel($method), $paidOn, (float)$balance->fetchColumn()),
         'move_in_payment', $tenantId);
 
     return ['id' => $paymentId, 'amount' => $due['amount'], 'advance' => $due['advance'], 'deposit' => $due['deposit'], 'sms' => $sms];
@@ -139,15 +142,25 @@ function handleTenantAction(PDO $pdo): array {
         }
     }
 
+    // Who lives in the rooms this action touches, to tell the admin when one fills up or frees a bed.
+    $roomIds = [(int)($_POST['room_id'] ?? 0)];
+    if (!empty($_POST['tenant_id'])) {
+        $roomStmt = $pdo->prepare("SELECT room_id FROM tenants WHERE id = ?");
+        $roomStmt->execute([(int)$_POST['tenant_id']]);
+        $roomIds[] = (int)$roomStmt->fetchColumn();
+    }
+    $roomsBefore = roomOccupancySnapshot($pdo, $roomIds);
+    $newTenant = null;
+
     try {
         $pdo->beginTransaction();
 
         if ($action === 'add') {
-            $firstName = trim($_POST['first_name'] ?? '');
-            $lastName = trim($_POST['last_name'] ?? '');
+            $profile = tenantProfileFromPost($_POST);
+            $firstName = $profile['first_name'];
+            $lastName = $profile['last_name'];
             $roomId = !empty($_POST['room_id']) ? (int)$_POST['room_id'] : null;
             $moveInDate = $roomId ? postedDate('move_in_date') : null;
-            $contactNumber = validatedMobileInput($_POST['contact_number'] ?? '');
 
             if ($roomId && !roomHasSpace($pdo, $roomId)) {
                 throw new Exception("Cannot assign tenant: Room is already full.");
@@ -167,8 +180,8 @@ function handleTenantAction(PDO $pdo): array {
                 $counter++;
             }
 
-            // Auto-generate a random 8-character password
-            $rawPassword = substr(str_shuffle('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%'), 0, 8);
+            // A random 8-character password without look-alike characters (it is texted to them)
+            $rawPassword = generateTempPassword();
             $password = password_hash($rawPassword, PASSWORD_DEFAULT);
 
             $userId = insertReturningId(
@@ -178,26 +191,20 @@ function handleTenantAction(PDO $pdo): array {
             );
 
             // Create tenant profile
+            $columns = array_keys($profile);
             $tenantId = insertReturningId(
                 $pdo,
-                "INSERT INTO tenants (user_id, first_name, last_name, contact_number, room_id, occupation, emergency_contact, status, move_in_date, balance)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, 0)",
-                [
-                    $userId,
-                    $firstName,
-                    $lastName,
-                    $contactNumber,
-                    $roomId,
-                    !empty($_POST['occupation']) ? $_POST['occupation'] : null,
-                    !empty($_POST['emergency_contact']) ? $_POST['emergency_contact'] : null,
-                    $moveInDate
-                ]
+                "INSERT INTO tenants (user_id, " . implode(', ', $columns) . ", room_id, status, move_in_date, balance)
+                 VALUES (?, " . implode(', ', array_fill(0, count($columns), '?')) . ", ?, 'active', ?, 0)",
+                array_merge([$userId], array_values($profile), [$roomId, $moveInDate])
             );
             if ($roomId) {
                 logRoomTransfer($pdo, $tenantId, null, $roomId, $moveInDate, 'Moved in');
                 $billTenantId = $tenantId;
                 $moveInTenantId = $tenantId;
             }
+            $newTenant = ['id' => $tenantId, 'name' => trim("$firstName $lastName"), 'room_id' => $roomId, 'move_in' => $moveInDate,
+                          'phone' => $profile['contact_number'], 'username' => $username, 'password' => $rawPassword];
 
             $success = "Tenant added successfully! <br><strong>Username:</strong> " . htmlspecialchars($username) . " <br><strong>Password:</strong> " . htmlspecialchars($rawPassword) . " <br><small>Please save these credentials!</small>";
             if ($moveInDate && $roomId) {
@@ -208,15 +215,10 @@ function handleTenantAction(PDO $pdo): array {
             }
 
         } elseif ($action === 'edit') {
-            $stmt = $pdo->prepare("UPDATE tenants SET first_name = ?, last_name = ?, contact_number = ?, occupation = ?, emergency_contact = ? WHERE id = ?");
-            $stmt->execute([
-                trim($_POST['first_name'] ?? ''),
-                trim($_POST['last_name'] ?? ''),
-                validatedMobileInput($_POST['contact_number'] ?? ''),
-                !empty($_POST['occupation']) ? $_POST['occupation'] : null,
-                !empty($_POST['emergency_contact']) ? $_POST['emergency_contact'] : null,
-                (int)$_POST['tenant_id']
-            ]);
+            $profile = tenantProfileFromPost($_POST);
+            $set = implode(', ', array_map(fn($c) => "$c = ?", array_keys($profile)));
+            $pdo->prepare("UPDATE tenants SET $set WHERE id = ?")
+                ->execute(array_merge(array_values($profile), [(int)$_POST['tenant_id']]));
             $success = "Tenant updated successfully.";
 
         } elseif ($action === 'change_room') {
@@ -338,6 +340,34 @@ function handleTenantAction(PDO $pdo): array {
     // Post the first-month charge right away instead of waiting for the next page load.
     if (!$error && $billTenantId) {
         runBilling($pdo, $billTenantId);
+    }
+
+    if (!$error) {
+        if ($newTenant) {
+            $roomNo = null;
+            if ($newTenant['room_id']) {
+                $roomStmt = $pdo->prepare("SELECT room_number FROM rooms WHERE id = ?");
+                $roomStmt->execute([$newTenant['room_id']]);
+                $roomNo = $roomStmt->fetchColumn();
+            }
+            notifyAdmin($pdo, 'tenant_added', "New tenant registered: {$newTenant['name']}",
+                $roomNo ? "Room $roomNo, moving in " . date('M j, Y', strtotime($newTenant['move_in'])) . '.' : 'No room assigned yet.',
+                "tenant_details.php?id={$newTenant['id']}");
+
+            // Welcome text with their room, what to pay on moving in, and their login. Sent before
+            // the move-in payment's own text below.
+            $due = $newTenant['room_id'] ? moveInAmountDue($pdo, $newTenant['id']) : null;
+            $sms = sendSMS($pdo, $newTenant['phone'],
+                smsRegistrationMessage($pdo, $newTenant['name'], $roomNo !== null && $roomNo !== false ? (string)$roomNo : null, $newTenant['move_in'],
+                                       $due ? $due['advance'] : null, $due ? $due['deposit'] : null, $newTenant['username'], $newTenant['password']),
+                'registration', $newTenant['id']);
+            if ($sms['sent'] > 0) {
+                $success .= ' <br><small><i class="fa-solid fa-comment-sms me-1"></i>The login details were texted to ' . htmlspecialchars($newTenant['phone']) . '.</small>';
+            } elseif ($sms['failed'] > 0) {
+                $success .= ' <br><small class="text-danger">Welcome SMS not sent: ' . htmlspecialchars(smsErrorText($sms)) . '</small>';
+            }
+        }
+        notifyRoomAvailabilityChanges($pdo, $roomsBefore);
     }
 
     // Moving in means handing over the advance and deposit. Recorded last, once billing has

@@ -65,10 +65,21 @@ function generateReceipt($paymentId, $tenantName, $amount, $date, $reference, $p
     $pdf->SetAutoPageBreak(false);
     $pdf->AddPage();
     
-    // Header
+    // Header: the name, address and contact number from Settings -> Business Information.
+    $business = isset($pdo)
+        ? $pdo->query("SELECT setting_key, setting_value FROM settings WHERE setting_key IN ('boarding_house_name', 'address', 'contact_number')")->fetchAll(PDO::FETCH_KEY_PAIR)
+        : [];
+    $latin1 = fn($text) => (string)(iconv('UTF-8', 'windows-1252//TRANSLIT', (string)$text) ?: '');
+    $houseName = trim((string)($business['boarding_house_name'] ?? '')) ?: 'Riveros Boarding House';
     $pdf->SetFont('Courier', 'B', 14);
-    $pdf->Cell(0, 5, 'RIVEROS', 0, 1, 'C');
-    $pdf->Cell(0, 5, 'BOARDING HOUSE', 0, 1, 'C');
+    $pdf->MultiCell(0, 5, $latin1(strtoupper($houseName)), 0, 'C');
+    $pdf->SetFont('Courier', '', 7);
+    foreach (['address', 'contact_number'] as $key) {
+        $line = trim(preg_replace('/\s+/', ' ', (string)($business[$key] ?? '')));
+        if ($line !== '') {
+            $pdf->MultiCell(0, 3.5, $latin1($line), 0, 'C');
+        }
+    }
     $pdf->Ln(2);
     $pdf->SetFont('Courier', '', 9);
     $pdf->Cell(0, 4, 'OFFICIAL RECEIPT', 0, 1, 'C');
@@ -130,7 +141,8 @@ function generateReceipt($paymentId, $tenantName, $amount, $date, $reference, $p
     $pdf->Cell(45, 4, $reference, 0, 1, 'R');
     
     $pdf->Cell(25, 4, 'Method:', 0, 0, 'L');
-    $dispMethod = strlen($paymentMethod) > 20 ? substr($paymentMethod,0,20) : $paymentMethod;
+    $dispMethod = paymentMethodLabel($paymentMethod);   // "GCash" / "Cash" / "Covered by ..."
+    $dispMethod = strlen($dispMethod) > 20 ? substr($dispMethod, 0, 20) : $dispMethod;
     $pdf->Cell(45, 4, $dispMethod, 0, 1, 'R');
     
     $pdf->Cell(25, 4, 'Date:', 0, 0, 'L');
@@ -147,12 +159,11 @@ function generateReceipt($paymentId, $tenantName, $amount, $date, $reference, $p
     $pdf->SetFont('Courier', '', 9);
     $pdf->Cell(0, 3, str_repeat('-', 32), 0, 1, 'C');
     
-    // Mock Barcode
     $pdf->Ln(2);
     $pdf->SetFont('Courier', 'B', 10);
     $pdf->Cell(0, 5, '[ PAYMENT VERIFIED ]', 0, 1, 'C');
-    $pdf->SetFont('Courier', '', 6);
-    $pdf->Cell(0, 4, '|||||| | || ||| || ||| ||', 0, 1, 'C');
+    $pdf->SetFont('Courier', '', 7);
+    $pdf->Cell(0, 4, 'Thank you for your payment!', 0, 1, 'C');
     
     $pdf->Ln(3);
     $pdf->SetFont('Courier', '', 7);
@@ -160,7 +171,14 @@ function generateReceipt($paymentId, $tenantName, $amount, $date, $reference, $p
     $pdf->Cell(0, 4, 'SYSTEM GENERATED RECEIPT', 0, 1, 'C');
     
     $pdf->Output('F', $path);
-    
+
+    // Deployed: keep it in Supabase Storage, since Railway's disk is wiped on every redeploy.
+    require_once __DIR__ . '/uploads.php';
+    $url = storeGeneratedFile($path, 'receipts', 'application/pdf');
+    if ($url !== null) {
+        @unlink($path);
+        return $url;
+    }
     return 'uploads/receipts/' . $filename;
 }
 ?>

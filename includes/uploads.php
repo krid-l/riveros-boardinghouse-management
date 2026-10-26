@@ -25,6 +25,26 @@ function allowedImageTypes(): array {
  *               path is a public URL (Supabase) or a project-relative path (local).
  */
 function storeUploadedImage(array $file, string $folder): array {
+    return storeUploadedFile($file, $folder, allowedImageTypes(), 'The file must be an image (JPG, PNG, WEBP or GIF).');
+}
+
+/**
+ * A tenant document: an image (a photo of an ID) or a PDF (a contract). Images and PDFs go to
+ * different storage buckets (payments / receipts), each of which already holds that kind of file.
+ */
+function storeUploadedDocument(array $file): array {
+    $type = isset($file['tmp_name']) && is_file($file['tmp_name']) ? @mime_content_type($file['tmp_name']) : '';
+    $folder = $type === 'application/pdf' ? 'receipts/documents' : 'payments/documents';
+    $allowed = allowedImageTypes() + ['application/pdf' => 'pdf'];
+    unset($allowed['image/gif']);
+    return storeUploadedFile($file, $folder, $allowed, 'The file must be a photo (JPG, PNG, WEBP) or a PDF.');
+}
+
+/**
+ * Validate and store an uploaded file of one of the allowed types (MIME => extension).
+ * @return array ['path' => string|null, 'error' => string|null]
+ */
+function storeUploadedFile(array $file, string $folder, array $allowed, string $typeError): array {
     if (!isset($file['error']) || $file['error'] === UPLOAD_ERR_NO_FILE) {
         return ['path' => null, 'error' => null];   // nothing was chosen
     }
@@ -35,14 +55,13 @@ function storeUploadedImage(array $file, string $folder): array {
         return ['path' => null, 'error' => 'Invalid upload.'];
     }
     if ($file['size'] > UPLOAD_MAX_BYTES) {
-        return ['path' => null, 'error' => 'The image must be 5MB or smaller.'];
+        return ['path' => null, 'error' => 'The file must be 5MB or smaller.'];
     }
 
     // Trust the file's contents, never the name or the browser-supplied type.
     $mimeType = @mime_content_type($file['tmp_name']);
-    $allowed = allowedImageTypes();
     if (!isset($allowed[$mimeType])) {
-        return ['path' => null, 'error' => 'The file must be an image (JPG, PNG, WEBP or GIF).'];
+        return ['path' => null, 'error' => $typeError];
     }
 
     // We name the file ourselves, so a crafted filename can't put it anywhere unexpected
@@ -84,6 +103,38 @@ function storeUploadedImage(array $file, string $folder): array {
 }
 
 /**
+ * Copy a file the app made itself (a receipt PDF) to Supabase Storage when the app is deployed,
+ * where it survives redeploys; the container's own disk on Railway does not.
+ *
+ * @return ?string the public URL, or null when Supabase isn't set up or the upload failed
+ *                 (the caller then keeps the local copy)
+ */
+function storeGeneratedFile(string $localPath, string $bucket, string $mimeType): ?string {
+    $supabaseUrl = getenv('SUPABASE_URL') ?: (function_exists('appConfig') ? appConfig('supabase_url', '') : '');
+    $supabaseKey = getenv('SUPABASE_SERVICE_KEY') ?: (function_exists('appConfig') ? appConfig('supabase_service_key', '') : '');
+    if (!$supabaseUrl || !$supabaseKey || !is_file($localPath)) {
+        return null;
+    }
+    $name = basename($localPath);
+    $ch = curl_init("$supabaseUrl/storage/v1/object/$bucket/$name");
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => file_get_contents($localPath),
+        CURLOPT_HTTPHEADER => ["Authorization: Bearer $supabaseKey", "Content-Type: $mimeType"],
+        CURLOPT_TIMEOUT => 20,
+    ]);
+    curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+    if ($httpCode !== 200) {
+        error_log("Could not copy $name to Supabase Storage (HTTP $httpCode); keeping the local file.");
+        return null;
+    }
+    return "$supabaseUrl/storage/v1/object/public/$bucket/$name";
+}
+
+/**
  * Turn a stored path into something a page can put in src="".
  * Supabase paths are already absolute URLs; local ones are relative to the project root.
  *
@@ -95,12 +146,25 @@ function uploadSrc(?string $path, string $prefix = ''): ?string {
     return preg_match('#^https?://#i', $path) ? $path : $prefix . $path;
 }
 
+/** The boarding house photo behind the login form, shipped with the app. */
+const DEFAULT_LOGIN_BG = 'assets/img/login-bg.jpg';
+
+/**
+ * The login page background: the photo uploaded under Settings -> Login Page, or the default
+ * boarding house photo.
+ * @param string $prefix path back to the project root from the current page, e.g. '../'
+ */
+function loginBackgroundSrc(PDO $pdo, string $prefix = ''): string {
+    $uploaded = (string)($pdo->query("SELECT setting_value FROM settings WHERE setting_key = 'login_bg_path'")->fetchColumn() ?: '');
+    return uploadSrc($uploaded, $prefix) ?? $prefix . DEFAULT_LOGIN_BG;
+}
+
 /** Delete a locally stored upload. Files kept in Supabase are left alone. */
 function deleteLocalUpload(?string $path): void {
     $path = trim((string)$path);
     if ($path === '' || preg_match('#^https?://#i', $path)) return;
     // Only ever touch files inside uploads/.
-    if (!preg_match('#^uploads/[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+$#', $path)) return;
+    if (!preg_match('#^uploads/[A-Za-z0-9_-]+/(?:[A-Za-z0-9_-]+/)?[A-Za-z0-9_.-]+$#', $path) || str_contains($path, '..')) return;
     $full = __DIR__ . '/../' . $path;
     if (is_file($full)) @unlink($full);
 }

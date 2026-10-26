@@ -2,6 +2,8 @@
 require_once '../includes/db.php';
 require_once '../includes/auth.php';
 require_once '../includes/billing.php';
+require_once '../includes/sms_reminders.php';   // REMINDER_DAYS_BEFORE: "due soon" means the same as for the SMS reminders
+require_once '../includes/ui.php';
 requireAdmin();
 
 // --- DATA FETCHING ---
@@ -15,12 +17,34 @@ $tenantStats = $pdo->query("SELECT
 $totalTenants = (int)$tenantStats['total_tenants'];
 $totalOutstanding = $tenantStats['total_outstanding'];
 
-// Overdue = balance past its due date (the 30th), not just any unpaid balance
+// Overdue = balance past its due date (the 30th), not just any unpaid balance.
+// Due soon = nothing late yet, and the bill falls due within the reminder window.
 $notYetDue = chargesNotYetDue($pdo);
 $overdueTenantsCount = 0;
+$overdueAmount = 0.0;
+$dueSoonCount = 0;
+$dueSoonAmount = 0.0;
+$dueSoonLimit = date('Y-m-d', strtotime('+' . REMINDER_DAYS_BEFORE . ' days'));
 foreach ($pdo->query("SELECT id, balance, status FROM tenants WHERE balance > 0")->fetchAll() as $t) {
-    if (tenantBillingStatus($t, $notYetDue)['overdue'] > 0) $overdueTenantsCount++;
+    $billing = tenantBillingStatus($t, $notYetDue);
+    if ($billing['overdue'] > 0) {
+        $overdueTenantsCount++;
+        $overdueAmount += $billing['overdue'];
+    } elseif ($billing['key'] === 'due') {
+        $due = upcomingDueDate($pdo, (int)$t['id']);
+        if ($due && $due <= $dueSoonLimit) {
+            $dueSoonCount++;
+            $dueSoonAmount += $billing['balance'];
+        }
+    }
 }
+
+// Complaints not resolved yet (pending or in progress).
+$unresolvedComplaints = (int)$pdo->query("SELECT COUNT(*) FROM complaints WHERE status <> 'resolved'")->fetchColumn();
+
+// Tenants asking to use their deposit for their last month.
+$depositRequests = $pdo->query("SELECT r.tenant_id, t.first_name, t.last_name FROM deposit_requests r JOIN tenants t ON t.id = r.tenant_id
+                                WHERE r.status = 'pending' ORDER BY r.created_at, r.id")->fetchAll();
 
 // Batched Rooms Aggregate
 $totalRooms = $pdo->query("SELECT COUNT(*) FROM rooms")->fetchColumn();
@@ -40,7 +64,7 @@ $pendingPaymentsCount = $paymentStats['pending_count'];
 
 // Rooms Capacity & Occupancy Analysis
 $roomsData = $pdo->query("
-    SELECT r.id, r.room_number, r.capacity, 
+    SELECT r.id, r.room_number, r.capacity, r.status,
            (SELECT COUNT(*) FROM tenants t WHERE t.room_id = r.id AND t.status = 'active') as tenant_count
     FROM rooms r
 ")->fetchAll();
@@ -52,10 +76,17 @@ $occupiedRooms = 0;
 $availableRooms = 0;
 $fullRooms = 0;
 $partialRooms = 0;
+$maintenanceRooms = 0;
 
 foreach($roomsData as $r) {
     $totalCapacity += $r['capacity'];
     $space = $r['capacity'] - $r['tenant_count'];
+    // A room under maintenance can't take anyone, so its empty beds aren't available.
+    if ($r['status'] === 'maintenance') {
+        $maintenanceRooms++;
+        if ($r['tenant_count'] > 0) $occupiedRooms++;
+        continue;
+    }
     if($space > 0) $availableSpaces += $space;
     
     if($r['tenant_count'] > 0) {
@@ -70,7 +101,7 @@ foreach($roomsData as $r) {
     }
 }
 
-$actualOccupied = $totalCapacity - $availableSpaces;
+$actualOccupied = array_sum(array_column($roomsData, 'tenant_count'));
 $occupancyRate = $totalCapacity > 0 ? round(($actualOccupied / $totalCapacity) * 100) : 0;
 $roomsWithSpaceCount = $availableRooms + $partialRooms;
 
@@ -121,8 +152,8 @@ $moveStmt = $pdo->prepare("SELECT
 $moveStmt->execute([date('Y-m-01'), date('Y-m-t')]);
 $moves = $moveStmt->fetch();
 $tenantTrend = $moves['move_ins'] . " moved in, " . $moves['move_outs'] . " moved out this month";
-$roomTrend = "$occupiedRooms occupied";
-$spaceTrend = "of $totalCapacity beds";
+$roomTrend = "$occupiedRooms occupied" . ($maintenanceRooms ? ", $maintenanceRooms under maintenance" : '');
+$spaceTrend = "in $roomsWithSpaceCount " . ($roomsWithSpaceCount === 1 ? 'room' : 'rooms');
 $balanceTrend = $overdueTenantsCount . " tenant" . ($overdueTenantsCount == 1 ? '' : 's') . " overdue";
 
 require_once 'header.php';
@@ -169,8 +200,14 @@ require_once 'header.php';
     }
     .dot { width: 5px; height: 5px; border-radius: 50%; display: inline-block; margin-right: 5px; }
     
+    .attention-row { gap: 0.6rem; padding: 0.55rem 0.6rem; border-radius: 8px; border: 1px solid #f1f5f9; margin-bottom: 0.4rem; }
+    .attention-row:last-child { margin-bottom: 0; }
+    .attention-row:hover { background: #f8fafc; border-color: #e2e8f0; }
+    .attention-row.is-clear { opacity: 0.75; }
+    .attention-icon { width: 30px; height: 30px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; font-size: 0.75rem; flex-shrink: 0; }
     .room-status-item { padding: 0.5rem 0; border-bottom: 1px solid #f1f5f9; }
     .room-status-item:last-child { border-bottom: none; }
+    .room-status-item:hover { background: #f8fafc; }
 </style>
 
 <!-- Header -->
@@ -184,69 +221,17 @@ require_once 'header.php';
     </div>
 </div>
 
-<!-- Top Stats Row -->
-<div class="row g-2 mb-3">
-    <!-- Total Tenants -->
-    <div class="col-sm-6 col-xl-3">
-        <div class="card metric-card border-0 shadow-sm h-100 rounded-3 p-1">
-            <div class="card-body p-2 d-flex align-items-center">
-                <div class="icon-box-lg bg-primary bg-opacity-10 text-primary me-2 flex-shrink-0">
-                    <i class="fa-solid fa-user-group"></i>
-                </div>
-                <div>
-                    <div class="card-title-sm">Total Tenants</div>
-                    <h5 class="fw-bold mb-0 text-dark"><?= $totalTenants ?></h5>
-                    <div class="trend-text text-muted mt-1"><?= $tenantTrend ?></div>
-                </div>
-            </div>
-        </div>
-    </div>
-    <!-- Total Rooms -->
-    <div class="col-sm-6 col-xl-3">
-        <div class="card metric-card border-0 shadow-sm h-100 rounded-3 p-1">
-            <div class="card-body p-2 d-flex align-items-center">
-                <div class="icon-box-lg bg-info bg-opacity-10 text-info me-2 flex-shrink-0">
-                    <i class="fa-solid fa-door-open"></i>
-                </div>
-                <div>
-                    <div class="card-title-sm">Total Rooms</div>
-                    <h5 class="fw-bold mb-0 text-dark"><?= $totalRooms ?></h5>
-                    <div class="trend-text text-muted mt-1"><?= $roomTrend ?></div>
-                </div>
-            </div>
-        </div>
-    </div>
-    <!-- Available Spaces -->
-    <div class="col-sm-6 col-xl-3">
-        <div class="card metric-card border-0 shadow-sm h-100 rounded-3 p-1">
-            <div class="card-body p-2 d-flex align-items-center">
-                <div class="icon-box-lg bg-success bg-opacity-10 text-success me-2 flex-shrink-0">
-                    <i class="fa-solid fa-bed"></i>
-                </div>
-                <div>
-                    <div class="card-title-sm">Available Spaces</div>
-                    <h5 class="fw-bold mb-0 text-dark"><?= $availableSpaces ?></h5>
-                    <div class="trend-text text-muted mt-1"><?= $spaceTrend ?></div>
-                </div>
-            </div>
-        </div>
-    </div>
-    <!-- Outstanding Balance -->
-    <div class="col-sm-6 col-xl-3">
-        <div class="card metric-card border-0 shadow-sm h-100 rounded-3 p-1">
-            <div class="card-body p-2 d-flex align-items-center">
-                <div class="icon-box-lg bg-warning bg-opacity-10 text-warning me-2 flex-shrink-0">
-                    <i class="fa-solid fa-coins"></i>
-                </div>
-                <div>
-                    <div class="card-title-sm">Total Unpaid Rent</div>
-                    <h5 class="fw-bold mb-0 text-dark">₱<?= number_format($totalOutstanding, 0) ?></h5>
-                    <div class="trend-text text-danger mt-1"><?= $balanceTrend ?></div>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
+<!-- Top Stats Row: every card opens the list behind it -->
+<?= statCards([
+    ['label' => 'Total Tenants', 'value' => $totalTenants, 'sub' => $tenantTrend, 'icon' => 'fa-solid fa-user-group', 'color' => 'primary',
+     'href' => 'tenants.php', 'aria' => 'View tenants'],
+    ['label' => 'Total Rooms', 'value' => $totalRooms, 'sub' => $roomTrend, 'icon' => 'fa-solid fa-door-open', 'color' => 'info',
+     'href' => 'rooms.php', 'aria' => 'View rooms'],
+    ['label' => 'Available Beds', 'value' => $availableSpaces, 'sub' => $spaceTrend, 'subClass' => 'text-success', 'icon' => 'fa-solid fa-bed', 'color' => 'success',
+     'href' => 'rooms.php?show=space', 'aria' => 'View rooms with free beds'],
+    ['label' => 'Total Unpaid Rent', 'value' => peso((float)$totalOutstanding), 'sub' => $balanceTrend, 'subClass' => $overdueTenantsCount ? 'text-danger' : 'text-muted',
+     'icon' => 'fa-solid fa-coins', 'color' => 'warning', 'href' => 'tenants.php?status=unpaid', 'aria' => 'View tenants with unpaid rent'],
+]) ?>
 
 <!-- Middle Charts Row -->
 <div class="row g-2 mb-3">
@@ -283,6 +268,7 @@ require_once 'header.php';
                     <div class="legend-pill"><span class="dot bg-success"></span> <?= $availableSpaces ?> Available</div>
                     <div class="legend-pill"><span class="dot bg-danger"></span> <?= $fullRooms ?> Full</div>
                     <div class="legend-pill"><span class="dot bg-warning"></span> <?= $partialRooms ?> Partially Occupied</div>
+                    <?php if ($maintenanceRooms): ?><div class="legend-pill"><span class="dot bg-secondary"></span> <?= $maintenanceRooms ?> Maintenance</div><?php endif; ?>
                 </div>
             </div>
         </div>
@@ -329,51 +315,47 @@ require_once 'header.php';
 
 <!-- Bottom Row: Attention Required and Rooms Status side by side, Recent Payments below -->
 <div class="row g-2">
-    <!-- Attention Required -->
+    <!-- Attention Required: what is waiting on the admin, each linked to where it is dealt with -->
     <div class="col-lg-6">
         <div class="card border-0 shadow-sm rounded-3 h-100">
             <div class="card-body p-3">
                 <h6 class="fw-bold text-dark mb-3" style="font-size:0.8rem;"><i class="fa-solid fa-triangle-exclamation text-warning me-2"></i> Attention Required</h6>
-                
-                <?php if ($overdueTenantsCount > 0): ?>
-                <div class="alert-box alert-danger-soft">
-                    <div class="d-flex align-items-start">
-                        <i class="fa-solid fa-circle-exclamation text-danger mt-1 me-2" style="font-size:0.7rem;"></i>
-                        <div>
-                            <div class="fw-bold text-dark" style="font-size: 0.7rem; line-height: 1.2;"><?= $overdueTenantsCount ?> <?= $overdueTenantsCount === 1 ? 'tenant has an overdue payment' : 'tenants have overdue payments' ?></div>
-                            <a href="tenants.php" class="text-primary text-decoration-none fw-semibold" style="font-size: 0.65rem;">View Tenants &rarr;</a>
-                        </div>
-                    </div>
-                </div>
-                <?php endif; ?>
-                
-                <?php if ($pendingPaymentsCount > 0): ?>
-                <div class="alert-box alert-warning-soft">
-                    <div class="d-flex align-items-start">
-                        <i class="fa-solid fa-clock text-warning mt-1 me-2" style="font-size:0.7rem;"></i>
-                        <div>
-                            <div class="fw-bold text-dark" style="font-size: 0.7rem; line-height: 1.2;"><?= $pendingPaymentsCount ?> <?= (int)$pendingPaymentsCount === 1 ? 'payment requires' : 'payments require' ?> verification</div>
-                            <a href="payments.php" class="text-primary text-decoration-none fw-semibold" style="font-size: 0.65rem;">View Payments &rarr;</a>
-                        </div>
-                    </div>
-                </div>
-                <?php endif; ?>
-                
-                <?php if ($roomsWithSpaceCount > 0): ?>
-                <div class="alert-box alert-success-soft">
-                    <div class="d-flex align-items-start">
-                        <i class="fa-solid fa-door-open text-success mt-1 me-2" style="font-size:0.7rem;"></i>
-                        <div>
-                            <div class="fw-bold text-dark" style="font-size: 0.7rem; line-height: 1.2;"><?= $roomsWithSpaceCount ?> <?= $roomsWithSpaceCount === 1 ? 'room has' : 'rooms have' ?> available space</div>
-                            <a href="rooms.php" class="text-primary text-decoration-none fw-semibold" style="font-size: 0.65rem;">View Rooms &rarr;</a>
-                        </div>
-                    </div>
-                </div>
-                <?php endif; ?>
-                
-                <?php if ($overdueTenantsCount == 0 && $roomsWithSpaceCount == 0 && $pendingPaymentsCount == 0): ?>
-                    <div class="text-center text-muted py-4" style="font-size: 0.75rem;">All caught up!</div>
-                <?php endif; ?>
+                <?php
+                $attention = [
+                    ['Overdue Rent', $overdueTenantsCount,
+                     $overdueTenantsCount ? peso($overdueAmount) . ' from ' . $overdueTenantsCount . ' ' . ($overdueTenantsCount === 1 ? 'tenant' : 'tenants') : 'Nobody is behind on rent',
+                     'fa-circle-exclamation', 'danger', 'tenants.php?status=overdue'],
+                    ['Pending Payment Verification', (int)$pendingPaymentsCount,
+                     $pendingPaymentsCount ? peso((float)$totalPending) . ' waiting to be checked' : 'No payments to verify',
+                     'fa-hourglass-half', 'warning', 'payments.php?status=pending'],
+                    ['Unresolved Complaints', $unresolvedComplaints,
+                     $unresolvedComplaints ? 'Pending or in progress' : 'No open complaints',
+                     'fa-comment-dots', 'danger', 'complaints.php?status=unresolved'],
+                    ['Upcoming Rent Due', $dueSoonCount,
+                     $dueSoonCount ? peso($dueSoonAmount) . ' due in the next ' . REMINDER_DAYS_BEFORE . ' days' : 'Nothing due in the next ' . REMINDER_DAYS_BEFORE . ' days',
+                     'fa-calendar-day', 'primary', 'tenants.php?status=due_soon'],
+                    ['Available Rooms', $roomsWithSpaceCount,
+                     $roomsWithSpaceCount ? $availableSpaces . ' free ' . ($availableSpaces === 1 ? 'bed' : 'beds') : 'Every room is full',
+                     'fa-door-open', 'success', 'rooms.php?show=space'],
+                ];
+                if ($depositRequests) {
+                    // Only while there are some: most days there are none.
+                    $first = $depositRequests[0];
+                    $attention[] = ['Deposit Requests', count($depositRequests),
+                        trim($first['first_name'] . ' ' . $first['last_name']) . (count($depositRequests) > 1 ? ' and ' . (count($depositRequests) - 1) . ' more want' : ' wants') . ' to use their deposit',
+                        'fa-vault', 'info', 'tenant_details.php?id=' . (int)$first['tenant_id'] . '#deposit'];
+                }
+                foreach ($attention as [$label, $count, $detail, $icon, $color, $href]): ?>
+                <a href="<?= $href ?>" class="attention-row d-flex align-items-center text-decoration-none <?= $count ? '' : 'is-clear' ?>">
+                    <span class="attention-icon bg-<?= $count ? $color : 'secondary' ?> bg-opacity-10 text-<?= $count ? $color : 'secondary' ?>"><i class="fa-solid <?= $icon ?>"></i></span>
+                    <span class="flex-grow-1" style="min-width:0;">
+                        <span class="d-block fw-bold text-dark" style="font-size: 0.75rem;"><?= $label ?></span>
+                        <span class="d-block text-muted text-truncate" style="font-size: 0.65rem;"><?= htmlspecialchars($detail) ?></span>
+                    </span>
+                    <span class="badge rounded-pill <?= $count ? "bg-$color" : 'bg-light text-muted border' ?> ms-2"><?= $count ?></span>
+                    <i class="fa-solid fa-chevron-right text-muted ms-2" style="font-size: 0.6rem;"></i>
+                </a>
+                <?php endforeach; ?>
             </div>
         </div>
     </div>
@@ -391,7 +373,10 @@ require_once 'header.php';
                 foreach($roomsData as $r): 
                     if($count++ >= 5) break;
                     
-                    if($r['tenant_count'] >= $r['capacity']) {
+                    if ($r['status'] === 'maintenance') {
+                        $iconColor = 'secondary';
+                        $statusBadge = '<span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle rounded-pill px-2 py-0" style="font-size:0.6rem;">Maintenance</span>';
+                    } elseif($r['tenant_count'] >= $r['capacity']) {
                         $iconColor = 'danger';
                         $statusBadge = '<span class="badge bg-danger-subtle text-danger border border-danger-subtle rounded-pill px-2 py-0" style="font-size:0.6rem;">Full</span>';
                     } elseif ($r['tenant_count'] > 0) {
@@ -402,7 +387,7 @@ require_once 'header.php';
                         $statusBadge = '<span class="badge bg-success-subtle text-success border border-success-subtle rounded-pill px-2 py-0" style="font-size:0.6rem;">Available</span>';
                     }
                 ?>
-                <div class="room-status-item d-flex justify-content-between align-items-center">
+                <a href="rooms.php?room=<?= (int)$r['id'] ?>" class="room-status-item d-flex justify-content-between align-items-center text-decoration-none">
                     <div class="d-flex align-items-center">
                         <div class="bg-<?= $iconColor ?> bg-opacity-10 text-<?= $iconColor ?> rounded d-flex justify-content-center align-items-center me-2" style="width: 32px; height: 32px; font-size: 0.8rem;">
                             <i class="fa-solid fa-door-open"></i>
@@ -416,7 +401,7 @@ require_once 'header.php';
                         <?= $statusBadge ?>
                         <i class="fa-solid fa-chevron-right text-muted" style="font-size: 0.6rem;"></i>
                     </div>
-                </div>
+                </a>
                 <?php endforeach; ?>
             </div>
         </div>

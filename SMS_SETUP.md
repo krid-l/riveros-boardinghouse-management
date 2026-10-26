@@ -7,16 +7,35 @@ as normal.
 
 ## What gets texted
 
-| When | Who | Example |
+| When | Who | Message |
 | --- | --- | --- |
-| Admin verifies a payment | The tenant who paid | `RIVEROS BOARDING HOUSE: Your payment of PHP 2,000.00 has been VERIFIED. Receipt: RCP-000010. Thank you!` |
-| A payment covered a roommate's share | That roommate | `... Your rent of PHP 1,000.00 was paid by Ana. Receipt: RCP-000011` |
-| Admin rejects a payment | The tenant | `... Your payment submission of PHP 500.00 (ref 1234) was REJECTED. Please check it and submit again.` |
-| Rent reminder: due within 3 days | Tenants who owe and aren't late yet | `... Hi Cara, your rent of PHP 4,000.00 is due today. Please pay via GCash ...` |
-| Rent reminder: overdue | Tenants with a late balance, at most once a week | `... Hi Ben, you have an overdue rent balance of PHP 6,000.00 (due since Aug 5) ...` |
-| Admin posts an announcement and ticks **Also text it** | All active tenants | `... Water interruption - No water on Saturday 8AM-12NN.` |
+| Admin adds a tenant | The new tenant | Welcome: room, move-in date, advance and deposit to pay, username and temporary password |
+| Admin verifies a payment (or records the move-in payment) | The tenant who paid | Payment verified: amount, method, date, remaining balance |
+| A payment covered a roommate's share | That roommate | Their share was paid, remaining balance |
+| Admin rejects a payment | The tenant | Payment not approved, please check and resend |
+| 3 days before the rent is due | Tenants who owe and aren't late yet | Reminder: monthly rent, due date, outstanding balance |
+| On the due date | The same tenants, if still unpaid | The same reminder again |
+| Rent is overdue | Tenants with a late balance, at most once a week | Overdue: amount and since when |
+| Forgot password / admin resets a password | The tenant (or the admin's recovery number) | A reset code, or the new temporary password |
+| Admin posts an announcement and ticks **Also text it** | All active tenants | The announcement |
 
-Messages start with the boarding house name from **Settings → Business Information**.
+The four main messages use the wording the owner asked for, for example:
+
+```
+RIVEROS BOARDING HOUSE
+
+Hello, Ana Reyes! This is a reminder that your monthly rent of PHP 2,000.00 is due on October 28, 2026.
+
+Outstanding Balance: PHP 2,000.00
+
+Please submit your payment and upload your proof of payment through the system. Thank you!
+```
+
+The first line is the boarding house name from **Settings → Business Information**. Amounts
+are written `PHP 2,000.00` instead of with the peso sign on purpose: a single `₱` makes the
+whole text use the 70-characters-per-part SMS encoding instead of 160, so every message
+would cost two to three times as many credits. The wording lives in
+`includes/sms_templates.php`.
 
 ## 1. Get your PhilSMS API token
 
@@ -59,22 +78,26 @@ every text they miss is logged as "Skipped: Not a valid PH mobile number".
 
 ## 4. Rent reminders
 
-**By hand:** on **Payments**, press **Send Rent Reminders**. A window lists exactly who will be
-texted and what it says; press **Send** to send them. The number on the button is how many
-are waiting. Nobody gets the same reminder twice, so pressing it again later is safe.
+**Automatically (nothing to set up):** every day from 8:00 AM, the system texts tenants whose
+rent is due in 3 days, texts them again on the due date if it is still unpaid, and texts
+overdue tenants once a week until they pay. The first page anyone opens after 8:00 AM (admin
+or tenant) starts it; on Railway it runs in a separate process so nobody waits for the texts.
+The admin gets a "Rent reminders sent automatically" notification, and **Settings → SMS
+Notifications** shows when it last ran. Nobody ever gets the same reminder twice.
 
-**Automatically (optional):** `cron/send_reminders.php` does the same thing from the command
-line, so it can run every morning on a schedule.
+On a day when nobody opens the site at all, the reminders go out with the first visit after
+that. If you want them to go out at 8:00 sharp no matter what, also schedule
+`cron/daily.php` (it does the same thing and is safe to run in addition):
 
 * **WAMP (Windows Task Scheduler):** Create Basic Task → Daily, 8:00 AM → Start a program:
   * Program: `C:\wamp64\bin\php\php8.x.x\php.exe` (the folder of the PHP version WAMP uses)
-  * Arguments: `C:\wamp64\www\riveros-boardinghouse-management\cron\send_reminders.php`
-
-  The computer has to be on at that time. Run the same command once in Command Prompt first;
-  it should print a line like `Rent reminders: 1 sent (0 due soon, 1 overdue) ...`.
+  * Arguments: `C:\wamp64\www\riveros-boardinghouse-management\cron\daily.php`
 * **Railway:** add a second service from the same repo with the start command
-  `php cron/send_reminders.php` and a cron schedule of `0 0 * * *` (midnight UTC = 8:00 AM in
-  Manila). Give it the same `DATABASE_URL` variable as the web service.
+  `php cron/daily.php` and a cron schedule of `0 0 * * *` (midnight UTC = 8:00 AM in Manila).
+  Give it the same `DATABASE_URL` variable as the web service.
+
+**By hand:** on **Payments**, press **Send Rent Reminders**. A window lists exactly who will be
+texted and what it says; press **Send** to send them.
 
 The script does nothing when opened in a browser.
 

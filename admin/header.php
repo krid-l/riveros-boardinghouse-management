@@ -3,7 +3,12 @@ require_once '../includes/db.php';
 require_once '../includes/auth.php';
 requireAdmin();
 require_once '../includes/avatar.php';
+require_once '../includes/notifications.php';
 $current_page = basename($_SERVER['PHP_SELF']);
+notifyUpcomingRentDue($pdo);
+$bellUnread = unreadNotificationCount($pdo);
+$bellItems = recentNotifications($pdo, 8);
+$bellBack = $current_page . (($_SERVER['QUERY_STRING'] ?? '') !== '' ? '?' . $_SERVER['QUERY_STRING'] : '');
 // Shown in the top bar (the one page title) and the browser tab; named like the sidebar links.
 $pageTitles = [
     'dashboard.php'      => 'Dashboard',
@@ -15,6 +20,7 @@ $pageTitles = [
     'reports.php'        => 'Reports & Analytics',
     'announcements.php'  => 'Announcements',
     'settings.php'       => 'Settings',
+    'notifications.php'  => 'Notifications',
 ];
 $pageTitle = $pageTitles[$current_page] ?? ucwords(str_replace(['.php', '_'], ['', ' '], $current_page));
 ?>
@@ -84,12 +90,46 @@ $pageTitle = $pageTitles[$current_page] ?? ucwords(str_replace(['.php', '_'], ['
                     <h5 class="m-0 fw-bold text-dark text-truncate page-title"><?= htmlspecialchars($pageTitle) ?></h5>
                 </div>
                 <div class="d-flex align-items-center">
-                    <button class="btn btn-light rounded-circle position-relative me-2 me-md-3 flex-shrink-0" style="width:40px; height:40px;">
-                        <i class="fa-solid fa-bell text-muted"></i>
-                        <span class="position-absolute top-0 start-100 translate-middle p-1 bg-danger border border-light rounded-circle">
-                            <span class="visually-hidden">New alerts</span>
-                        </span>
-                    </button>
+                    <div class="dropdown me-2 me-md-3">
+                        <button class="btn btn-light rounded-circle position-relative flex-shrink-0" style="width:40px; height:40px;" type="button"
+                                data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false" aria-label="Notifications" id="notifBell">
+                            <i class="fa-solid fa-bell <?= $bellUnread ? 'text-primary' : 'text-muted' ?>"></i>
+                            <?php if ($bellUnread): ?>
+                            <span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger notif-badge">
+                                <?= $bellUnread > 9 ? '9+' : $bellUnread ?><span class="visually-hidden"> unread notifications</span>
+                            </span>
+                            <?php endif; ?>
+                        </button>
+                        <div class="dropdown-menu dropdown-menu-end shadow border-0 mt-2 p-0 notif-panel" aria-labelledby="notifBell">
+                            <div class="d-flex justify-content-between align-items-center px-3 py-2 border-bottom">
+                                <span class="fw-bold" style="font-size: 0.85rem;">Notifications<?= $bellUnread ? " <span class=\"badge bg-danger-subtle text-danger ms-1\">$bellUnread new</span>" : '' ?></span>
+                                <?php if ($bellUnread): ?>
+                                <form method="POST" action="notifications.php" class="m-0">
+                                    <input type="hidden" name="action" value="mark_all_read">
+                                    <input type="hidden" name="back" value="<?= htmlspecialchars($bellBack) ?>">
+                                    <button type="submit" class="btn btn-link btn-sm p-0 text-decoration-none" style="font-size: 0.75rem;">Mark all as read</button>
+                                </form>
+                                <?php endif; ?>
+                            </div>
+                            <div class="notif-list">
+                                <?php if (!$bellItems): ?>
+                                    <div class="text-center text-muted py-4" style="font-size: 0.8rem;"><i class="fa-regular fa-bell-slash d-block mb-2 fs-5 opacity-50"></i>No notifications yet.</div>
+                                <?php endif; ?>
+                                <?php foreach ($bellItems as $n): [$nIcon, $nColor] = notificationIcon($n['type']); ?>
+                                <a href="notifications.php?open=<?= (int)$n['id'] ?>" class="notif-item d-flex gap-2 px-3 py-2 text-decoration-none <?= $n['is_read'] ? '' : 'unread' ?>">
+                                    <span class="notif-icon bg-<?= $nColor ?> bg-opacity-10 text-<?= $nColor ?>"><i class="fa-solid <?= $nIcon ?>"></i></span>
+                                    <span class="flex-grow-1" style="min-width: 0;">
+                                        <span class="d-block notif-title"><?= htmlspecialchars($n['title']) ?></span>
+                                        <?php if ($n['message']): ?><span class="d-block notif-msg text-truncate"><?= htmlspecialchars($n['message']) ?></span><?php endif; ?>
+                                        <span class="d-block notif-time"><?= timeAgo($n['created_at']) ?></span>
+                                    </span>
+                                    <?php if (!$n['is_read']): ?><span class="notif-dot flex-shrink-0" title="Unread"></span><?php endif; ?>
+                                </a>
+                                <?php endforeach; ?>
+                            </div>
+                            <a href="notifications.php" class="d-block text-center py-2 border-top text-decoration-none fw-semibold" style="font-size: 0.8rem;">View all notifications</a>
+                        </div>
+                    </div>
                     <div class="dropdown">
                         <button class="btn btn-light dropdown-toggle border-0 fw-semibold text-dark" type="button" data-bs-toggle="dropdown" aria-label="Manage account">
                             <i class="fa-solid fa-user-gear d-md-none"></i><span class="d-none d-md-inline">Manage Account</span>

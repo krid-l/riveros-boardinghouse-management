@@ -109,6 +109,11 @@ function applyDepositToLastMonth(PDO $pdo, int $tenantId, string $moveOutDate): 
     $deposit = tenantDeposit($pdo, $tenant);
     if ($deposit <= 0) return 0.0;
 
+    // Already used during this stay (the tenant asked to put it toward their last month): once is all.
+    $used = $pdo->prepare("SELECT 1 FROM charges WHERE tenant_id = ? AND kind = ? AND billing_month >= ?");
+    $used->execute([$tenantId, DEPOSIT_APPLIED_KIND, date('Y-m', strtotime($tenant['move_in_date']))]);
+    if ($used->fetchColumn()) return 0.0;
+
     $ins = $pdo->prepare("
         INSERT INTO charges (tenant_id, room_id, kind, billing_month, description, amount, due_date)
         VALUES (?, NULL, ?, ?, ?, ?, ?)
@@ -433,13 +438,18 @@ function oldestUnpaidDueDate(PDO $pdo, int $tenantId, float $balance): ?string {
 }
 
 // Room capacity check, counting active tenants only. Call inside a transaction.
+// A room under maintenance takes nobody: that is an error, not just "full".
 function roomHasSpace(PDO $pdo, int $roomId, ?int $ignoreTenantId = null): bool {
-    $stmt = $pdo->prepare("SELECT capacity FROM rooms WHERE id = ? FOR UPDATE");
+    $stmt = $pdo->prepare("SELECT capacity, status, room_number FROM rooms WHERE id = ? FOR UPDATE");
     $stmt->execute([$roomId]);
-    $capacity = $stmt->fetchColumn();
-    if ($capacity === false) {
+    $room = $stmt->fetch();
+    if (!$room) {
         throw new Exception("Selected room does not exist.");
     }
+    if ($room['status'] === 'maintenance') {
+        throw new Exception("Room {$room['room_number']} is under maintenance and can't take tenants.");
+    }
+    $capacity = $room['capacity'];
     $cnt = $pdo->prepare("SELECT COUNT(*) FROM tenants WHERE room_id = ? AND status = 'active' AND id <> ?");
     $cnt->execute([$roomId, $ignoreTenantId ?? 0]);
     return (int)$cnt->fetchColumn() < (int)$capacity;
@@ -448,4 +458,23 @@ function roomHasSpace(PDO $pdo, int $roomId, ?int $ignoreTenantId = null): bool 
 function logRoomTransfer(PDO $pdo, int $tenantId, ?int $fromRoom, ?int $toRoom, string $date, string $note): void {
     $pdo->prepare("INSERT INTO room_transfers (tenant_id, from_room_id, to_room_id, transferred_at, note) VALUES (?, ?, ?, ?, ?)")
         ->execute([$tenantId, $fromRoom, $toRoom, $date, $note]);
+}
+
+/** "Cash" or "GCash", for messages (a roommate's covered share keeps its "Covered by ..." text). */
+function paymentMethodLabel(?string $method): string {
+    $method = (string)$method;
+    if ($method === 'cash') return 'Cash';
+    if ($method === '' || $method === 'gcash') return 'GCash';
+    return $method;
+}
+
+const MIN_PAYMENT_DEFAULT = 2000.0;
+
+/**
+ * The smallest payment a tenant may submit (Settings -> GCash Payment Information).
+ * A balance smaller than this can still be paid off in full.
+ */
+function minimumPayment(PDO $pdo): float {
+    $value = $pdo->query("SELECT setting_value FROM settings WHERE setting_key = 'min_payment_amount'")->fetchColumn();
+    return $value === false || $value === '' || !is_numeric($value) ? MIN_PAYMENT_DEFAULT : max(0.0, round((float)$value, 2));
 }

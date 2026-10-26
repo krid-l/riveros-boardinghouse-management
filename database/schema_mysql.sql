@@ -14,6 +14,8 @@ CREATE TABLE IF NOT EXISTS users (
     username VARCHAR(50) UNIQUE NOT NULL,
     password_hash VARCHAR(255) NOT NULL,
     temp_password VARCHAR(255),
+    recovery_mobile VARCHAR(20),                      -- admins: where a password reset code is texted
+    last_login_at TIMESTAMP NULL DEFAULT NULL,
     role VARCHAR(20) NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT chk_users_role CHECK (role IN ('admin', 'tenant'))
@@ -41,12 +43,19 @@ CREATE TABLE IF NOT EXISTS tenants (
     move_in_date DATE,                                -- set when the tenant first gets a room
     deactivated_at DATE,
     last_billed_month VARCHAR(7),                     -- 'YYYY-MM' of the latest rent posted
+    middle_name VARCHAR(50),
+    gender VARCHAR(20),
+    email VARCHAR(120),
     occupation VARCHAR(100),
-    emergency_contact VARCHAR(100),
+    emergency_contact VARCHAR(100),                  -- older records: name and number in one field
+    emergency_name VARCHAR(100),
+    emergency_relationship VARCHAR(50),
+    emergency_phone VARCHAR(20),
     address TEXT,
     date_of_birth DATE,
     profile_picture VARCHAR(255),
     announcements_seen_at TIMESTAMP NULL DEFAULT NULL,   -- last visit to the announcements page
+    admin_notes TEXT,                                 -- the admin's notes on the tenant
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
     FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE SET NULL
 ) ENGINE=InnoDB;
@@ -92,6 +101,7 @@ CREATE TABLE IF NOT EXISTS payments (
     status VARCHAR(20) DEFAULT 'pending',
     receipt_path VARCHAR(255),
     covered_by_payment_id INT,                        -- roommate's share of a room payment (not extra revenue)
+    created_at TIMESTAMP NULL DEFAULT NULL,           -- when it was entered
     CONSTRAINT chk_payments_status CHECK (status IN ('pending', 'verified', 'rejected')),
     FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
     FOREIGN KEY (covered_by_payment_id) REFERENCES payments(id) ON DELETE CASCADE
@@ -106,6 +116,11 @@ CREATE TABLE IF NOT EXISTS complaints (
     admin_response TEXT,
     status VARCHAR(20) DEFAULT 'open',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NULL DEFAULT NULL,
+    responded_at TIMESTAMP NULL DEFAULT NULL,         -- first reply from the admin
+    resolved_at TIMESTAMP NULL DEFAULT NULL,
+    priority VARCHAR(10) NOT NULL DEFAULT 'normal',   -- 'low' | 'normal' | 'high', set by the admin
+    photo_path VARCHAR(255),                          -- optional photo from the tenant
     CONSTRAINT chk_complaints_status CHECK (status IN ('open', 'resolved')),
     FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
@@ -132,6 +147,65 @@ CREATE TABLE IF NOT EXISTS sms_log (
     INDEX idx_sms_log_ref (ref)
 ) ENGINE=InnoDB;
 
+-- Forgot password: one-time codes texted to the account's mobile number.
+CREATE TABLE IF NOT EXISTS password_resets (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    code_hash VARCHAR(255) NOT NULL,
+    attempts INT NOT NULL DEFAULT 0,
+    expires_at TIMESTAMP NULL DEFAULT NULL,
+    used_at TIMESTAMP NULL DEFAULT NULL,
+    created_at TIMESTAMP NULL DEFAULT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- The admin's notification bell.
+CREATE TABLE IF NOT EXISTS notifications (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    type VARCHAR(40) NOT NULL,
+    title VARCHAR(150) NOT NULL,
+    message VARCHAR(255),
+    link VARCHAR(255),
+    ref VARCHAR(100),                                 -- stops the same notice being raised twice
+    is_read BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMP NULL DEFAULT NULL,
+    INDEX idx_notifications_ref (ref)
+) ENGINE=InnoDB;
+
+-- A tenant asking for their deposit to pay for their last month; the admin approves it.
+CREATE TABLE IF NOT EXISTS deposit_requests (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    tenant_id INT NOT NULL,
+    billing_month VARCHAR(7) NOT NULL,
+    status VARCHAR(12) NOT NULL DEFAULT 'pending',   -- 'pending' | 'approved' | 'declined'
+    note VARCHAR(255),
+    created_at TIMESTAMP NULL DEFAULT NULL,
+    decided_at TIMESTAMP NULL DEFAULT NULL,
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- Reports exported from Reports & Analytics (the Exported Reports tab)
+CREATE TABLE IF NOT EXISTS report_exports (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    report_type VARCHAR(20) NOT NULL,                 -- financial | payments | unpaid | tenants | occupancy | complaints
+    format VARCHAR(4) NOT NULL,                       -- csv | pdf
+    date_from DATE NULL,
+    date_to DATE NULL,
+    row_count INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMP NULL DEFAULT NULL
+) ENGINE=InnoDB;
+
+-- Files the admin keeps for a tenant: IDs, contracts (the Documents tab)
+CREATE TABLE IF NOT EXISTS tenant_documents (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    tenant_id INT NOT NULL,
+    title VARCHAR(120) NOT NULL,
+    file_path VARCHAR(255) NOT NULL,
+    file_type VARCHAR(10) NOT NULL,                   -- jpg | png | webp | pdf
+    uploaded_at TIMESTAMP NULL DEFAULT NULL,
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
 CREATE TABLE IF NOT EXISTS settings (
     setting_key VARCHAR(50) PRIMARY KEY,
     setting_value TEXT
@@ -145,16 +219,11 @@ ON DUPLICATE KEY UPDATE username = username;
 -- Settings the admin pages read. Values are editable from Admin -> Settings.
 INSERT INTO settings (setting_key, setting_value) VALUES
     ('boarding_house_name', 'RIVEROS BOARDING HOUSE'),
-    ('address', '123 National Highway, Brgy. Poblacion, City of Naga, Cebu 6000'),
-    ('contact_number', '032 123 4567'),
-    ('gcash_name', 'Boarding House'),
-    ('gcash_number', '0917 123 4567'),
+    ('address', ''),
+    ('contact_number', ''),
+    ('gcash_name', ''),
+    ('gcash_number', ''),
     ('gcash_instructions', 'Pay via GCash and send the reference number and screenshot through the payment submission form. Thank you!'),
-    ('sms_provider', 'PhilSMS'),
     ('sms_api_key', ''),
-    ('sms_sender_id', 'PhilSMS'),
-    ('rent_due_date', '30th'),
-    ('currency', 'Philippine Peso (PHP)'),
-    ('date_format', 'Aug 31, 2025 (MMM DD, YYYY)'),
-    ('time_zone', '(UTC+08:00) Asia/Manila')
+    ('sms_sender_id', 'PhilSMS')
 ON DUPLICATE KEY UPDATE setting_key = setting_key;
