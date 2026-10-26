@@ -28,7 +28,7 @@ function statCards(array $cards): string {
                . '<div class="stat-icon bg-' . $color . ' bg-opacity-10 text-' . $color . '"><i class="' . htmlspecialchars($c['icon']) . '"></i></div>'
                . '<div class="stat-text">'
                . '<div class="stat-label">' . htmlspecialchars($c['label']) . '</div>'
-               . '<div class="stat-value">' . htmlspecialchars((string)$c['value']) . '</div>'
+               . '<div class="stat-value" title="' . htmlspecialchars((string)$c['value']) . '">' . htmlspecialchars((string)$c['value']) . '</div>'
                . (isset($c['sub']) && $c['sub'] !== '' ? '<div class="stat-sub ' . htmlspecialchars($c['subClass'] ?? 'text-muted') . '">' . htmlspecialchars($c['sub']) . '</div>' : '')
                . '</div>'
                . '<i class="fa-solid fa-chevron-right stat-chevron"></i>'

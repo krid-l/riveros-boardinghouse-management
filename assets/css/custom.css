@@ -195,9 +195,10 @@ body {
 .stat-card.active { border-color: #2563eb !important; box-shadow: 0 0 0 1px #2563eb inset !important; }
 .stat-card .card-body { padding: 1rem 1.1rem; gap: 0.9rem; }
 .stat-icon { width: 50px; height: 50px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1.25rem; flex-shrink: 0; }
-.stat-text { min-width: 0; flex: 1 1 auto; }
+.stat-text { min-width: 0; flex: 1 1 auto; container-type: inline-size; }
 .stat-label { font-size: 0.82rem; font-weight: 600; color: #1e293b; line-height: 1.25; }
-.stat-value { font-size: 1.45rem; font-weight: 700; color: #0f2a5c; line-height: 1.3; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Shrinks with the card (cqi = 1% of .stat-text's width) so ₱1,234,567.00 fits whole instead of ending in "..." */
+.stat-value { font-size: clamp(0.9rem, 11cqi, 1.45rem); font-weight: 700; color: #0f2a5c; line-height: 1.3; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .stat-sub { font-size: 0.72rem; font-weight: 500; line-height: 1.3; margin-top: 2px; }
 .stat-chevron { font-size: 0.6rem; color: #cbd5e1; flex-shrink: 0; }
 .stat-card:hover .stat-chevron { color: #2563eb; }
@@ -205,14 +206,16 @@ body {
 .stat-card:has(.stat-link:focus-visible) { outline: 2px solid #2563eb; outline-offset: 2px; }
 .stat-link:focus-visible { outline: none; box-shadow: none; }
 @media (max-width: 1399.98px) {
-    .stat-value { font-size: 1.25rem; }
+    .stat-value { font-size: clamp(0.9rem, 11cqi, 1.25rem); }
 }
+/* Phones: two cards per row is narrow, so the icon sits above the text and the amount gets the full width */
 @media (max-width: 575.98px) {
     .stat-card { min-height: 92px; }
-    .stat-card .card-body { padding: 0.75rem; gap: 0.55rem; }
-    .stat-icon { width: 36px; height: 36px; font-size: 0.9rem; }
+    .stat-card .card-body { padding: 0.75rem; gap: 0.4rem; flex-direction: column; align-items: flex-start !important; }
+    .stat-icon { width: 32px; height: 32px; font-size: 0.85rem; }
+    .stat-text { width: 100%; }
     .stat-label { font-size: 0.72rem; }
-    .stat-value { font-size: 1.05rem; }
+    .stat-value { font-size: clamp(0.8rem, 11cqi, 1.1rem); }
     .stat-chevron { display: none; }
 }
 
