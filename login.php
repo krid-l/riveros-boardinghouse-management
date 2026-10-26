@@ -164,5 +164,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
     </script>
+<script src="assets/js/busy.js?v=<?= (int)@filemtime(__DIR__ . '/assets/js/busy.js') ?>"></script>
 </body>
 </html>

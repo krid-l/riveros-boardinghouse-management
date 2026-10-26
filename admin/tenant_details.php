@@ -628,6 +628,7 @@ $upcomingDue = upcomingDueDate($pdo, $tenantId);
         <!-- Deposit: held for the last month; the tenant can ask to use it -->
         <?php
         $depositUsed = depositAppliedThisStay($pdo, $tenant);
+        $depositUnpaid = $depositUsed ? 0.0 : depositUnpaid($pdo, $tenant);
         $depositPending = pendingDepositRequest($pdo, $tenantId);
         ?>
         <div class="section-card shadow-sm" id="deposit">
@@ -641,7 +642,11 @@ $upcomingDue = upcomingDueDate($pdo, $tenantId);
                 <?php elseif ($depositUsed): ?>
                     <div><strong>₱<?= number_format((float)$depositUsed['amount'], 2) ?></strong> used for the rent of <strong><?= date('F Y', strtotime($depositUsed['billing_month'] . '-01')) ?></strong>.</div>
                 <?php else: ?>
-                    <div class="mb-2"><strong>₱<?= number_format($depositHeld, 2) ?></strong> held for the last month of stay.</div>
+                    <?php if ($depositUnpaid > 0): ?>
+                        <div class="mb-2"><strong>₱<?= number_format($depositHeld, 2) ?></strong> deposit, <span class="text-danger fw-semibold">not paid yet</span> (₱<?= number_format($depositUnpaid, 2) ?> still due). It can't be used for the last month until it is paid.</div>
+                    <?php else: ?>
+                        <div class="mb-2"><strong>₱<?= number_format($depositHeld, 2) ?></strong> held for the last month of stay.</div>
+                    <?php endif; ?>
                     <?php if ($depositPending): ?>
                         <div class="alert alert-warning py-2 px-2 mb-2" style="font-size:0.72rem;">
                             The tenant asked to use it for <strong><?= date('F Y', strtotime($depositPending['billing_month'] . '-01')) ?></strong>
@@ -653,7 +658,7 @@ $upcomingDue = upcomingDueDate($pdo, $tenantId);
                             <input type="hidden" name="request_id" value="<?= (int)$depositPending['id'] ?>">
                             <input type="text" name="note" class="form-control form-control-sm mb-2" maxlength="255" placeholder="Note to the tenant if declining (optional)">
                             <div class="d-flex gap-2">
-                                <button type="submit" name="decision" value="approve" class="btn btn-sm btn-success flex-grow-1" onclick="return confirm('Apply the ₱<?= number_format($depositHeld, 2) ?> deposit to <?= date('F Y', strtotime($depositPending['billing_month'] . '-01')) ?>?');"><i class="fa-solid fa-check me-1"></i>Approve</button>
+                                <button type="submit" name="decision" value="approve" class="btn btn-sm btn-success flex-grow-1"<?= $depositUnpaid > 0 ? ' disabled title="The deposit has not been paid yet"' : '' ?> onclick="return confirm('Apply the ₱<?= number_format($depositHeld, 2) ?> deposit to <?= date('F Y', strtotime($depositPending['billing_month'] . '-01')) ?>?');"><i class="fa-solid fa-check me-1"></i>Approve</button>
                                 <button type="submit" name="decision" value="decline" class="btn btn-sm btn-outline-danger flex-grow-1"><i class="fa-solid fa-xmark me-1"></i>Decline</button>
                             </div>
                         </form>

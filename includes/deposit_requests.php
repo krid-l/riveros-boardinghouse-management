@@ -22,6 +22,40 @@ function depositAppliedThisStay(PDO $pdo, array $tenant): ?array {
     return $row ?: null;
 }
 
+/**
+ * How much of the stay's deposit is still unpaid; 0 once it has been paid in full.
+ * Payments settle the oldest charges first, so the unpaid part of the balance is the newest
+ * charges: walk back from the newest until the deposit is reached. It is posted after the
+ * first month's rent with the same due date, so a part payment at move-in counts toward the
+ * rent before the deposit.
+ */
+function depositUnpaid(PDO $pdo, array $tenant): float {
+    $deposit = tenantDeposit($pdo, $tenant);
+    if ($deposit <= 0) {
+        return 0.0;
+    }
+    $bal = $pdo->prepare("SELECT balance FROM tenants WHERE id = ?");
+    $bal->execute([$tenant['id']]);
+    $remaining = (float)$bal->fetchColumn();
+    $stmt = $pdo->prepare("SELECT kind, billing_month, amount FROM charges WHERE tenant_id = ? ORDER BY due_date DESC, id DESC");
+    $stmt->execute([$tenant['id']]);
+    $stayMonth = date('Y-m', strtotime($tenant['move_in_date']));
+    foreach ($stmt->fetchAll() as $c) {
+        if ($c['kind'] === DEPOSIT_KIND && $c['billing_month'] === $stayMonth) {
+            return round(min($deposit, max(0.0, $remaining)), 2);
+        }
+        $remaining -= (float)$c['amount'];
+    }
+    return 0.0;
+}
+
+/** Why a deposit that hasn't been paid can't be used yet, for the tenant and the admin. */
+function depositUnpaidMessage(float $unpaid, bool $forTenant): string {
+    return ($forTenant ? 'Your deposit has' : 'This tenant\'s deposit has')
+         . ' not been paid yet (PHP ' . number_format($unpaid, 2) . ' still due). '
+         . ($forTenant ? 'Once it is paid, you can use it for your last month.' : 'It can be used once it is paid.');
+}
+
 function pendingDepositRequest(PDO $pdo, int $tenantId): ?array {
     $stmt = $pdo->prepare("SELECT * FROM deposit_requests WHERE tenant_id = ? AND status = 'pending' ORDER BY id DESC LIMIT 1");
     $stmt->execute([$tenantId]);
@@ -61,6 +95,11 @@ function requestDepositUse(PDO $pdo, array $tenant, string $month): string {
     }
     if (depositAppliedThisStay($pdo, $tenant)) {
         return 'Your deposit has already been used.';
+    }
+    // A deposit that was never paid has nothing in it to pay a month with.
+    $unpaid = depositUnpaid($pdo, $tenant);
+    if ($unpaid > 0) {
+        return depositUnpaidMessage($unpaid, true);
     }
     if (pendingDepositRequest($pdo, (int)$tenant['id'])) {
         return 'You already have a request waiting for the admin.';
@@ -104,6 +143,8 @@ function decideDepositRequest(PDO $pdo, int $requestId, bool $approve, string $n
             $deposit = tenantDeposit($pdo, $tenant);
             if ($deposit <= 0) throw new Exception('This tenant has no deposit on record.');
             if (depositAppliedThisStay($pdo, $tenant)) throw new Exception('This tenant\'s deposit has already been used.');
+            $unpaid = depositUnpaid($pdo, $tenant);
+            if ($unpaid > 0) throw new Exception(depositUnpaidMessage($unpaid, false) . ' Decline the request for now.');
             $month = $req['billing_month'];
             $pdo->prepare("INSERT INTO charges (tenant_id, room_id, kind, billing_month, description, amount, due_date) VALUES (?, ?, ?, ?, ?, ?, ?)")
                 ->execute([$req['tenant_id'], $req['room_id'], DEPOSIT_APPLIED_KIND, $month,
