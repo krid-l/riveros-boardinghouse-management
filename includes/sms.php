@@ -209,6 +209,15 @@ function philsmsRequest(string $method, string $path, string $token, ?array $bod
         return ['ok' => false, 'error' => $error, 'data' => null, 'http' => 0, 'timeout' => true];
     }
     if ($response === false) {
+        // A certificate that is "not yet valid" or "expired" almost always means this computer's
+        // clock is wrong (PhilSMS renews its certificate long before it runs out).
+        if (preg_match('/not yet valid|expired/i', $transportError)) {
+            return ['ok' => false, 'http' => 0, 'data' => null,
+                    'error' => 'Could not reach PhilSMS: the date or time on this computer is wrong. It says '
+                             . date('F j, Y g:i A') . '. In Windows, open Settings > Time & language > Date & time, '
+                             . 'turn on "Set time automatically", choose the (UTC+08:00) Manila time zone and press '
+                             . '"Sync now". Then try again. (' . $transportError . ')'];
+        }
         $hint = stripos($transportError, 'certificate') !== false
             ? ' (HTTPS certificate check failed; see SMS_SETUP.md, Troubleshooting)'
             : '';

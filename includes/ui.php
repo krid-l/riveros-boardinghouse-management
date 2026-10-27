@@ -41,3 +41,32 @@ function statCards(array $cards): string {
 function peso(float $amount): string {
     return '₱' . number_format($amount, 2);
 }
+
+/**
+ * Shares of a whole, as percentages that add up to exactly 100 once rounded.
+ * Rounding each share on its own can give 99.9% or 100.1% (1, 3 and 3 of 7: 14.3 + 42.9 + 42.9).
+ * Each share is rounded down first, and the leftover tenths go to the shares that lost the most
+ * (ties: the earlier one). ['occupied' => 4, 'available' => 4, 'maintenance' => 1]
+ * gives ['occupied' => 44.5, 'available' => 44.4, 'maintenance' => 11.1].
+ */
+function percentShares(array $counts, int $decimals = 1): array {
+    $total = array_sum($counts);
+    if ($total <= 0) {
+        return array_map(fn() => 0.0, $counts);
+    }
+    $scale = 10 ** $decimals;
+    $units = [];
+    $remainders = [];
+    foreach ($counts as $key => $n) {
+        $exact = $n / $total * 100 * $scale;
+        $units[$key] = (int)floor($exact + 1e-9);
+        $remainders[$key] = $exact - $units[$key];
+    }
+    $left = 100 * $scale - array_sum($units);
+    $order = array_keys($counts);
+    usort($order, fn($a, $b) => $remainders[$b] <=> $remainders[$a]);   // stable: ties keep their order
+    foreach (array_slice($order, 0, max(0, $left)) as $key) {
+        $units[$key]++;
+    }
+    return array_map(fn($u) => $u / $scale, $units);
+}

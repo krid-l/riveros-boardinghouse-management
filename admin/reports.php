@@ -34,9 +34,10 @@ foreach($roomsData as $r) {
 }
 
 $occupancyRate = $totalRooms > 0 ? ($occupiedRooms / $totalRooms) * 100 : 0;
-$bedOccupancyRate = $totalCapacity > 0 ? ($totalOccupied / $totalCapacity) * 100 : 0;
 $availableBeds = max(0, $totalCapacity - $totalOccupied - $maintenanceBeds);
-$pctOfBeds = fn($n) => $totalCapacity > 0 ? number_format($n / $totalCapacity * 100, 1) : '0.0';
+// Occupied, available and maintenance beds as shares that add up to exactly 100%.
+$bedShares = percentShares(['occupied' => $totalOccupied, 'available' => $availableBeds, 'maintenance' => $maintenanceBeds]);
+$bedOccupancyRate = $bedShares['occupied'];
 
 // The Exported Reports tab: what was downloaded, newest first.
 $exportPager = paginate((int)$pdo->query("SELECT COUNT(*) FROM report_exports")->fetchColumn(), 15, 'page_exports', ['tab' => 'exported']);
@@ -244,11 +245,11 @@ require_once 'header.php';
                 </div>
                 <div class="p-3">
                     <div class="row g-2 mb-2">
-                        <?php foreach ([['Occupied', $totalOccupied, 'success'], ['Available', $availableBeds, 'primary'], ['Maintenance', $maintenanceBeds, 'warning']] as [$label, $n, $color]): ?>
+                        <?php foreach ([['Occupied', $totalOccupied, 'success', 'occupied'], ['Available', $availableBeds, 'primary', 'available'], ['Maintenance', $maintenanceBeds, 'warning', 'maintenance']] as [$label, $n, $color, $key]): ?>
                         <div class="col-4">
                             <div class="occ-box">
                                 <div class="occ-label"><span class="dot bg-<?= $color ?>"></span><?= $label ?></div>
-                                <div><span class="occ-num"><?= (int)$n ?></span> <span class="occ-pct">(<?= $pctOfBeds($n) ?>%)</span></div>
+                                <div><span class="occ-num"><?= (int)$n ?></span> <span class="occ-pct">(<?= number_format($bedShares[$key], 1) ?>%)</span></div>
                             </div>
                         </div>
                         <?php endforeach; ?>

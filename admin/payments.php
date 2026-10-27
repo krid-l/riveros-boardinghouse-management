@@ -807,7 +807,8 @@ $monthLabel = date('F Y');
                 <?php if (!$collectedByRoom): ?>
                     <div class="text-center text-muted py-4 small">No payments verified yet this month.</div>
                 <?php else: ?>
-                    <?php foreach ($collectedByRoom as $room => $amt): $pctOf = $totalCollected > 0 ? round($amt / $totalCollected * 100) : 0; ?>
+                    <?php $roomShares = percentShares($collectedByRoom, 0);   // add up to exactly 100% ?>
+                    <?php foreach ($collectedByRoom as $room => $amt): $pctOf = (int)$roomShares[$room]; ?>
                         <div class="mb-2">
                             <div class="d-flex justify-content-between" style="font-size:0.78rem;">
                                 <span class="fw-semibold text-dark"><?= htmlspecialchars($room) ?></span>
