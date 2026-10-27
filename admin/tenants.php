@@ -32,28 +32,13 @@ if (empty($success) && !empty($_GET['msg'])) {
 
 // Fetch stats
 $totalTenants = $pdo->query("SELECT COUNT(*) FROM tenants WHERE status = 'active'")->fetchColumn();
-$occupiedRooms = $pdo->query("SELECT COUNT(DISTINCT room_id) FROM tenants WHERE room_id IS NOT NULL AND status = 'active'")->fetchColumn();
 
 // Active tenants by billing state, for the summary cards (each one filters the list).
 $tenantCounts = ['paid' => 0, 'due' => 0, 'overdue' => 0];
-$tenantAmounts = ['due' => 0.0, 'overdue' => 0.0];
 $cardNotYetDue = chargesNotYetDue($pdo);
 foreach ($pdo->query("SELECT id, balance, status FROM tenants WHERE status = 'active'")->fetchAll() as $t) {
-    $billing = tenantBillingStatus($t, $cardNotYetDue);
-    $tenantCounts[$billing['key']]++;
-    if ($billing['key'] === 'overdue') {
-        $tenantAmounts['overdue'] += $billing['balance'];
-    } elseif ($billing['key'] === 'due') {
-        $tenantAmounts['due'] += $billing['balance'];
-    }
+    $tenantCounts[tenantBillingStatus($t, $cardNotYetDue)['key']]++;
 }
-
-// Total paid this month
-$monthStart = date('Y-m-01');
-$monthEnd = date('Y-m-t');
-$stmt = $pdo->prepare("SELECT SUM(amount) FROM payments WHERE " . REVENUE_FILTER_SQL . " AND payment_date BETWEEN ? AND ?");
-$stmt->execute([$monthStart, $monthEnd]);
-$totalPaidThisMonth = $stmt->fetchColumn() ?: 0;
 
 // --- TENANTS LIST ---
 // Searching, the status filter and paging all happen in SQL, so the page only ever builds
@@ -208,13 +193,13 @@ require_once 'header.php';
 
 <!-- Summary cards: each one filters the list below -->
 <?= statCards([
-    ['label' => 'Active Tenants', 'value' => (int)$totalTenants, 'sub' => "In $occupiedRooms " . ((int)$occupiedRooms === 1 ? 'room' : 'rooms'),
+    ['label' => 'Active Tenants', 'value' => (int)$totalTenants,
      'icon' => 'fa-solid fa-users', 'color' => 'primary', 'href' => 'tenants.php', 'active' => $filterStatus === 'all', 'aria' => 'Show all tenants'],
-    ['label' => 'Paid', 'value' => $tenantCounts['paid'], 'sub' => peso((float)$totalPaidThisMonth) . ' paid this month', 'subClass' => 'text-success',
+    ['label' => 'Paid', 'value' => $tenantCounts['paid'],
      'icon' => 'fa-solid fa-circle-check', 'color' => 'success', 'href' => 'tenants.php?status=paid', 'active' => $filterStatus === 'paid', 'aria' => 'Show tenants who are paid up'],
-    ['label' => 'Unpaid', 'value' => $tenantCounts['due'], 'sub' => peso($tenantAmounts['due']) . ' not yet due', 'subClass' => 'text-warning',
+    ['label' => 'Unpaid', 'value' => $tenantCounts['due'],
      'icon' => 'fa-regular fa-clock', 'color' => 'warning', 'href' => 'tenants.php?status=due', 'active' => $filterStatus === 'due', 'aria' => 'Show tenants with rent not yet due'],
-    ['label' => 'Overdue', 'value' => $tenantCounts['overdue'], 'sub' => peso($tenantAmounts['overdue']) . ' owed', 'subClass' => $tenantCounts['overdue'] ? 'text-danger' : 'text-muted',
+    ['label' => 'Overdue', 'value' => $tenantCounts['overdue'],
      'icon' => 'fa-solid fa-triangle-exclamation', 'color' => 'danger', 'href' => 'tenants.php?status=overdue', 'active' => $filterStatus === 'overdue', 'aria' => 'Show overdue tenants'],
 ]) ?>
 
@@ -418,13 +403,15 @@ function moveInPaymentFields(string $id, bool $startHidden = false): string {
                         <div class="movein-estimate text-muted mb-2" style="font-size:0.68rem;"></div>
                         <div class="movein-details row g-2">
                             <div class="col-5">
-                                <select class="form-select" name="movein_method" aria-label="Payment method">
+                                <label class="form-label mb-1" for="' . $id . '_method" style="font-size:0.68rem;">Paid by</label>
+                                <select class="form-select" name="movein_method" id="' . $id . '_method">
                                     <option value="cash">Cash</option>
                                     <option value="gcash">GCash</option>
                                 </select>
                             </div>
                             <div class="col-7">
-                                <input type="text" class="form-control" name="movein_reference" maxlength="100" placeholder="Ref no. (optional)">
+                                <label class="form-label mb-1" for="' . $id . '_ref" style="font-size:0.68rem;">Reference no. (optional)</label>
+                                <input type="text" class="form-control" name="movein_reference" id="' . $id . '_ref" maxlength="100">
                             </div>
                         </div>
                         <small class="text-muted d-block mt-2" style="font-size:0.62rem;">Recorded as a verified payment with a receipt, so the tenant starts fully paid. Untick if they will pay later.</small>
@@ -446,7 +433,7 @@ function moveInPaymentFields(string $id, bool $startHidden = false): string {
                     <!-- Desktop: profile on the left, room and payment on the right, so it all fits without scrolling -->
                     <div class="row gx-4">
                     <div class="col-lg-7">
-                    <?= tenantProfileFormFields($addOld, 'add') ?>
+                    <?= tenantProfileFormFields($addOld, 'add', true, false) ?>
                     </div>
 
                     <div class="col-lg-5">

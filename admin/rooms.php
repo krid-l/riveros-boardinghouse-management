@@ -105,14 +105,11 @@ foreach ($tenantsStmt->fetchAll() as $t) {
 // pays one bed's part, price_per_month / capacity, so a room earns that per occupied bed and
 // its full price only when full.
 $totalRooms = count($rooms);
-$potentialValue = 0;   // if every bed were taken
 $currentValue = 0;     // from the beds taken now
 $occupiedRooms = 0;      // full rooms
 $roomsWithSpace = 0;     // can take someone now (not under maintenance)
-$freeBeds = 0;
 
 foreach ($rooms as &$r) {
-    $potentialValue += $r['price_per_month'];
     $occCount = isset($tenantsByRoom[$r['id']]) ? count($tenantsByRoom[$r['id']]) : 0;
     $currentValue += rentShare((float)$r['price_per_month'], (int)$r['capacity']) * min($occCount, max(1, (int)$r['capacity']));
     if ($r['status'] === 'maintenance') {
@@ -129,7 +126,6 @@ foreach ($rooms as &$r) {
         $occupiedRooms++;
     } else {
         $roomsWithSpace++;
-        $freeBeds += (int)$r['capacity'] - $occCount;
     }
 }
 unset($r);
@@ -200,11 +196,11 @@ require_once 'header.php';
         <?= statCards([
             ['label' => 'Total Rooms', 'value' => $totalRooms,
              'icon' => 'fa-solid fa-door-open', 'color' => 'primary', 'href' => 'rooms.php', 'active' => $showFilter === 'all', 'aria' => 'Show all rooms'],
-            ['label' => 'Available Rooms', 'value' => $roomsWithSpace, 'sub' => $freeBeds . ' free ' . ($freeBeds === 1 ? 'bed' : 'beds'), 'subClass' => 'text-success',
+            ['label' => 'Available Rooms', 'value' => $roomsWithSpace,
              'icon' => 'fa-solid fa-bed', 'color' => 'success', 'href' => 'rooms.php?show=space', 'active' => $showFilter === 'space', 'aria' => 'Show rooms with a free bed'],
-            ['label' => 'Occupied Rooms', 'value' => $occupiedRooms, 'sub' => 'Every bed taken',
+            ['label' => 'Occupied Rooms', 'value' => $occupiedRooms,
              'icon' => 'fa-solid fa-door-closed', 'color' => 'secondary', 'href' => 'rooms.php?show=occupied', 'active' => $showFilter === 'occupied', 'aria' => 'Show occupied rooms'],
-            ['label' => 'Monthly Income Now', 'value' => peso((float)$currentValue), 'sub' => peso((float)$potentialValue) . ' if every bed is taken',
+            ['label' => 'Monthly Income Now', 'value' => peso((float)$currentValue),
              'icon' => 'fa-solid fa-peso-sign', 'color' => 'warning', 'href' => 'reports.php?tab=financial', 'aria' => 'Open the financial report'],
         ]) ?>
 
@@ -558,16 +554,16 @@ require_once 'header.php';
                 <div class="modal-body p-4">
                     <div class="mb-3">
                         <label class="form-label text-muted fw-semibold">Room Name / Number</label>
-                        <input type="text" class="form-control" name="room_number" required placeholder="e.g. 101 or Room A">
+                        <input type="text" class="form-control" name="room_number" required>
                     </div>
                     <div class="row g-3 mb-3">
                         <div class="col-md-6">
                             <label class="form-label text-muted fw-semibold">Capacity (Persons)</label>
-                            <input type="number" class="form-control" name="capacity" min="1" required placeholder="e.g. 4">
+                            <input type="number" class="form-control" name="capacity" min="1" required>
                         </div>
                         <div class="col-md-6">
                             <label class="form-label text-muted fw-semibold">Price per Room / Month (PHP)</label>
-                            <input type="number" step="0.01" min="0" class="form-control" name="price_per_month" required placeholder="8000.00">
+                            <input type="number" step="0.01" min="0" class="form-control" name="price_per_month" required>
                             <div class="form-text" style="font-size: 0.7rem;">The rent for the whole room when every bed is taken. Each tenant pays this ÷ capacity, even while beds are empty.</div>
                             <div class="fw-semibold text-primary mt-1 rent-preview" style="font-size:0.75rem;"></div>
                         </div>
