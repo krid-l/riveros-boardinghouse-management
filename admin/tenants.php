@@ -32,28 +32,13 @@ if (empty($success) && !empty($_GET['msg'])) {
 
 // Fetch stats
 $totalTenants = $pdo->query("SELECT COUNT(*) FROM tenants WHERE status = 'active'")->fetchColumn();
-$occupiedRooms = $pdo->query("SELECT COUNT(DISTINCT room_id) FROM tenants WHERE room_id IS NOT NULL AND status = 'active'")->fetchColumn();
 
 // Active tenants by billing state, for the summary cards (each one filters the list).
 $tenantCounts = ['paid' => 0, 'due' => 0, 'overdue' => 0];
-$tenantAmounts = ['due' => 0.0, 'overdue' => 0.0];
 $cardNotYetDue = chargesNotYetDue($pdo);
 foreach ($pdo->query("SELECT id, balance, status FROM tenants WHERE status = 'active'")->fetchAll() as $t) {
-    $billing = tenantBillingStatus($t, $cardNotYetDue);
-    $tenantCounts[$billing['key']]++;
-    if ($billing['key'] === 'overdue') {
-        $tenantAmounts['overdue'] += $billing['balance'];
-    } elseif ($billing['key'] === 'due') {
-        $tenantAmounts['due'] += $billing['balance'];
-    }
+    $tenantCounts[tenantBillingStatus($t, $cardNotYetDue)['key']]++;
 }
-
-// Total paid this month
-$monthStart = date('Y-m-01');
-$monthEnd = date('Y-m-t');
-$stmt = $pdo->prepare("SELECT SUM(amount) FROM payments WHERE " . REVENUE_FILTER_SQL . " AND payment_date BETWEEN ? AND ?");
-$stmt->execute([$monthStart, $monthEnd]);
-$totalPaidThisMonth = $stmt->fetchColumn() ?: 0;
 
 // --- TENANTS LIST ---
 // Searching, the status filter and paging all happen in SQL, so the page only ever builds
@@ -208,13 +193,13 @@ require_once 'header.php';
 
 <!-- Summary cards: each one filters the list below -->
 <?= statCards([
-    ['label' => 'Active Tenants', 'value' => (int)$totalTenants, 'sub' => "In $occupiedRooms " . ((int)$occupiedRooms === 1 ? 'room' : 'rooms'),
+    ['label' => 'Active Tenants', 'value' => (int)$totalTenants,
      'icon' => 'fa-solid fa-users', 'color' => 'primary', 'href' => 'tenants.php', 'active' => $filterStatus === 'all', 'aria' => 'Show all tenants'],
-    ['label' => 'Paid', 'value' => $tenantCounts['paid'], 'sub' => peso((float)$totalPaidThisMonth) . ' paid this month', 'subClass' => 'text-success',
+    ['label' => 'Paid', 'value' => $tenantCounts['paid'],
      'icon' => 'fa-solid fa-circle-check', 'color' => 'success', 'href' => 'tenants.php?status=paid', 'active' => $filterStatus === 'paid', 'aria' => 'Show tenants who are paid up'],
-    ['label' => 'Unpaid', 'value' => $tenantCounts['due'], 'sub' => peso($tenantAmounts['due']) . ' not yet due', 'subClass' => 'text-warning',
+    ['label' => 'Unpaid', 'value' => $tenantCounts['due'],
      'icon' => 'fa-regular fa-clock', 'color' => 'warning', 'href' => 'tenants.php?status=due', 'active' => $filterStatus === 'due', 'aria' => 'Show tenants with rent not yet due'],
-    ['label' => 'Overdue', 'value' => $tenantCounts['overdue'], 'sub' => peso($tenantAmounts['overdue']) . ' owed', 'subClass' => $tenantCounts['overdue'] ? 'text-danger' : 'text-muted',
+    ['label' => 'Overdue', 'value' => $tenantCounts['overdue'],
      'icon' => 'fa-solid fa-triangle-exclamation', 'color' => 'danger', 'href' => 'tenants.php?status=overdue', 'active' => $filterStatus === 'overdue', 'aria' => 'Show overdue tenants'],
 ]) ?>
 
