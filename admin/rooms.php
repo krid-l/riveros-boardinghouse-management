@@ -105,14 +105,11 @@ foreach ($tenantsStmt->fetchAll() as $t) {
 // pays one bed's part, price_per_month / capacity, so a room earns that per occupied bed and
 // its full price only when full.
 $totalRooms = count($rooms);
-$potentialValue = 0;   // if every bed were taken
 $currentValue = 0;     // from the beds taken now
 $occupiedRooms = 0;      // full rooms
 $roomsWithSpace = 0;     // can take someone now (not under maintenance)
-$freeBeds = 0;
 
 foreach ($rooms as &$r) {
-    $potentialValue += $r['price_per_month'];
     $occCount = isset($tenantsByRoom[$r['id']]) ? count($tenantsByRoom[$r['id']]) : 0;
     $currentValue += rentShare((float)$r['price_per_month'], (int)$r['capacity']) * min($occCount, max(1, (int)$r['capacity']));
     if ($r['status'] === 'maintenance') {
@@ -129,7 +126,6 @@ foreach ($rooms as &$r) {
         $occupiedRooms++;
     } else {
         $roomsWithSpace++;
-        $freeBeds += (int)$r['capacity'] - $occCount;
     }
 }
 unset($r);
@@ -200,11 +196,11 @@ require_once 'header.php';
         <?= statCards([
             ['label' => 'Total Rooms', 'value' => $totalRooms,
              'icon' => 'fa-solid fa-door-open', 'color' => 'primary', 'href' => 'rooms.php', 'active' => $showFilter === 'all', 'aria' => 'Show all rooms'],
-            ['label' => 'Available Rooms', 'value' => $roomsWithSpace, 'sub' => $freeBeds . ' free ' . ($freeBeds === 1 ? 'bed' : 'beds'), 'subClass' => 'text-success',
+            ['label' => 'Available Rooms', 'value' => $roomsWithSpace,
              'icon' => 'fa-solid fa-bed', 'color' => 'success', 'href' => 'rooms.php?show=space', 'active' => $showFilter === 'space', 'aria' => 'Show rooms with a free bed'],
-            ['label' => 'Occupied Rooms', 'value' => $occupiedRooms, 'sub' => 'Every bed taken',
+            ['label' => 'Occupied Rooms', 'value' => $occupiedRooms,
              'icon' => 'fa-solid fa-door-closed', 'color' => 'secondary', 'href' => 'rooms.php?show=occupied', 'active' => $showFilter === 'occupied', 'aria' => 'Show occupied rooms'],
-            ['label' => 'Monthly Income Now', 'value' => peso((float)$currentValue), 'sub' => peso((float)$potentialValue) . ' if every bed is taken',
+            ['label' => 'Monthly Income Now', 'value' => peso((float)$currentValue),
              'icon' => 'fa-solid fa-peso-sign', 'color' => 'warning', 'href' => 'reports.php?tab=financial', 'aria' => 'Open the financial report'],
         ]) ?>
 
