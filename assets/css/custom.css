@@ -138,6 +138,7 @@ body {
     border-radius: 0.5rem;
     padding: 0.6rem 1rem;
 }
+.form-select { padding-right: 2.25rem; }   /* room for the arrow, so it doesn't sit on the text */
 .form-control:focus, .form-select:focus {
     border-color: #3b82f6;
     box-shadow: 0 0 0 0.25rem rgb(59 130 246 / 0.25);
