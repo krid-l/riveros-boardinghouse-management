@@ -110,9 +110,11 @@ function tenantAge(?string $dob): ?int {
  * @param array  $v        current values (column => value)
  * @param string $idPrefix prefix for the inputs' ids (several forms can be on one page)
  * @param bool   $nameEditable false on the tenant's own page: the name is shown, read-only
+ * @param bool   $placeholders false for empty boxes without the "e.g." examples (Add Tenant)
  */
-function tenantProfileFormFields(array $v, string $idPrefix, bool $nameEditable = true): string {
+function tenantProfileFormFields(array $v, string $idPrefix, bool $nameEditable = true, bool $placeholders = true): string {
     $e = fn($key) => htmlspecialchars((string)($v[$key] ?? ''), ENT_QUOTES);
+    $ph = fn(string $text) => $placeholders ? ' placeholder="' . htmlspecialchars($text) . '"' : '';
     $id = fn($key) => htmlspecialchars($idPrefix . '_' . $key);
     $ro = $nameEditable ? '' : ' readonly tabindex="-1"';
     $roClass = $nameEditable ? '' : ' bg-light';
@@ -131,33 +133,33 @@ function tenantProfileFormFields(array $v, string $idPrefix, bool $nameEditable 
     <div class="profile-section-title">Personal information</div>
     <div class="row g-2 mb-2">
         <div class="col-sm-4"><label for="' . $id('first_name') . '">First name' . ($nameEditable ? ' <span class="text-danger">*</span>' : '') . '</label>
-            <input type="text" class="form-control' . $roClass . '" id="' . $id('first_name') . '" name="first_name" maxlength="50" placeholder="e.g., Juan" value="' . $e('first_name') . '"' . $req . $ro . '></div>
+            <input type="text" class="form-control' . $roClass . '" id="' . $id('first_name') . '" name="first_name" maxlength="50"' . $ph('e.g., Juan') . ' value="' . $e('first_name') . '"' . $req . $ro . '></div>
         <div class="col-sm-4"><label for="' . $id('middle_name') . '">Middle name</label>
-            <input type="text" class="form-control' . $roClass . '" id="' . $id('middle_name') . '" name="middle_name" maxlength="50" placeholder="e.g., Santos" value="' . $e('middle_name') . '"' . $ro . '></div>
+            <input type="text" class="form-control' . $roClass . '" id="' . $id('middle_name') . '" name="middle_name" maxlength="50"' . $ph('e.g., Santos') . ' value="' . $e('middle_name') . '"' . $ro . '></div>
         <div class="col-sm-4"><label for="' . $id('last_name') . '">Last name' . ($nameEditable ? ' <span class="text-danger">*</span>' : '') . '</label>
-            <input type="text" class="form-control' . $roClass . '" id="' . $id('last_name') . '" name="last_name" maxlength="50" placeholder="e.g., Dela Cruz" value="' . $e('last_name') . '"' . $req . $ro . '></div>
+            <input type="text" class="form-control' . $roClass . '" id="' . $id('last_name') . '" name="last_name" maxlength="50"' . $ph('e.g., Dela Cruz') . ' value="' . $e('last_name') . '"' . $req . $ro . '></div>
         ' . ($nameEditable ? '' : '<div class="col-12"><div class="form-text mt-0" style="font-size:0.65rem;">Your name is on your receipts. Ask the admin if it needs correcting.</div></div>') . '
         <div class="col-sm-4"><label for="' . $id('gender') . '">Gender</label>
             <select class="form-select" id="' . $id('gender') . '" name="gender">' . $genders . '</select></div>
         <div class="col-sm-4"><label for="' . $id('date_of_birth') . '">Date of birth</label>
             <input type="date" class="form-control" id="' . $id('date_of_birth') . '" name="date_of_birth" max="' . date('Y-m-d', strtotime('-1 day')) . '" value="' . $e('date_of_birth') . '"></div>
         <div class="col-sm-4"><label for="' . $id('occupation') . '">Occupation / School</label>
-            <input type="text" class="form-control" id="' . $id('occupation') . '" name="occupation" maxlength="100" placeholder="e.g., Student, BSIT" value="' . $e('occupation') . '"></div>
+            <input type="text" class="form-control" id="' . $id('occupation') . '" name="occupation" maxlength="100"' . $ph('e.g., Student, BSIT') . ' value="' . $e('occupation') . '"></div>
         <div class="col-sm-6"><label for="' . $id('contact_number') . '">Mobile number <span class="text-danger">*</span></label>
-            <input type="tel" class="form-control" id="' . $id('contact_number') . '" name="contact_number" inputmode="tel" placeholder="e.g., 0912 345 6789" value="' . $e('contact_number') . '" required></div>
+            <input type="tel" class="form-control" id="' . $id('contact_number') . '" name="contact_number" inputmode="tel"' . $ph('e.g., 0912 345 6789') . ' value="' . $e('contact_number') . '" required></div>
         <div class="col-sm-6"><label for="' . $id('email') . '">Email</label>
-            <input type="email" class="form-control" id="' . $id('email') . '" name="email" maxlength="120" placeholder="e.g., juan@email.com" value="' . $e('email') . '"></div>
+            <input type="email" class="form-control" id="' . $id('email') . '" name="email" maxlength="120"' . $ph('e.g., juan@email.com') . ' value="' . $e('email') . '"></div>
         <div class="col-12"><label for="' . $id('address') . '">Home address</label>
-            <textarea class="form-control" id="' . $id('address') . '" name="address" rows="2" maxlength="500" placeholder="House no., street, barangay, town / city, province">' . $e('address') . '</textarea></div>
+            <textarea class="form-control" id="' . $id('address') . '" name="address" rows="2" maxlength="500"' . $ph('House no., street, barangay, town / city, province') . '>' . $e('address') . '</textarea></div>
     </div>
     <div class="profile-section-title">Emergency contact</div>
     <div class="row g-2 mb-1">
         <div class="col-sm-5"><label for="' . $id('emergency_name') . '">Contact person</label>
-            <input type="text" class="form-control" id="' . $id('emergency_name') . '" name="emergency_name" maxlength="100" placeholder="Full name" value="' . $e('emergency_name') . '"></div>
+            <input type="text" class="form-control" id="' . $id('emergency_name') . '" name="emergency_name" maxlength="100"' . $ph('Full name') . ' value="' . $e('emergency_name') . '"></div>
         <div class="col-sm-3"><label for="' . $id('emergency_relationship') . '">Relationship</label>
-            <input type="text" class="form-control" id="' . $id('emergency_relationship') . '" name="emergency_relationship" maxlength="50" list="' . $id('relationships') . '" placeholder="e.g., Parent" value="' . $e('emergency_relationship') . '">
+            <input type="text" class="form-control" id="' . $id('emergency_relationship') . '" name="emergency_relationship" maxlength="50" list="' . $id('relationships') . '"' . $ph('e.g., Parent') . ' value="' . $e('emergency_relationship') . '">
             <datalist id="' . $id('relationships') . '">' . $relList . '</datalist></div>
         <div class="col-sm-4"><label for="' . $id('emergency_phone') . '">Their mobile number</label>
-            <input type="tel" class="form-control" id="' . $id('emergency_phone') . '" name="emergency_phone" inputmode="tel" placeholder="e.g., 0998 765 4321" value="' . $e('emergency_phone') . '"></div>
+            <input type="tel" class="form-control" id="' . $id('emergency_phone') . '" name="emergency_phone" inputmode="tel"' . $ph('e.g., 0998 765 4321') . ' value="' . $e('emergency_phone') . '"></div>
     </div>';
 }

@@ -403,13 +403,15 @@ function moveInPaymentFields(string $id, bool $startHidden = false): string {
                         <div class="movein-estimate text-muted mb-2" style="font-size:0.68rem;"></div>
                         <div class="movein-details row g-2">
                             <div class="col-5">
-                                <select class="form-select" name="movein_method" aria-label="Payment method">
+                                <label class="form-label mb-1" for="' . $id . '_method" style="font-size:0.68rem;">Paid by</label>
+                                <select class="form-select" name="movein_method" id="' . $id . '_method">
                                     <option value="cash">Cash</option>
                                     <option value="gcash">GCash</option>
                                 </select>
                             </div>
                             <div class="col-7">
-                                <input type="text" class="form-control" name="movein_reference" maxlength="100" placeholder="Ref no. (optional)">
+                                <label class="form-label mb-1" for="' . $id . '_ref" style="font-size:0.68rem;">Reference no. (optional)</label>
+                                <input type="text" class="form-control" name="movein_reference" id="' . $id . '_ref" maxlength="100">
                             </div>
                         </div>
                         <small class="text-muted d-block mt-2" style="font-size:0.62rem;">Recorded as a verified payment with a receipt, so the tenant starts fully paid. Untick if they will pay later.</small>
@@ -431,7 +433,7 @@ function moveInPaymentFields(string $id, bool $startHidden = false): string {
                     <!-- Desktop: profile on the left, room and payment on the right, so it all fits without scrolling -->
                     <div class="row gx-4">
                     <div class="col-lg-7">
-                    <?= tenantProfileFormFields($addOld, 'add') ?>
+                    <?= tenantProfileFormFields($addOld, 'add', true, false) ?>
                     </div>
 
                     <div class="col-lg-5">

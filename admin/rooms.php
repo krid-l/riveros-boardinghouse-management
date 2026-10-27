@@ -554,16 +554,16 @@ require_once 'header.php';
                 <div class="modal-body p-4">
                     <div class="mb-3">
                         <label class="form-label text-muted fw-semibold">Room Name / Number</label>
-                        <input type="text" class="form-control" name="room_number" required placeholder="e.g. 101 or Room A">
+                        <input type="text" class="form-control" name="room_number" required>
                     </div>
                     <div class="row g-3 mb-3">
                         <div class="col-md-6">
                             <label class="form-label text-muted fw-semibold">Capacity (Persons)</label>
-                            <input type="number" class="form-control" name="capacity" min="1" required placeholder="e.g. 4">
+                            <input type="number" class="form-control" name="capacity" min="1" required>
                         </div>
                         <div class="col-md-6">
                             <label class="form-label text-muted fw-semibold">Price per Room / Month (PHP)</label>
-                            <input type="number" step="0.01" min="0" class="form-control" name="price_per_month" required placeholder="8000.00">
+                            <input type="number" step="0.01" min="0" class="form-control" name="price_per_month" required>
                             <div class="form-text" style="font-size: 0.7rem;">The rent for the whole room when every bed is taken. Each tenant pays this ÷ capacity, even while beds are empty.</div>
                             <div class="fw-semibold text-primary mt-1 rent-preview" style="font-size:0.75rem;"></div>
                         </div>
