@@ -30,7 +30,9 @@ if (!empty($currentTenant['room_id'])) {
 }
 // Rent is per bed: the room price divided by its capacity, however many beds are taken.
 $roomCapacity = $room ? max(1, (int)$room['capacity']) : 1;
-$myRentShare = $room ? rentShare((float)$room['price_per_month'], $roomCapacity) : 0.0;
+// A room set to charge its only tenant the whole room: they pay the full price after their first month.
+$myWholeRoom = $room && soloPaysWholeRoom($room, $roomOccupants);
+$myRentShare = $room ? bedRent($room, $roomOccupants) : 0.0;
 // Rooms the tenant rents on top of their main room, each with its own monthly rent.
 $myExtraRooms = $room ? tenantAdditionalRooms($pdo, (int)$currentTenant['id']) : [];
 $myTotalRent = $myRentShare + array_sum(array_column($myExtraRooms, 'rent'));
@@ -193,7 +195,7 @@ $balance = $currentTenant['balance'] ?? 0;
     <div class="position-relative z-2 mb-3">
         <h1 class="fw-bolder text-white mb-1" style="font-size: 2rem;">Room <?= htmlspecialchars($room['room_number'] ?? '') ?></h1>
         <div class="text-white-50 fw-semibold" style="font-size: 0.85rem;">
-            <i class="fa-solid fa-money-bill-wave me-1"></i> PHP <?= number_format($myRentShare, 2) ?> / month<?php if ($roomCapacity > 1): ?> <span class="text-white-50">(1 of <?= $roomCapacity ?> beds in the PHP <?= number_format($room['price_per_month'], 2) ?> room)</span><?php endif; ?>
+            <i class="fa-solid fa-money-bill-wave me-1"></i> PHP <?= number_format($myRentShare, 2) ?> / month<?php if ($myWholeRoom): ?> <span class="text-white-50">(whole room while you are its only tenant)</span><?php elseif ($roomCapacity > 1): ?> <span class="text-white-50">(1 of <?= $roomCapacity ?> beds in the PHP <?= number_format($room['price_per_month'], 2) ?> room)</span><?php endif; ?>
             <?php if ($myDeposit > 0): ?>
                 <br><i class="fa-solid fa-vault me-1"></i> PHP <?= number_format($myDeposit, 2) ?> deposit <span class="text-white-50"><?= $depositUsed ? '(used for ' . date('F Y', strtotime($depositUsed['billing_month'] . '-01')) . ')' : ($depositUnpaid > 0 ? '(not paid yet)' : '(pays for your last month)') ?></span>
             <?php endif; ?>
@@ -257,9 +259,9 @@ $balance = $currentTenant['balance'] ?? 0;
         <span class="badge bg-primary-subtle text-primary-emphasis rounded-pill"><?= 1 + count($myExtraRooms) ?> rooms</span>
     </div>
     <?php
-    $myRooms = [['room_number' => $room['room_number'], 'rent' => $myRentShare, 'capacity' => $roomCapacity, 'price_per_month' => (float)$room['price_per_month'], 'main' => true, 'since' => null]];
+    $myRooms = [['room_number' => $room['room_number'], 'rent' => $myRentShare, 'capacity' => $roomCapacity, 'price_per_month' => (float)$room['price_per_month'], 'main' => true, 'since' => null, 'whole' => $myWholeRoom]];
     foreach ($myExtraRooms as $x) {
-        $myRooms[] = ['room_number' => $x['room_number'], 'rent' => $x['rent'], 'capacity' => max(1, (int)$x['capacity']), 'price_per_month' => (float)$x['price_per_month'], 'main' => false, 'since' => $x['start_date']];
+        $myRooms[] = ['room_number' => $x['room_number'], 'rent' => $x['rent'], 'capacity' => max(1, (int)$x['capacity']), 'price_per_month' => (float)$x['price_per_month'], 'main' => false, 'since' => $x['start_date'], 'whole' => $x['whole_room']];
     }
     foreach ($myRooms as $mr): ?>
     <div class="d-flex align-items-center gap-3 py-2 border-bottom">
@@ -269,7 +271,7 @@ $balance = $currentTenant['balance'] ?? 0;
                 <span class="badge <?= $mr['main'] ? 'bg-primary-subtle text-primary-emphasis' : 'bg-secondary-subtle text-secondary-emphasis' ?> fw-semibold ms-1" style="font-size:0.62rem;"><?= $mr['main'] ? 'Main room' : 'Additional room' ?></span>
             </div>
             <div class="text-muted" style="font-size:0.72rem;">
-                <?= $mr['since'] ? 'Since ' . date('M j, Y', strtotime($mr['since'])) : 'Where you live' ?><?= $mr['capacity'] > 1 ? ' · 1 of ' . $mr['capacity'] . ' beds' : '' ?>
+                <?= $mr['since'] ? 'Since ' . date('M j, Y', strtotime($mr['since'])) : 'Where you live' ?><?= $mr['whole'] ? ' · whole room (only tenant)' : ($mr['capacity'] > 1 ? ' · 1 of ' . $mr['capacity'] . ' beds' : '') ?>
             </div>
         </div>
         <div class="text-end flex-shrink-0">

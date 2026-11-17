@@ -20,7 +20,9 @@ CREATE TABLE IF NOT EXISTS rooms (
     room_number VARCHAR(20) UNIQUE NOT NULL,
     capacity INT NOT NULL,
     status VARCHAR(20) CHECK (status IN ('vacant', 'occupied', 'maintenance')) DEFAULT 'vacant',
-    price_per_month DECIMAL(10,2) NOT NULL            -- rent PER TENANT; a full room earns this x capacity
+    price_per_month DECIMAL(10,2) NOT NULL,           -- rent PER TENANT; a full room earns this x capacity
+    -- On: a tenant who has the room to themselves pays the whole room price from their second month
+    solo_pays_full BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 CREATE TABLE IF NOT EXISTS tenants (

@@ -103,12 +103,14 @@ function buildReport(PDO $pdo, string $type, string $from, string $to): array {
     } elseif ($type === 'tenants') {
         $report['columns'] = [['Tenant', 46, 'L'], ['Mobile', 30, 'L'], ['Email', 50, 'L'], ['Room', 18, 'L'],
                               ['Move-in', 24, 'L'], ['Status', 22, 'L'], ['Rent (PHP)', 24, 'R'], ['Balance (PHP)', 26, 'R']];
-        $tenants = $pdo->query("SELECT t.*, r.room_number, r.price_per_month, r.capacity FROM tenants t
+        $tenants = $pdo->query("SELECT t.*, r.room_number, r.price_per_month, r.capacity, r.solo_pays_full,
+                                       " . roomBedsTakenSql('r.id') . " AS beds_taken FROM tenants t
                                 LEFT JOIN rooms r ON r.id = t.room_id
                                 ORDER BY (t.status = 'active') DESC, t.first_name, t.last_name")->fetchAll();
         // Rooms rented on top of the main room add their rent, and are listed after it.
         $extra = [];
-        foreach ($pdo->query("SELECT x.tenant_id, r.room_number, r.price_per_month, r.capacity FROM tenant_rooms x
+        foreach ($pdo->query("SELECT x.tenant_id, r.room_number, r.price_per_month, r.capacity, r.solo_pays_full,
+                                     " . roomBedsTakenSql('r.id') . " AS beds_taken FROM tenant_rooms x
                               JOIN rooms r ON r.id = x.room_id WHERE x.ended_at IS NULL ORDER BY x.start_date, x.id")->fetchAll() as $x) {
             $extra[(int)$x['tenant_id']][] = $x;
         }
@@ -116,10 +118,10 @@ function buildReport(PDO $pdo, string $type, string $from, string $to): array {
         foreach ($tenants as $t) {
             $isActive = $t['status'] === 'active';
             $active += $isActive ? 1 : 0;
-            $rent = $t['room_id'] ? rentShare((float)$t['price_per_month'], (int)$t['capacity']) : 0;
+            $rent = $t['room_id'] ? bedRent($t, (int)$t['beds_taken']) : 0;
             $roomText = $t['room_number'] ?? '-';
             foreach ($extra[(int)$t['id']] ?? [] as $x) {
-                $rent += rentShare((float)$x['price_per_month'], (int)$x['capacity']);
+                $rent += bedRent($x, (int)$x['beds_taken']);
                 $roomText .= ', ' . $x['room_number'];
             }
             $report['rows'][] = [$name($t), $t['contact_number'] ?? '', $t['email'] ?? '', $roomText,

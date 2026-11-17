@@ -204,6 +204,7 @@ function handleTenantAction(PDO $pdo): array {
             );
             if ($roomId) {
                 logRoomTransfer($pdo, $tenantId, null, $roomId, $moveInDate, 'Moved in');
+                revertWholeRoomCharges($pdo, $roomId, $moveInDate, $tenantId);
                 $billTenantId = $tenantId;
                 $moveInTenantId = $tenantId;
             }
@@ -248,6 +249,7 @@ function handleTenantAction(PDO $pdo): array {
                 // First room assignment: this is their move-in, so first-month billing starts here.
                 $pdo->prepare("UPDATE tenants SET room_id = ?, move_in_date = ? WHERE id = ?")->execute([$newRoomId, $date, $tenantId]);
                 logRoomTransfer($pdo, $tenantId, null, $newRoomId, $date, 'Moved in');
+                revertWholeRoomCharges($pdo, $newRoomId, $date, $tenantId);
                 $billTenantId = $tenantId;
                 $moveInTenantId = $tenantId;
                 $success = "Room assigned.";
@@ -256,6 +258,7 @@ function handleTenantAction(PDO $pdo): array {
             } else {
                 $pdo->prepare("UPDATE tenants SET room_id = ? WHERE id = ?")->execute([$newRoomId, $tenantId]);
                 logRoomTransfer($pdo, $tenantId, $t['room_id'] ? (int)$t['room_id'] : null, $newRoomId, $date, 'Room change');
+                revertWholeRoomCharges($pdo, $newRoomId, $date, $tenantId);
                 $success = "Room changed. The new room's rent applies from next month's bill.";
                 // The deposit pays for the last month, which will be billed at the new rent.
                 $depositDelta = syncDepositToRoom($pdo, $tenantId);
@@ -317,6 +320,7 @@ function handleTenantAction(PDO $pdo): array {
             $pdo->prepare("UPDATE tenants SET status = 'active', deactivated_at = NULL, room_id = ?, move_in_date = ? WHERE id = ?")
                 ->execute([$roomId, $date, $tenantId]);
             logRoomTransfer($pdo, $tenantId, null, $roomId, $date, 'Moved in again (account re-activated)');
+            revertWholeRoomCharges($pdo, $roomId, $date, $tenantId);
             $billTenantId = $tenantId;
             $moveInTenantId = $tenantId;
             $success = "Tenant re-activated.";

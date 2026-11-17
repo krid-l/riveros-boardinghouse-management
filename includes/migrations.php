@@ -9,7 +9,7 @@ require_once __DIR__ . '/billing.php';
 require_once __DIR__ . '/sql_compat.php';
 require_once __DIR__ . '/sms.php';
 
-const SCHEMA_VERSION = '14';
+const SCHEMA_VERSION = '15';
 
 function runMigrations(PDO $pdo): void {
     try {
@@ -50,6 +50,7 @@ function runMigrations(PDO $pdo): void {
         migrateToV12($pdo);
         migrateToV13($pdo);
         migrateToV14($pdo);
+        migrateToV15($pdo);
 
         $pdo->prepare("INSERT INTO settings (setting_key, setting_value) VALUES ('schema_version', ?)
                        " . sqlUpsert(['setting_key'], ['setting_value']))
@@ -232,6 +233,12 @@ function migrateToV14(PDO $pdo): void {
         last_billed_month VARCHAR(7),
         created_at TIMESTAMP NULL DEFAULT NULL
     )");
+}
+
+// v15: a room can be set so that a tenant who has it to themselves pays the whole room price
+// (from their second month in it) instead of one bed's share. Off for every existing room.
+function migrateToV15(PDO $pdo): void {
+    ensureColumn($pdo, 'rooms', 'solo_pays_full', 'BOOLEAN NOT NULL DEFAULT FALSE');
 }
 
 // v7: rent per bed. A tenant now pays price / capacity, however many beds are taken, instead of

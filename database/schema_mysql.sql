@@ -28,6 +28,8 @@ CREATE TABLE IF NOT EXISTS rooms (
     status VARCHAR(20) DEFAULT 'vacant',
     -- Total rent for the whole room. Each tenant living in it is billed an equal share.
     price_per_month DECIMAL(10,2) NOT NULL,
+    -- On: a tenant who has the room to themselves pays the whole room price from their second month
+    solo_pays_full BOOLEAN NOT NULL DEFAULT FALSE,
     CONSTRAINT chk_rooms_status CHECK (status IN ('vacant', 'occupied', 'maintenance'))
 ) ENGINE=InnoDB;
 

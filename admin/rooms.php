@@ -22,6 +22,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $roomNumber = trim($_POST['room_number'] ?? '');
         $capacity = (int)($_POST['capacity'] ?? 0);
         $roomPrice = round((float)($_POST['price_per_month'] ?? 0), 2);
+        // A tenant alone in the room pays the whole room (after their first month), when ticked.
+        $soloPaysFull = dbBool(!empty($_POST['solo_pays_full']));
         $roomError = '';
 
         if ($action !== 'delete') {
@@ -41,8 +43,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
         try {
             if ($action === 'add') {
-                $newRoomId = insertReturningId($pdo, "INSERT INTO rooms (room_number, capacity, price_per_month, status) VALUES (?, ?, ?, ?)",
-                                               [$roomNumber, $capacity, $roomPrice, 'vacant']);
+                $newRoomId = insertReturningId($pdo, "INSERT INTO rooms (room_number, capacity, price_per_month, status, solo_pays_full) VALUES (?, ?, ?, ?, ?)",
+                                               [$roomNumber, $capacity, $roomPrice, 'vacant', $soloPaysFull]);
                 notifyAdmin($pdo, 'room_available', "New room $roomNumber is available",
                     $capacity . ($capacity === 1 ? ' bed' : ' beds') . ', PHP ' . number_format(rentShare($roomPrice, $capacity), 2) . ' per bed a month.',
                     "rooms.php?room=$newRoomId");
@@ -52,8 +54,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $oldStatus = $pdo->prepare("SELECT status FROM rooms WHERE id = ?");
                 $oldStatus->execute([$roomId]);
                 $oldStatus = $oldStatus->fetchColumn();
-                $stmt = $pdo->prepare("UPDATE rooms SET room_number = ?, capacity = ?, price_per_month = ?, status = ? WHERE id = ?");
-                $stmt->execute([$roomNumber, $capacity, $roomPrice, $status, $roomId]);
+                $stmt = $pdo->prepare("UPDATE rooms SET room_number = ?, capacity = ?, price_per_month = ?, status = ?, solo_pays_full = ? WHERE id = ?");
+                $stmt->execute([$roomNumber, $capacity, $roomPrice, $status, $soloPaysFull, $roomId]);
                 if ($status === 'maintenance' && $oldStatus !== 'maintenance') {
                     notifyAdmin($pdo, 'room_maintenance', "Room $roomNumber is under maintenance",
                         'It is no longer offered when assigning tenants.', "rooms.php?room=$roomId");
@@ -122,7 +124,10 @@ $roomsWithSpace = 0;     // can take someone now (not under maintenance)
 
 foreach ($rooms as &$r) {
     $occCount = isset($tenantsByRoom[$r['id']]) ? count($tenantsByRoom[$r['id']]) : 0;
-    $currentValue += rentShare((float)$r['price_per_month'], (int)$r['capacity']) * min($occCount, max(1, (int)$r['capacity']));
+    // A tenant alone in a room set to charge the whole room pays its full price.
+    $currentValue += soloPaysWholeRoom($r, $occCount) && $occCount === 1
+        ? (float)$r['price_per_month']
+        : rentShare((float)$r['price_per_month'], (int)$r['capacity']) * min($occCount, max(1, (int)$r['capacity']));
     if ($r['status'] === 'maintenance') {
         continue;   // set by hand; never changed here
     }
@@ -340,6 +345,7 @@ require_once 'header.php';
             $capacity = (int)$r['capacity'];
             $occPct = $capacity > 0 ? min(100, round(($occCount / $capacity) * 100)) : 0;
             $share = rentShare((float)$r['price_per_month'], $capacity);
+            $soloWhole = soloPaysWholeRoom($r, $occCount) && $occCount === 1;   // its one tenant pays the whole room
             $isMaintenance = $r['status'] === 'maintenance';
             $isFull = $occCount >= $capacity && $capacity > 0;
             if ($isMaintenance) {
@@ -391,18 +397,25 @@ require_once 'header.php';
                             <div class="room-fact">
                                 <div class="room-fact-label">Rent per tenant</div>
                                 <div class="room-fact-value">₱<?= number_format($share, 2) ?></div>
-                                <div class="room-fact-sub"><?= $capacity > 1 ? '÷ ' . $capacity . ' beds' : 'one tenant' ?></div>
+                                <div class="room-fact-sub"><?= $capacity > 1 ? '÷ ' . $capacity . ' beds' : 'one tenant' ?><?= !empty($r['solo_pays_full']) && $capacity > 1 ? ' · whole room if alone' : '' ?></div>
                             </div>
                         </div>
                         <div class="col-6 col-md-3">
                             <div class="room-fact">
                                 <div class="room-fact-label">Earning now</div>
-                                <div class="room-fact-value <?= $occCount ? 'text-success' : 'text-muted' ?>">₱<?= number_format($share * min($occCount, $capacity), 2) ?></div>
+                                <div class="room-fact-value <?= $occCount ? 'text-success' : 'text-muted' ?>">₱<?= number_format($soloWhole ? (float)$r['price_per_month'] : $share * min($occCount, $capacity), 2) ?></div>
                                 <div class="room-fact-sub">a month<?= $occCount < $capacity ? ' · ' . ($capacity - $occCount) . ' free ' . ($capacity - $occCount === 1 ? 'bed' : 'beds') : '' ?></div>
                             </div>
                         </div>
                     </div>
 
+                    <?php if (!empty($r['solo_pays_full']) && $capacity > 1): ?>
+                        <div class="alert <?= $soloWhole ? 'alert-warning' : 'alert-info' ?> border-0 py-2 px-3 mb-3" style="font-size:0.72rem;">
+                            <i class="fa-solid fa-circle-info me-1"></i><?= $soloWhole
+                                ? 'Its only tenant pays the whole room (₱' . number_format($r['price_per_month'], 2) . ' a month) from their second month here, until someone else moves in.'
+                                : 'A tenant who has this room to themselves pays the whole room (₱' . number_format($r['price_per_month'], 2) . ' a month) from their second month here.' ?>
+                        </div>
+                    <?php endif; ?>
                     <div class="d-flex justify-content-between align-items-center mb-2">
                         <h6 class="fw-bold mb-0 text-dark" style="font-size: 0.85rem;">Tenants (<?= $occCount ?>)</h6>
                         <?php if (!$isMaintenance && !$isFull): ?>
@@ -471,7 +484,7 @@ require_once 'header.php';
                     </div>
                     <div class="d-flex gap-2">
                         <button type="button" class="btn btn-light border" data-bs-dismiss="modal">Close</button>
-                        <button type="button" class="btn btn-primary px-3" onclick="fromDetails(() => openEditModal(<?= (int)$r['id'] ?>, '<?= htmlspecialchars(addslashes($r['room_number']), ENT_QUOTES) ?>', <?= $capacity ?>, <?= (float)$r['price_per_month'] ?>, '<?= htmlspecialchars($r['status'] ?? '', ENT_QUOTES) ?>'))">
+                        <button type="button" class="btn btn-primary px-3" onclick="fromDetails(() => openEditModal(<?= (int)$r['id'] ?>, '<?= htmlspecialchars(addslashes($r['room_number']), ENT_QUOTES) ?>', <?= $capacity ?>, <?= (float)$r['price_per_month'] ?>, '<?= htmlspecialchars($r['status'] ?? '', ENT_QUOTES) ?>', <?= !empty($r['solo_pays_full']) ? 'true' : 'false' ?>))">
                             <i class="fa-solid fa-pen me-1"></i> Edit room
                         </button>
                     </div>
@@ -593,6 +606,11 @@ require_once 'header.php';
                             <div class="fw-semibold text-primary mt-1 rent-preview" style="font-size:0.75rem;"></div>
                         </div>
                     </div>
+                    <div class="form-check form-switch mb-3">
+                        <input class="form-check-input" type="checkbox" role="switch" name="solo_pays_full" value="1" id="add_solo">
+                        <label class="form-check-label fw-semibold text-dark" for="add_solo" style="font-size:0.85rem;">Sole tenant pays the whole room</label>
+                        <div class="form-text" style="font-size: 0.7rem;">For rooms with more than one bed. If only one tenant lives here, they pay one bed's share for their first month, then the full room price every month after that until someone else moves in.</div>
+                    </div>
                 </div>
                 <div class="modal-footer border-0 bg-light">
                     <button type="button" class="btn btn-light border" data-bs-dismiss="modal">Cancel</button>
@@ -629,6 +647,11 @@ require_once 'header.php';
                             <div class="form-text" style="font-size: 0.7rem;">The rent for the whole room when every bed is taken. Each tenant pays this ÷ capacity. A change applies from next month's rent.</div>
                             <div class="fw-semibold text-primary mt-1 rent-preview" style="font-size:0.75rem;"></div>
                         </div>
+                    </div>
+                    <div class="form-check form-switch mb-3">
+                        <input class="form-check-input" type="checkbox" role="switch" name="solo_pays_full" value="1" id="edit_solo">
+                        <label class="form-check-label fw-semibold text-dark" for="edit_solo" style="font-size:0.85rem;">Sole tenant pays the whole room</label>
+                        <div class="form-text" style="font-size: 0.7rem;">For rooms with more than one bed. If only one tenant lives here, they pay one bed's share for their first month, then the full room price every month after that until someone else moves in.</div>
                     </div>
                     <div class="mb-3">
                         <label class="form-label text-muted fw-semibold">Status</label>
@@ -691,8 +714,9 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 });
 
-function openEditModal(id, number, capacity, price, status) {
+function openEditModal(id, number, capacity, price, status, soloPaysFull) {
     document.getElementById('edit_room_id').value = id;
+    document.getElementById('edit_solo').checked = !!soloPaysFull;
     document.getElementById('edit_room_number').value = number;
     document.getElementById('edit_capacity').value = capacity;
     document.getElementById('edit_price').value = price;

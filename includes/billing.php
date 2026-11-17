@@ -19,6 +19,13 @@
 //    brings it in line (the difference is charged or credited), so it still covers a full last
 //    month. Credits sit on the balance and count toward the next payment.
 //  - A change to a room's price or capacity applies from the next month's rent.
+//  - Sole tenant pays the whole room (a per-room setting, rooms.solo_pays_full, off by default):
+//    in a room with more than one bed, a tenant who is the only one in it when a month's rent
+//    is posted pays the whole room price for that month instead of one bed's share. Their first
+//    month in the room is always one bed's share, which gives the room a month to find another
+//    tenant. When someone else moves in, a whole-room charge for that month (or later) goes back
+//    to one bed's share: they pay the whole room only for months nobody joined them. The
+//    deposit stays one bed's share.
 //
 // tenants.balance is the running total (charges minus payments). Every rent charge is also
 // recorded in the charges table, so the ledger can always be rebuilt and checked against it.
@@ -65,6 +72,55 @@ function roomOccupantCount(PDO $pdo, int $roomId): int {
 // room has, not on how many are taken.
 function rentShare(float $roomPrice, int $capacity): float {
     return round($roomPrice / max(1, $capacity), 2);
+}
+
+// Whether the "sole tenant pays the whole room" rule applies to a room right now: it is switched
+// on for the room, the room has more than one bed, and only one bed is taken.
+// $room needs capacity and solo_pays_full.
+function soloPaysWholeRoom(array $room, int $bedsTaken): bool {
+    return !empty($room['solo_pays_full']) && (int)($room['capacity'] ?? 1) > 1 && $bedsTaken <= 1;
+}
+
+// A tenant's regular monthly rent for a room: the whole room price when they are its only tenant
+// and the room is set to charge that, otherwise one bed's share. (A tenant's first month in a room
+// is always one bed's share; this is the rate for the months after it.)
+function bedRent(array $room, int $bedsTaken): float {
+    return soloPaysWholeRoom($room, $bedsTaken)
+        ? round((float)$room['price_per_month'], 2)
+        : rentShare((float)$room['price_per_month'], (int)$room['capacity']);
+}
+
+const WHOLE_ROOM_NOTE = ' (whole room: the only tenant in it)';
+
+/**
+ * Someone moved into a room on $date: the tenants already there are no longer alone, so any
+ * whole-room charge they have for that month or later goes back to one bed's share. Call inside
+ * a transaction, after the newcomer is recorded.
+ * @return float how much was taken off the other tenants' balances in total
+ */
+function revertWholeRoomCharges(PDO $pdo, int $roomId, string $date, int $newcomerTenantId): float {
+    $room = $pdo->prepare("SELECT price_per_month, capacity FROM rooms WHERE id = ?");
+    $room->execute([$roomId]);
+    $r = $room->fetch();
+    if (!$r || (int)$r['capacity'] < 2) return 0.0;
+    $share = rentShare((float)$r['price_per_month'], (int)$r['capacity']);
+    $note = rentNote((float)$r['price_per_month'], (int)$r['capacity']);
+
+    $stmt = $pdo->prepare("SELECT id, tenant_id, amount, description FROM charges
+                           WHERE room_id = ? AND tenant_id <> ? AND billing_month >= ? AND description LIKE ?");
+    $stmt->execute([$roomId, $newcomerTenantId, date('Y-m', strtotime($date)), '%' . WHOLE_ROOM_NOTE]);
+    $upd = $pdo->prepare("UPDATE charges SET amount = ?, description = ? WHERE id = ?");
+    $bal = $pdo->prepare("UPDATE tenants SET balance = balance - ? WHERE id = ?");
+    $total = 0.0;
+    foreach ($stmt->fetchAll() as $c) {
+        $delta = round((float)$c['amount'] - $share, 2);
+        $upd->execute([$share, mb_substr(str_replace(WHOLE_ROOM_NOTE, '', $c['description']) . $note, 0, 255), $c['id']]);
+        if (abs($delta) >= 0.01) {
+            $bal->execute([$delta, $c['tenant_id']]);
+            $total += $delta;
+        }
+    }
+    return round($total, 2);
 }
 
 // " (1 of 2 beds in the PHP 4,000.00 room)" for charge descriptions; nothing for a single room.
@@ -206,7 +262,8 @@ function runBilling(PDO $pdo, ?int $onlyTenantId = null): void {
 //
 // A tenant lives in one main room (tenants.room_id) and can rent more rooms on top of it
 // (tenant_rooms). Each additional room takes one bed and is billed on its own, at the same
-// per-bed rent and on the same calendar as the main room:
+// per-bed rent (or the whole room, when the sole-tenant rule applies) and on the same calendar
+// as the main room:
 //  - the first month is paid in advance and due the day the room is taken: day 1-15 pays the
 //    full month, day 16 onward pays half;
 //  - every month after that is charged on the 1st and due on the 30th;
@@ -224,17 +281,19 @@ function additionalRoomChargeKind(int $tenantRoomId): string {
 /**
  * The additional rooms a tenant rents now (not released), oldest first, with their rent.
  * Each row: id (tenant_rooms.id), room_id, room_number, capacity, price_per_month, status,
- * start_date, rent.
+ * start_date, beds_taken, whole_room (the sole-tenant rule applies), rent (the regular monthly rent).
  */
 function tenantAdditionalRooms(PDO $pdo, int $tenantId): array {
-    $stmt = $pdo->prepare("SELECT x.id, x.room_id, x.start_date, r.room_number, r.capacity, r.price_per_month, r.status
+    $stmt = $pdo->prepare("SELECT x.id, x.room_id, x.start_date, r.room_number, r.capacity, r.price_per_month, r.status, r.solo_pays_full
                            FROM tenant_rooms x JOIN rooms r ON r.id = x.room_id
                            WHERE x.tenant_id = ? AND x.ended_at IS NULL
                            ORDER BY x.start_date, x.id");
     $stmt->execute([$tenantId]);
     $rows = $stmt->fetchAll();
     foreach ($rows as &$row) {
-        $row['rent'] = rentShare((float)$row['price_per_month'], (int)$row['capacity']);
+        $row['beds_taken'] = roomOccupantCount($pdo, (int)$row['room_id']);
+        $row['whole_room'] = soloPaysWholeRoom($row, $row['beds_taken']);
+        $row['rent'] = bedRent($row, $row['beds_taken']);
     }
     unset($row);
     return $rows;
@@ -285,7 +344,7 @@ function billAdditionalRooms(PDO $pdo, ?int $onlyTenantId = null): void {
 function billAdditionalRoom(PDO $pdo, int $tenantRoomId, string $today, string $currentMonth): void {
     $stmt = $pdo->prepare("
         SELECT x.tenant_id, x.room_id, x.start_date, x.last_billed_month, x.ended_at, t.status,
-               r.room_number, r.price_per_month, r.capacity
+               r.room_number, r.price_per_month, r.capacity, r.solo_pays_full
         FROM tenant_rooms x JOIN tenants t ON t.id = x.tenant_id JOIN rooms r ON r.id = x.room_id
         WHERE x.id = ?
         " . sqlForUpdateOf('x') . "
@@ -326,6 +385,11 @@ function billAdditionalRoom(PDO $pdo, int $tenantRoomId, string $today, string $
             $amount = $rent;
             $due = billingDueDate($month);
             $desc = "$label rent, $monthName" . $shareNote;
+            // The only tenant in a room set to charge them the whole room (after its first month).
+            if (soloPaysWholeRoom($x, roomOccupantCount($pdo, (int)$x['room_id']))) {
+                $amount = round($roomPrice, 2);
+                $desc = "$label rent, $monthName" . WHOLE_ROOM_NOTE;
+            }
         }
         $ins->execute([$x['tenant_id'], $x['room_id'], $kind, $month, mb_substr($desc, 0, 255), $amount, $due]);
         if ($ins->rowCount() === 1) {
@@ -339,7 +403,7 @@ function billAdditionalRoom(PDO $pdo, int $tenantRoomId, string $today, string $
 // Post one tenant's rent for every month from their last billed month up to now.
 function billTenant(PDO $pdo, int $tenantId, string $today, string $currentMonth): void {
     $stmt = $pdo->prepare("
-        SELECT t.status, t.room_id, t.move_in_date, t.last_billed_month, r.price_per_month, r.capacity
+        SELECT t.status, t.room_id, t.move_in_date, t.last_billed_month, r.price_per_month, r.capacity, r.solo_pays_full
         FROM tenants t LEFT JOIN rooms r ON r.id = t.room_id
         WHERE t.id = ?
         " . sqlForUpdateOf('t') . "
@@ -392,6 +456,12 @@ function billTenant(PDO $pdo, int $tenantId, string $today, string $currentMonth
             $amount = $rent;
             $due = billingDueDate($month);
             $desc = "Monthly rent, $monthName" . $shareNote;
+            // Alone in a room set to charge a sole tenant the whole room, past their first month in it.
+            if (soloPaysWholeRoom($t, roomOccupantCount($pdo, (int)$t['room_id']))
+                && !isFirstMonthInMainRoom($pdo, $tenantId, (int)$t['room_id'], $t['move_in_date'], $month)) {
+                $amount = round($roomPrice, 2);
+                $desc = "Monthly rent, $monthName" . WHOLE_ROOM_NOTE;
+            }
         }
 
         $insCharge->execute([$tenantId, $t['room_id'], $month, $desc, $amount, $due]);
@@ -413,6 +483,22 @@ function billTenant(PDO $pdo, int $tenantId, string $today, string $currentMonth
     }
 
     $pdo->prepare("UPDATE tenants SET last_billed_month = ? WHERE id = ?")->execute([$currentMonth, $tenantId]);
+}
+
+/**
+ * Whether $month is the tenant's first month of rent in their main room: no rent has been posted
+ * for that room since they last came into it (moving in, or a room change, which is billed from
+ * the next month).
+ */
+function isFirstMonthInMainRoom(PDO $pdo, int $tenantId, int $roomId, ?string $moveInDate, string $month): bool {
+    $entered = $pdo->prepare("SELECT MAX(transferred_at) FROM room_transfers WHERE tenant_id = ? AND to_room_id = ?");
+    $entered->execute([$tenantId, $roomId]);
+    $since = $entered->fetchColumn() ?: $moveInDate;
+    if (!$since) return true;
+    $before = $pdo->prepare("SELECT COUNT(*) FROM charges WHERE tenant_id = ? AND kind = 'rent' AND room_id = ?
+                             AND billing_month >= ? AND billing_month < ?");
+    $before->execute([$tenantId, $roomId, date('Y-m', strtotime($since)), $month]);
+    return (int)$before->fetchColumn() === 0;
 }
 
 /**
@@ -632,6 +718,7 @@ function addAdditionalRoom(PDO $pdo, int $tenantId, int $roomId, string $date): 
     $pdo->prepare("INSERT INTO tenant_rooms (tenant_id, room_id, start_date, created_at) VALUES (?, ?, ?, ?)")
         ->execute([$tenantId, $roomId, $date, date('Y-m-d H:i:s')]);
     logRoomTransfer($pdo, $tenantId, null, $roomId, $date, 'Rented an additional room');
+    revertWholeRoomCharges($pdo, $roomId, $date, $tenantId);
 
     $no = $pdo->prepare("SELECT room_number FROM rooms WHERE id = ?");
     $no->execute([$roomId]);

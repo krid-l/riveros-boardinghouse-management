@@ -154,7 +154,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'send_
 
 // Fetch Tenant & Room details
 $stmt = $pdo->prepare("
-    SELECT t.*, u.username, u.temp_password, r.room_number, r.price_per_month, r.capacity AS room_capacity, u.created_at as account_created
+    SELECT t.*, u.username, u.temp_password, r.room_number, r.price_per_month, r.capacity AS room_capacity, r.solo_pays_full, u.created_at as account_created
     FROM tenants t
     JOIN users u ON t.user_id = u.id
     LEFT JOIN rooms r ON t.room_id = r.id
@@ -197,10 +197,14 @@ $totalPayments = array_sum(array_map(fn($c) => (float)$c['credited'], $credits))
 // Rent is per bed: the room price divided by its capacity, however many beds are taken.
 $roomPrice = (float)($tenant['price_per_month'] ?? 0);
 $roomCapacity = max(1, (int)($tenant['room_capacity'] ?? 1));
-$mainRoomRent = $tenant['room_id'] ? rentShare($roomPrice, $roomCapacity) : 0.0;
-$rentSplitNote = $roomCapacity > 1
-    ? '1 of ' . $roomCapacity . ' beds in the ₱' . number_format($roomPrice, 2) . ' room'
-    : '';
+// A room set to charge its only tenant the whole room: they pay the full price (after their first month).
+$mainBedsTaken = $tenant['room_id'] ? roomOccupantCount($pdo, (int)$tenant['room_id']) : 0;
+$mainRoomRow = ['price_per_month' => $roomPrice, 'capacity' => $roomCapacity, 'solo_pays_full' => $tenant['solo_pays_full'] ?? false];
+$mainWholeRoom = $tenant['room_id'] && soloPaysWholeRoom($mainRoomRow, $mainBedsTaken);
+$mainRoomRent = $tenant['room_id'] ? bedRent($mainRoomRow, $mainBedsTaken) : 0.0;
+$rentSplitNote = $mainWholeRoom
+    ? 'Whole room: the only tenant in it'
+    : ($roomCapacity > 1 ? '1 of ' . $roomCapacity . ' beds in the ₱' . number_format($roomPrice, 2) . ' room' : '');
 // Rooms rented on top of the main one: each adds its own rent.
 $additionalRooms = tenantAdditionalRooms($pdo, $tenantId);
 $monthlyRent = $mainRoomRent + array_sum(array_column($additionalRooms, 'rent'));
@@ -255,7 +259,7 @@ $openTab = ($docMessage || $docError) ? 'documents' : (($roomMessage || $roomErr
 
 // Rooms the tenant could also rent: a free bed, not under maintenance, not one they already have.
 $rentedRoomIds = array_merge($tenant['room_id'] ? [(int)$tenant['room_id']] : [], array_map('intval', array_column($additionalRooms, 'room_id')));
-$roomChoices = $pdo->query("SELECT r.id, r.room_number, r.capacity, r.price_per_month, " . roomBedsTakenSql('r.id') . " AS taken
+$roomChoices = $pdo->query("SELECT r.id, r.room_number, r.capacity, r.price_per_month, r.solo_pays_full, " . roomBedsTakenSql('r.id') . " AS taken
                             FROM rooms r WHERE r.status <> 'maintenance'")->fetchAll();
 $roomChoices = array_values(array_filter($roomChoices, fn($r) => !in_array((int)$r['id'], $rentedRoomIds, true)));
 usort($roomChoices, fn($a, $b) => strnatcasecmp((string)$a['room_number'], (string)$b['room_number']));
@@ -967,11 +971,13 @@ $upcomingDue = upcomingDueDate($pdo, $tenantId);
                         $rows = [];
                         if ($tenant['room_id']) {
                             $rows[] = ['id' => null, 'room_id' => (int)$tenant['room_id'], 'room_number' => $tenant['room_number'], 'capacity' => $roomCapacity,
-                                       'price_per_month' => $roomPrice, 'rent' => $mainRoomRent, 'since' => $mainSince, 'main' => true];
+                                       'price_per_month' => $roomPrice, 'rent' => $mainRoomRent, 'since' => $mainSince, 'main' => true,
+                                       'whole_room' => $mainWholeRoom, 'solo_rule' => !empty($tenant['solo_pays_full'])];
                         }
                         foreach ($additionalRooms as $x) {
                             $rows[] = ['id' => (int)$x['id'], 'room_id' => (int)$x['room_id'], 'room_number' => $x['room_number'], 'capacity' => max(1, (int)$x['capacity']),
-                                       'price_per_month' => (float)$x['price_per_month'], 'rent' => $x['rent'], 'since' => $x['start_date'], 'main' => false];
+                                       'price_per_month' => (float)$x['price_per_month'], 'rent' => $x['rent'], 'since' => $x['start_date'], 'main' => false,
+                                       'whole_room' => $x['whole_room'], 'solo_rule' => !empty($x['solo_pays_full'])];
                         }
                         foreach ($rows as $rr): ?>
                         <div class="rented-room">
@@ -984,8 +990,13 @@ $upcomingDue = upcomingDueDate($pdo, $tenantId);
                                     </div>
                                     <div class="text-muted" style="font-size:0.7rem;">
                                         <?= $rr['since'] ? 'Since ' . date('M j, Y', strtotime($rr['since'])) . ' · ' : '' ?><?= $bedsTaken[$rr['room_id']] ?? 0 ?> of <?= $rr['capacity'] ?> <?= $rr['capacity'] === 1 ? 'bed' : 'beds' ?> taken
-                                        <?= $rr['capacity'] > 1 ? ' · 1 bed of the ₱' . number_format($rr['price_per_month'], 2) . ' room' : '' ?>
+                                        <?= $rr['whole_room'] ? '' : ($rr['capacity'] > 1 ? ' · 1 bed of the ₱' . number_format($rr['price_per_month'], 2) . ' room' : '') ?>
                                     </div>
+                                    <?php if ($rr['whole_room']): ?>
+                                        <div class="text-warning-emphasis" style="font-size:0.7rem;"><i class="fa-solid fa-circle-info me-1"></i>Pays the whole room: the only tenant in it (after their first month here), until someone else moves in.</div>
+                                    <?php elseif ($rr['solo_rule'] && $rr['capacity'] > 1): ?>
+                                        <div class="text-muted" style="font-size:0.7rem;"><i class="fa-solid fa-circle-info me-1"></i>Would pay the whole room if left as its only tenant.</div>
+                                    <?php endif; ?>
                                 </div>
                                 <div class="text-end flex-shrink-0">
                                     <div class="fw-bold text-dark">₱<?= number_format($rr['rent'], 2) ?></div>
@@ -1037,11 +1048,12 @@ $upcomingDue = upcomingDueDate($pdo, $tenantId);
                                     <select id="addRoomSelect" name="room_id" class="form-select" required>
                                         <option value="">Choose a room</option>
                                         <?php foreach ($freeChoices as $r):
-                                            $rent = rentShare((float)$r['price_per_month'], (int)$r['capacity']);
+                                            // Their regular rent once they take a bed: the whole room if they'd be alone in a room set for it.
+                                            $rent = bedRent($r, (int)$r['taken'] + 1);
                                             $free = (int)$r['capacity'] - (int)$r['taken']; ?>
                                             <option value="<?= (int)$r['id'] ?>" data-label="Room <?= htmlspecialchars($r['room_number']) ?>" data-rent="<?= number_format($rent, 2) ?>"
                                                 <?= $roomError && (int)($_POST['room_id'] ?? 0) === (int)$r['id'] ? 'selected' : '' ?>>
-                                                Room <?= htmlspecialchars($r['room_number']) ?> · ₱<?= number_format($rent, 2) ?>/month · <?= $free ?> free <?= $free === 1 ? 'bed' : 'beds' ?>
+                                                Room <?= htmlspecialchars($r['room_number']) ?> · ₱<?= number_format($rent, 2) ?>/month<?= soloPaysWholeRoom($r, (int)$r['taken'] + 1) ? ' (whole room while alone)' : '' ?> · <?= $free ?> free <?= $free === 1 ? 'bed' : 'beds' ?>
                                             </option>
                                         <?php endforeach; ?>
                                     </select>
