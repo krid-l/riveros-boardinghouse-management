@@ -148,6 +148,10 @@ function handleTenantAction(PDO $pdo): array {
         $roomStmt = $pdo->prepare("SELECT room_id FROM tenants WHERE id = ?");
         $roomStmt->execute([(int)$_POST['tenant_id']]);
         $roomIds[] = (int)$roomStmt->fetchColumn();
+        // ...and the additional rooms they rent (moving out frees those too).
+        $extraStmt = $pdo->prepare("SELECT room_id FROM tenant_rooms WHERE tenant_id = ? AND ended_at IS NULL");
+        $extraStmt->execute([(int)$_POST['tenant_id']]);
+        $roomIds = array_merge($roomIds, array_map('intval', $extraStmt->fetchAll(PDO::FETCH_COLUMN)));
     }
     $roomsBefore = roomOccupancySnapshot($pdo, $roomIds);
     $newTenant = null;
@@ -233,6 +237,11 @@ function handleTenantAction(PDO $pdo): array {
             if ($t['status'] !== 'active') throw new Exception("Re-activate this tenant before assigning a room.");
             if (!$newRoomId) throw new Exception("Please choose a room.");
             if ((int)$t['room_id'] === $newRoomId) throw new Exception("The tenant is already in that room.");
+            $rentsIt = $pdo->prepare("SELECT COUNT(*) FROM tenant_rooms WHERE tenant_id = ? AND room_id = ? AND ended_at IS NULL");
+            $rentsIt->execute([$tenantId, $newRoomId]);
+            if ((int)$rentsIt->fetchColumn() > 0) {
+                throw new Exception("The tenant already rents that room as an additional room. Release it from their Rooms tab first.");
+            }
             if (!roomHasSpace($pdo, $newRoomId, $tenantId)) throw new Exception("Selected room is already full.");
 
             if (empty($t['move_in_date'])) {
@@ -270,6 +279,8 @@ function handleTenantAction(PDO $pdo): array {
             // The deposit pays for the month they leave. Done before the status changes, while the
             // stay it belongs to is still the current one.
             $depositApplied = applyDepositToLastMonth($pdo, $tenantId, $date);
+            // Any additional rooms they rent are given up with the main one.
+            releaseAllAdditionalRooms($pdo, $tenantId, $date);
 
             // Keep the tenant's payments, receipts and any unpaid balance on record; just free the bed and block login.
             $pdo->prepare("UPDATE tenants SET status = 'deactivated', deactivated_at = ?, room_id = NULL WHERE id = ?")->execute([$date, $tenantId]);
@@ -311,6 +322,26 @@ function handleTenantAction(PDO $pdo): array {
             $success = "Tenant re-activated.";
             $moveInDueNote = " The first month in advance and the deposit are due "
                            . date('M j, Y', strtotime(firstMonthDueDate($date))) . ".";
+
+        } elseif ($action === 'add_room') {
+            // Rent another room to a tenant, on top of their main room.
+            $tenantId = (int)$_POST['tenant_id'];
+            $date = postedDate('start_date');
+            $roomNumber = addAdditionalRoom($pdo, $tenantId, (int)($_POST['room_id'] ?? 0), $date);
+            $billTenantId = $tenantId;
+            $success = "Room $roomNumber added. Its first month (" . (isHalfMonthMoveIn($date) ? 'half' : 'full')
+                     . " month) is due " . date('M j, Y', strtotime(firstMonthDueDate($date))) . ", then it is billed with the rest of the rent every month.";
+
+        } elseif ($action === 'release_room') {
+            $tenantId = (int)$_POST['tenant_id'];
+            $date = postedDate('end_date');
+            $released = releaseAdditionalRoom($pdo, (int)($_POST['tenant_room_id'] ?? 0), $tenantId, $date);
+            $success = $released['cancelled']
+                ? "Room {$released['room_number']} removed. It was released on the day it was taken, so none of its rent is charged."
+                : "Room {$released['room_number']} released. Its rent stops after " . date('F Y', strtotime($date)) . ".";
+            if ($released['refunded'] > 0) {
+                $success .= " ₱" . number_format($released['refunded'], 2) . " of rent already posted for it was taken off the balance.";
+            }
 
         } elseif ($action === 'delete') {
             // Permanent delete is only for tenants added by mistake: anyone with payment history must be deactivated instead.

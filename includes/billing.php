@@ -45,10 +45,19 @@ function firstMonthRent(float $rent, string $moveInDate): float {
     return isHalfMonthMoveIn($moveInDate) ? round($rent / 2, 2) : $rent;
 }
 
-// How many active tenants live in a room right now.
+// SQL for the number of beds taken in a room: active tenants whose main room it is, plus active
+// tenants renting it as an additional room (tenant_rooms). $roomIdExpr is the room id column or
+// a placeholder, e.g. "r.id" or "?" (a "?" is used twice, so pass the id twice).
+function roomBedsTakenSql(string $roomIdExpr): string {
+    return "((SELECT COUNT(*) FROM tenants occ_t WHERE occ_t.room_id = $roomIdExpr AND occ_t.status = 'active')
+           + (SELECT COUNT(*) FROM tenant_rooms occ_x JOIN tenants occ_xt ON occ_xt.id = occ_x.tenant_id
+              WHERE occ_x.room_id = $roomIdExpr AND occ_x.ended_at IS NULL AND occ_xt.status = 'active'))";
+}
+
+// How many beds of a room are taken right now (main-room tenants and additional-room renters).
 function roomOccupantCount(PDO $pdo, int $roomId): int {
-    $stmt = $pdo->prepare("SELECT COUNT(*) FROM tenants WHERE room_id = ? AND status = 'active'");
-    $stmt->execute([$roomId]);
+    $stmt = $pdo->prepare("SELECT " . roomBedsTakenSql('?'));
+    $stmt->execute([$roomId, $roomId]);
     return (int)$stmt->fetchColumn();
 }
 
@@ -188,6 +197,143 @@ function runBilling(PDO $pdo, ?int $onlyTenantId = null): void {
             if (!$ownTransaction) throw $e;
         }
     }
+
+    billAdditionalRooms($pdo, $onlyTenantId);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Additional rooms
+//
+// A tenant lives in one main room (tenants.room_id) and can rent more rooms on top of it
+// (tenant_rooms). Each additional room takes one bed and is billed on its own, at the same
+// per-bed rent and on the same calendar as the main room:
+//  - the first month is paid in advance and due the day the room is taken: day 1-15 pays the
+//    full month, day 16 onward pays half;
+//  - every month after that is charged on the 1st and due on the 30th;
+//  - releasing the room stops its rent from the next month (the month it is released in stays
+//    billed, as with a room change).
+// There is no separate deposit for an additional room: the tenant's one deposit belongs to
+// their stay and main room.
+// Its charges use kind 'room_<tenant_rooms.id>', so each room gets its own line per month.
+// ---------------------------------------------------------------------------------------------
+
+function additionalRoomChargeKind(int $tenantRoomId): string {
+    return 'room_' . $tenantRoomId;
+}
+
+/**
+ * The additional rooms a tenant rents now (not released), oldest first, with their rent.
+ * Each row: id (tenant_rooms.id), room_id, room_number, capacity, price_per_month, status,
+ * start_date, rent.
+ */
+function tenantAdditionalRooms(PDO $pdo, int $tenantId): array {
+    $stmt = $pdo->prepare("SELECT x.id, x.room_id, x.start_date, r.room_number, r.capacity, r.price_per_month, r.status
+                           FROM tenant_rooms x JOIN rooms r ON r.id = x.room_id
+                           WHERE x.tenant_id = ? AND x.ended_at IS NULL
+                           ORDER BY x.start_date, x.id");
+    $stmt->execute([$tenantId]);
+    $rows = $stmt->fetchAll();
+    foreach ($rows as &$row) {
+        $row['rent'] = rentShare((float)$row['price_per_month'], (int)$row['capacity']);
+    }
+    unset($row);
+    return $rows;
+}
+
+/** Every room's additional renters (active tenants only): room id => list of tenant ids. */
+function additionalRoomRenters(PDO $pdo): array {
+    $rows = $pdo->query("SELECT x.room_id, x.tenant_id FROM tenant_rooms x JOIN tenants t ON t.id = x.tenant_id
+                         WHERE x.ended_at IS NULL AND t.status = 'active'")->fetchAll();
+    $out = [];
+    foreach ($rows as $row) {
+        $out[(int)$row['room_id']][] = (int)$row['tenant_id'];
+    }
+    return $out;
+}
+
+/** Post the rent of every additional room that is due to be posted up to the current month. */
+function billAdditionalRooms(PDO $pdo, ?int $onlyTenantId = null): void {
+    $today = date('Y-m-d');
+    $currentMonth = date('Y-m');
+
+    $sql = "SELECT x.id FROM tenant_rooms x JOIN tenants t ON t.id = x.tenant_id
+            WHERE x.ended_at IS NULL AND t.status = 'active' AND x.start_date <= ?
+              AND (x.last_billed_month IS NULL OR x.last_billed_month < ?)";
+    $params = [$today, $currentMonth];
+    if ($onlyTenantId !== null) {
+        $sql .= " AND x.tenant_id = ?";
+        $params[] = $onlyTenantId;
+    }
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute($params);
+
+    foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $tenantRoomId) {
+        $ownTransaction = !$pdo->inTransaction();
+        try {
+            if ($ownTransaction) $pdo->beginTransaction();
+            billAdditionalRoom($pdo, (int)$tenantRoomId, $today, $currentMonth);
+            if ($ownTransaction) $pdo->commit();
+        } catch (Exception $e) {
+            if ($ownTransaction && $pdo->inTransaction()) $pdo->rollBack();
+            error_log("Billing error for additional room $tenantRoomId: " . $e->getMessage());
+            if (!$ownTransaction) throw $e;
+        }
+    }
+}
+
+// Post one additional room's rent for every month from its last billed month up to now.
+function billAdditionalRoom(PDO $pdo, int $tenantRoomId, string $today, string $currentMonth): void {
+    $stmt = $pdo->prepare("
+        SELECT x.tenant_id, x.room_id, x.start_date, x.last_billed_month, x.ended_at, t.status,
+               r.room_number, r.price_per_month, r.capacity
+        FROM tenant_rooms x JOIN tenants t ON t.id = x.tenant_id JOIN rooms r ON r.id = x.room_id
+        WHERE x.id = ?
+        " . sqlForUpdateOf('x') . "
+    ");
+    $stmt->execute([$tenantRoomId]);
+    $x = $stmt->fetch();
+    if (!$x || $x['ended_at'] !== null || $x['status'] !== 'active' || $x['start_date'] > $today) {
+        return;
+    }
+    if ($x['last_billed_month'] !== null && $x['last_billed_month'] >= $currentMonth) {
+        return;   // billed by another request while we waited for the lock
+    }
+
+    $startMonth = date('Y-m', strtotime($x['start_date']));
+    $month = $x['last_billed_month'] === null ? $startMonth : nextBillingMonth($x['last_billed_month']);
+    $roomPrice = (float)$x['price_per_month'];
+    $capacity = max(1, (int)$x['capacity']);
+    $rent = rentShare($roomPrice, $capacity);
+    $shareNote = rentNote($roomPrice, $capacity);
+    $kind = additionalRoomChargeKind($tenantRoomId);
+
+    $ins = $pdo->prepare("
+        INSERT INTO charges (tenant_id, room_id, kind, billing_month, description, amount, due_date)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        " . sqlInsertIgnore(['tenant_id', 'billing_month', 'kind'], 'tenant_id') . "
+    ");
+    $addBalance = $pdo->prepare("UPDATE tenants SET balance = balance + ? WHERE id = ?");
+
+    for (; $rent > 0 && $month <= $currentMonth; $month = nextBillingMonth($month)) {
+        $monthName = date('F Y', strtotime($month . '-01'));
+        $label = 'Room ' . $x['room_number'] . ' (additional room)';
+        if ($month === $startMonth) {
+            $amount = firstMonthRent($rent, $x['start_date']);
+            $due = firstMonthDueDate($x['start_date']);
+            $desc = "$label first month rent, $monthName (" . (isHalfMonthMoveIn($x['start_date']) ? 'half' : 'full')
+                  . ', from ' . date('M j', strtotime($x['start_date'])) . ')' . $shareNote;
+        } else {
+            $amount = $rent;
+            $due = billingDueDate($month);
+            $desc = "$label rent, $monthName" . $shareNote;
+        }
+        $ins->execute([$x['tenant_id'], $x['room_id'], $kind, $month, mb_substr($desc, 0, 255), $amount, $due]);
+        if ($ins->rowCount() === 1) {
+            $addBalance->execute([$amount, $x['tenant_id']]);
+        }
+    }
+
+    $pdo->prepare("UPDATE tenant_rooms SET last_billed_month = ? WHERE id = ?")->execute([$currentMonth, $tenantRoomId]);
 }
 
 // Post one tenant's rent for every month from their last billed month up to now.
@@ -450,9 +596,93 @@ function roomHasSpace(PDO $pdo, int $roomId, ?int $ignoreTenantId = null): bool 
         throw new Exception("Room {$room['room_number']} is under maintenance and can't take tenants.");
     }
     $capacity = $room['capacity'];
-    $cnt = $pdo->prepare("SELECT COUNT(*) FROM tenants WHERE room_id = ? AND status = 'active' AND id <> ?");
-    $cnt->execute([$roomId, $ignoreTenantId ?? 0]);
+    // The ignored tenant's main-room bed doesn't count (they are moving out of it); a room they
+    // rent as an additional room still does.
+    $cnt = $pdo->prepare("SELECT
+        (SELECT COUNT(*) FROM tenants WHERE room_id = ? AND status = 'active' AND id <> ?)
+      + (SELECT COUNT(*) FROM tenant_rooms x JOIN tenants xt ON xt.id = x.tenant_id
+         WHERE x.room_id = ? AND x.ended_at IS NULL AND xt.status = 'active')");
+    $cnt->execute([$roomId, $ignoreTenantId ?? 0, $roomId]);
     return (int)$cnt->fetchColumn() < (int)$capacity;
+}
+
+/**
+ * Rent an additional room to a tenant from $date. Call inside a transaction.
+ * The tenant must be active and already have a main room; the room must have a free bed.
+ * @return string the room number
+ */
+function addAdditionalRoom(PDO $pdo, int $tenantId, int $roomId, string $date): string {
+    $stmt = $pdo->prepare("SELECT room_id, status, move_in_date FROM tenants WHERE id = ? FOR UPDATE");
+    $stmt->execute([$tenantId]);
+    $t = $stmt->fetch();
+    if (!$t) throw new Exception("Tenant not found.");
+    if ($t['status'] !== 'active') throw new Exception("Re-activate this tenant before renting them a room.");
+    if (empty($t['room_id'])) throw new Exception("Assign the tenant's main room first, then add more rooms.");
+    if (!$roomId) throw new Exception("Please choose a room.");
+    if ((int)$t['room_id'] === $roomId) throw new Exception("That is already the tenant's main room.");
+    if (!empty($t['move_in_date']) && $date < $t['move_in_date']) {
+        throw new Exception("The start date can't be before the tenant moved in (" . date('M j, Y', strtotime($t['move_in_date'])) . ").");
+    }
+
+    $dup = $pdo->prepare("SELECT COUNT(*) FROM tenant_rooms WHERE tenant_id = ? AND room_id = ? AND ended_at IS NULL");
+    $dup->execute([$tenantId, $roomId]);
+    if ((int)$dup->fetchColumn() > 0) throw new Exception("The tenant already rents that room.");
+    if (!roomHasSpace($pdo, $roomId)) throw new Exception("Selected room is already full.");
+
+    $pdo->prepare("INSERT INTO tenant_rooms (tenant_id, room_id, start_date, created_at) VALUES (?, ?, ?, ?)")
+        ->execute([$tenantId, $roomId, $date, date('Y-m-d H:i:s')]);
+    logRoomTransfer($pdo, $tenantId, null, $roomId, $date, 'Rented an additional room');
+
+    $no = $pdo->prepare("SELECT room_number FROM rooms WHERE id = ?");
+    $no->execute([$roomId]);
+    return (string)$no->fetchColumn();
+}
+
+/**
+ * Stop renting an additional room on $date. Call inside a transaction.
+ * Rent stops from the month after $date: anything already posted for later months is taken
+ * back. Released on the day it was taken, it counts as never rented and all its rent is taken back.
+ * @return array room_number, refunded (rent taken back off the balance), cancelled (released on its first day)
+ */
+function releaseAdditionalRoom(PDO $pdo, int $tenantRoomId, int $tenantId, string $date, string $note = 'Released an additional room'): array {
+    $stmt = $pdo->prepare("SELECT x.room_id, x.start_date, x.ended_at, r.room_number
+                           FROM tenant_rooms x JOIN rooms r ON r.id = x.room_id
+                           WHERE x.id = ? AND x.tenant_id = ? " . sqlForUpdateOf('x'));
+    $stmt->execute([$tenantRoomId, $tenantId]);
+    $x = $stmt->fetch();
+    if (!$x) throw new Exception("That room is not rented by this tenant.");
+    if ($x['ended_at'] !== null) throw new Exception("Room {$x['room_number']} was already released.");
+    if ($date < $x['start_date']) {
+        $date = $x['start_date'];   // can't end before it began: treat as released on its first day
+    }
+
+    $kind = additionalRoomChargeKind($tenantRoomId);
+    $cancelled = $date === $x['start_date'];
+    $later = $pdo->prepare("SELECT id, amount FROM charges WHERE tenant_id = ? AND kind = ?" . ($cancelled ? '' : ' AND billing_month > ?'));
+    $later->execute($cancelled ? [$tenantId, $kind] : [$tenantId, $kind, date('Y-m', strtotime($date))]);
+    $refunded = 0.0;
+    $del = $pdo->prepare("DELETE FROM charges WHERE id = ?");
+    foreach ($later->fetchAll() as $c) {
+        $del->execute([$c['id']]);
+        $refunded += (float)$c['amount'];
+    }
+    $refunded = round($refunded, 2);
+    if ($refunded != 0.0) {
+        $pdo->prepare("UPDATE tenants SET balance = balance - ? WHERE id = ?")->execute([$refunded, $tenantId]);
+    }
+
+    $pdo->prepare("UPDATE tenant_rooms SET ended_at = ? WHERE id = ?")->execute([$date, $tenantRoomId]);
+    logRoomTransfer($pdo, $tenantId, (int)$x['room_id'], null, $date, $note);
+    return ['room_number' => (string)$x['room_number'], 'refunded' => $refunded, 'cancelled' => $cancelled];
+}
+
+/** Moving out: release every additional room the tenant rents. Call inside a transaction. */
+function releaseAllAdditionalRooms(PDO $pdo, int $tenantId, string $date): void {
+    $stmt = $pdo->prepare("SELECT id FROM tenant_rooms WHERE tenant_id = ? AND ended_at IS NULL");
+    $stmt->execute([$tenantId]);
+    foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $id) {
+        releaseAdditionalRoom($pdo, (int)$id, $tenantId, $date, 'Released an additional room (moved out)');
+    }
 }
 
 function logRoomTransfer(PDO $pdo, int $tenantId, ?int $fromRoom, ?int $toRoom, string $date, string $note): void {

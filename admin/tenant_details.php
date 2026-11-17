@@ -9,6 +9,7 @@ require_once '../includes/tenant_profile.php';
 require_once '../includes/uploads.php';
 require_once '../includes/sms_templates.php';
 require_once '../includes/deposit_requests.php';
+require_once '../includes/tenant_actions.php';
 requireAdmin();
 
 $reminderSuccess = '';
@@ -82,6 +83,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delet
         deleteLocalUpload($path);
         $docMessage = 'Document deleted.';
     }
+}
+
+// Rooms: rent the tenant another room on top of their main one, or release one of those.
+$roomMessage = '';
+$roomError = '';
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array($_POST['action'] ?? '', ['add_room', 'release_room'], true)
+    && (int)($_POST['tenant_id'] ?? 0) === $tenantId) {
+    ['success' => $roomMessage, 'error' => $roomError] = handleTenantAction($pdo);
 }
 
 // The admin's own notes on the tenant (only the admin sees them).
@@ -188,10 +197,17 @@ $totalPayments = array_sum(array_map(fn($c) => (float)$c['credited'], $credits))
 // Rent is per bed: the room price divided by its capacity, however many beds are taken.
 $roomPrice = (float)($tenant['price_per_month'] ?? 0);
 $roomCapacity = max(1, (int)($tenant['room_capacity'] ?? 1));
-$monthlyRent = $tenant['room_id'] ? rentShare($roomPrice, $roomCapacity) : 0.0;
+$mainRoomRent = $tenant['room_id'] ? rentShare($roomPrice, $roomCapacity) : 0.0;
 $rentSplitNote = $roomCapacity > 1
     ? '1 of ' . $roomCapacity . ' beds in the ₱' . number_format($roomPrice, 2) . ' room'
     : '';
+// Rooms rented on top of the main one: each adds its own rent.
+$additionalRooms = tenantAdditionalRooms($pdo, $tenantId);
+$monthlyRent = $mainRoomRent + array_sum(array_column($additionalRooms, 'rent'));
+$roomCount = ($tenant['room_id'] ? 1 : 0) + count($additionalRooms);
+if ($additionalRooms) {
+    $rentSplitNote = 'For ' . $roomCount . ' rooms';
+}
 $currentBalance = round((float)($tenant['balance'] ?? 0), 2);
 $depositHeld = tenantDeposit($pdo, $tenant);
 $ledgerBalance = round($totalCharges - $totalPayments, 2);
@@ -235,7 +251,21 @@ usort($ledger, fn($a, $b) => [$a['date'], $a['order']] <=> [$b['date'], $b['orde
 $docStmt = $pdo->prepare("SELECT * FROM tenant_documents WHERE tenant_id = ? ORDER BY uploaded_at DESC, id DESC");
 $docStmt->execute([$tenantId]);
 $documents = $docStmt->fetchAll();
-$openTab = ($docMessage || $docError) ? 'documents' : 'overview';
+$openTab = ($docMessage || $docError) ? 'documents' : (($roomMessage || $roomError) ? 'rooms' : 'overview');
+
+// Rooms the tenant could also rent: a free bed, not under maintenance, not one they already have.
+$rentedRoomIds = array_merge($tenant['room_id'] ? [(int)$tenant['room_id']] : [], array_map('intval', array_column($additionalRooms, 'room_id')));
+$roomChoices = $pdo->query("SELECT r.id, r.room_number, r.capacity, r.price_per_month, " . roomBedsTakenSql('r.id') . " AS taken
+                            FROM rooms r WHERE r.status <> 'maintenance'")->fetchAll();
+$roomChoices = array_values(array_filter($roomChoices, fn($r) => !in_array((int)$r['id'], $rentedRoomIds, true)));
+usort($roomChoices, fn($a, $b) => strnatcasecmp((string)$a['room_number'], (string)$b['room_number']));
+$canAddRoom = $tenant['status'] === 'active' && !empty($tenant['room_id']);
+
+// Beds taken in each room the tenant rents, for the Rooms tab.
+$bedsTaken = [];
+foreach ($rentedRoomIds as $rid) {
+    $bedsTaken[$rid] = roomOccupantCount($pdo, $rid);
+}
 
 // Room history
 $histStmt = $pdo->prepare("
@@ -332,6 +362,12 @@ require_once 'header.php';
     .doc-row { display: flex; align-items: center; gap: 0.75rem; padding: 0.7rem 1rem; border-bottom: 1px solid #f1f5f9; font-size: 0.8rem; }
     .doc-row:last-child { border-bottom: 0; }
     .doc-icon { width: 38px; height: 38px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+
+    /* Rooms */
+    .rented-room { padding: 0.85rem 1rem; border-bottom: 1px solid #f1f5f9; font-size: 0.8rem; }
+    .rented-room:last-child { border-bottom: 0; }
+    .rented-room-icon { width: 40px; height: 40px; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 0.95rem; }
+    .rooms-total { display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 1rem; background: #f8fafc; border-top: 1px solid #eef2f7; font-size: 0.82rem; font-weight: 700; border-radius: 0 0 10px 10px; }
 </style>
 
 <div class="breadcrumb-sm text-muted mb-3">
@@ -366,8 +402,11 @@ $upcomingDue = upcomingDueDate($pdo, $tenantId);
                     <div class="col-6 col-md-3">
                         <div class="fact-box">
                             <span class="fact-icon"><i class="fa-solid fa-bed"></i></span>
-                            <div class="fact-label"><?= $isDeactivated ? 'Room' : 'Assigned Room' ?></div>
+                            <div class="fact-label"><?= $isDeactivated ? 'Room' : ($additionalRooms ? 'Assigned Rooms' : 'Assigned Room') ?></div>
                             <div class="fact-value"><?= $isDeactivated ? 'Moved out' : ($tenant['room_number'] ? 'Room ' . htmlspecialchars($tenant['room_number']) : 'Unassigned') ?></div>
+                            <?php if (!$isDeactivated && $additionalRooms): ?>
+                                <div class="fact-sub">+ <?= htmlspecialchars(implode(', ', array_map(fn($x) => 'Room ' . $x['room_number'], $additionalRooms))) ?></div>
+                            <?php endif; ?>
                         </div>
                     </div>
                     <div class="col-6 col-md-3">
@@ -433,7 +472,8 @@ $upcomingDue = upcomingDueDate($pdo, $tenantId);
 <ul class="nav tenant-tabs mb-3" id="tenantTabs" role="tablist">
     <?php foreach ([['overview', 'fa-regular fa-user', 'Overview'], ['transactions', 'fa-regular fa-file-lines', 'Transactions'],
                     ['payments', 'fa-solid fa-wallet', 'Payments & Receipts'], ['ledger', 'fa-solid fa-book-open', 'Ledger'],
-                    ['documents', 'fa-regular fa-file', 'Documents' . ($documents ? ' (' . count($documents) . ')' : '')]] as [$id, $icon, $label]): ?>
+                    ['documents', 'fa-regular fa-file', 'Documents' . ($documents ? ' (' . count($documents) . ')' : '')],
+                    ['rooms', 'fa-solid fa-door-open', 'Rooms' . ($roomCount ? ' (' . $roomCount . ')' : '')]] as [$id, $icon, $label]): ?>
     <li class="nav-item" role="presentation">
         <button class="nav-link <?= $openTab === $id ? 'active' : '' ?>" id="<?= $id ?>-tab" data-bs-toggle="tab" data-bs-target="#<?= $id ?>" type="button" role="tab"><i class="<?= $icon ?> me-2"></i><?= $label ?></button>
     </li>
@@ -903,6 +943,121 @@ $upcomingDue = upcomingDueDate($pdo, $tenantId);
                             </form>
                         </div>
                     <?php endforeach; endif; ?>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ROOMS TAB: every room the tenant rents (the main room plus any additional ones) -->
+    <div class="tab-pane fade <?= $openTab === 'rooms' ? 'show active' : '' ?>" id="rooms" role="tabpanel" aria-labelledby="rooms-tab">
+        <?php if ($roomError): ?><div class="alert alert-danger py-2 px-3" style="font-size:0.78rem;"><?= htmlspecialchars(preg_replace('/^Error: /', '', $roomError)) ?></div><?php endif; ?>
+        <?php if ($roomMessage): ?><div class="alert alert-success py-2 px-3" style="font-size:0.78rem;"><?= htmlspecialchars($roomMessage) ?></div><?php endif; ?>
+        <div class="row g-3">
+            <div class="col-lg-7">
+                <div class="section-card shadow-sm">
+                    <div class="section-header"><h6 class="section-title"><i class="fa-solid fa-door-open text-primary me-2"></i>Rented Rooms</h6></div>
+                    <?php if (!$roomCount): ?>
+                        <div class="empty-state"><span><i class="fa-solid fa-door-closed"></i></span><div class="fw-semibold text-dark"><?= $isDeactivated ? 'No rooms. The tenant has moved out.' : 'No room assigned yet.' ?></div><div>Rooms the tenant rents will appear here.</div></div>
+                    <?php else:
+                        // When the tenant came into their main room: their latest move into it.
+                        $mainSince = $tenant['move_in_date'];
+                        foreach ($roomHistory as $h) {
+                            if ((int)($h['to_room_id'] ?? 0) === (int)$tenant['room_id']) { $mainSince = $h['transferred_at']; break; }
+                        }
+                        $rows = [];
+                        if ($tenant['room_id']) {
+                            $rows[] = ['id' => null, 'room_id' => (int)$tenant['room_id'], 'room_number' => $tenant['room_number'], 'capacity' => $roomCapacity,
+                                       'price_per_month' => $roomPrice, 'rent' => $mainRoomRent, 'since' => $mainSince, 'main' => true];
+                        }
+                        foreach ($additionalRooms as $x) {
+                            $rows[] = ['id' => (int)$x['id'], 'room_id' => (int)$x['room_id'], 'room_number' => $x['room_number'], 'capacity' => max(1, (int)$x['capacity']),
+                                       'price_per_month' => (float)$x['price_per_month'], 'rent' => $x['rent'], 'since' => $x['start_date'], 'main' => false];
+                        }
+                        foreach ($rows as $rr): ?>
+                        <div class="rented-room">
+                            <div class="d-flex align-items-center gap-3">
+                                <span class="rented-room-icon <?= $rr['main'] ? 'bg-primary text-white' : 'bg-primary-subtle text-primary' ?>"><i class="fa-solid fa-bed"></i></span>
+                                <div class="flex-grow-1" style="min-width:0;">
+                                    <div class="d-flex align-items-center gap-2 flex-wrap">
+                                        <a href="rooms.php?room=<?= $rr['room_id'] ?>" class="fw-bold text-dark text-decoration-none">Room <?= htmlspecialchars($rr['room_number']) ?></a>
+                                        <span class="soft-pill <?= $rr['main'] ? 'bg-primary-subtle text-primary-emphasis' : 'bg-secondary-subtle text-secondary-emphasis' ?>"><?= $rr['main'] ? 'Main room' : 'Additional room' ?></span>
+                                    </div>
+                                    <div class="text-muted" style="font-size:0.7rem;">
+                                        <?= $rr['since'] ? 'Since ' . date('M j, Y', strtotime($rr['since'])) . ' · ' : '' ?><?= $bedsTaken[$rr['room_id']] ?? 0 ?> of <?= $rr['capacity'] ?> <?= $rr['capacity'] === 1 ? 'bed' : 'beds' ?> taken
+                                        <?= $rr['capacity'] > 1 ? ' · 1 bed of the ₱' . number_format($rr['price_per_month'], 2) . ' room' : '' ?>
+                                    </div>
+                                </div>
+                                <div class="text-end flex-shrink-0">
+                                    <div class="fw-bold text-dark">₱<?= number_format($rr['rent'], 2) ?></div>
+                                    <div class="text-muted" style="font-size:0.66rem;">a month</div>
+                                </div>
+                            </div>
+                            <?php if (!$rr['main']): ?>
+                            <div class="mt-2 text-end">
+                                <button type="button" class="btn btn-sm btn-outline-danger py-0 px-2" style="font-size:0.7rem;" data-bs-toggle="collapse" data-bs-target="#release<?= $rr['id'] ?>" aria-expanded="false"><i class="fa-solid fa-right-from-bracket me-1"></i>Release room</button>
+                            </div>
+                            <div class="collapse" id="release<?= $rr['id'] ?>">
+                                <form method="POST" class="mt-2 p-2 bg-light rounded-2 d-flex flex-wrap align-items-end gap-2" onsubmit="return confirm('Release Room <?= htmlspecialchars(addslashes($rr['room_number']), ENT_QUOTES) ?>? Its rent stops from the month after this date.');">
+                                    <input type="hidden" name="action" value="release_room">
+                                    <input type="hidden" name="tenant_id" value="<?= $tenantId ?>">
+                                    <input type="hidden" name="tenant_room_id" value="<?= $rr['id'] ?>">
+                                    <div class="flex-grow-1">
+                                        <label for="releaseDate<?= $rr['id'] ?>" class="form-label mb-1" style="font-size:0.7rem;">Last day in the room</label>
+                                        <input type="date" id="releaseDate<?= $rr['id'] ?>" name="end_date" class="form-control form-control-sm" required min="<?= htmlspecialchars($rr['since']) ?>" value="<?= date('Y-m-d') ?>">
+                                    </div>
+                                    <button type="submit" class="btn btn-sm btn-danger">Release</button>
+                                </form>
+                            </div>
+                            <?php endif; ?>
+                        </div>
+                    <?php endforeach; ?>
+                        <div class="rooms-total"><span>Total monthly rent<?= $roomCount > 1 ? ' (' . $roomCount . ' rooms)' : '' ?></span><span>₱<?= number_format($monthlyRent, 2) ?></span></div>
+                    <?php endif; ?>
+                </div>
+                <div class="text-muted px-1" style="font-size:0.7rem;"><i class="fa-solid fa-circle-info me-1"></i>The tenant sees these rooms on their dashboard. To move them to a different main room, use Change room on the Tenants or Rooms page.</div>
+            </div>
+            <div class="col-lg-5">
+                <div class="section-card shadow-sm">
+                    <div class="section-header"><h6 class="section-title"><i class="fa-solid fa-plus text-primary me-2"></i>Rent Another Room</h6></div>
+                    <div class="p-3 form-compact">
+                        <?php if ($tenant['status'] !== 'active'): ?>
+                            <div class="text-muted" style="font-size:0.78rem;">This tenant has moved out. Re-activate them from the Tenants page to rent them rooms again.</div>
+                        <?php elseif (!$canAddRoom): ?>
+                            <div class="text-muted" style="font-size:0.78rem;">Assign the tenant's main room first (Tenants page &rsaquo; Assign room). Then more rooms can be added here.</div>
+                        <?php else:
+                            $freeChoices = array_values(array_filter($roomChoices, fn($r) => (int)$r['taken'] < (int)$r['capacity'])); ?>
+                            <?php if (!$freeChoices): ?>
+                                <div class="text-muted" style="font-size:0.78rem;">No other room has a free bed right now.</div>
+                            <?php else: ?>
+                            <form method="POST" class="m-0" onsubmit="const o = this.room_id.selectedOptions[0]; return confirm('Rent ' + o.dataset.label + ' to this tenant as well, at ₱' + o.dataset.rent + ' a month?');">
+                                <input type="hidden" name="action" value="add_room">
+                                <input type="hidden" name="tenant_id" value="<?= $tenantId ?>">
+                                <div class="mb-2">
+                                    <label for="addRoomSelect">Room</label>
+                                    <select id="addRoomSelect" name="room_id" class="form-select" required>
+                                        <option value="">Choose a room</option>
+                                        <?php foreach ($freeChoices as $r):
+                                            $rent = rentShare((float)$r['price_per_month'], (int)$r['capacity']);
+                                            $free = (int)$r['capacity'] - (int)$r['taken']; ?>
+                                            <option value="<?= (int)$r['id'] ?>" data-label="Room <?= htmlspecialchars($r['room_number']) ?>" data-rent="<?= number_format($rent, 2) ?>"
+                                                <?= $roomError && (int)($_POST['room_id'] ?? 0) === (int)$r['id'] ? 'selected' : '' ?>>
+                                                Room <?= htmlspecialchars($r['room_number']) ?> · ₱<?= number_format($rent, 2) ?>/month · <?= $free ?> free <?= $free === 1 ? 'bed' : 'beds' ?>
+                                            </option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                </div>
+                                <div class="mb-3">
+                                    <label for="addRoomStart">Start date</label>
+                                    <input type="date" id="addRoomStart" name="start_date" class="form-control" required
+                                           min="<?= htmlspecialchars($tenant['move_in_date'] ?? '') ?>"
+                                           value="<?= htmlspecialchars($roomError && !empty($_POST['start_date']) ? $_POST['start_date'] : date('Y-m-d')) ?>">
+                                    <div class="form-text" style="font-size:0.7rem;">The tenant takes one bed in it. Its first month is due on this day (half rent if it is after the 15th), then it is billed every month with their other rent.</div>
+                                </div>
+                                <button type="submit" class="btn btn-primary btn-sm w-100"><i class="fa-solid fa-plus me-1"></i>Add Room</button>
+                            </form>
+                            <?php endif; ?>
+                        <?php endif; ?>
+                    </div>
                 </div>
             </div>
         </div>

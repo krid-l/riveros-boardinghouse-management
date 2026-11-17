@@ -90,7 +90,7 @@ function safeNotificationLink(?string $link): string {
 function notifyRoomAvailabilityChanges(PDO $pdo, array $before): void {
     foreach ($before as $roomId => $was) {
         if (!$roomId) continue;
-        $stmt = $pdo->prepare("SELECT room_number, capacity, status, (SELECT COUNT(*) FROM tenants WHERE room_id = rooms.id AND status = 'active') AS occ FROM rooms WHERE id = ?");
+        $stmt = $pdo->prepare("SELECT room_number, capacity, status, " . roomBedsTakenSql('rooms.id') . " AS occ FROM rooms WHERE id = ?");
         $stmt->execute([$roomId]);
         $r = $stmt->fetch();
         if (!$r || $r['status'] === 'maintenance') continue;

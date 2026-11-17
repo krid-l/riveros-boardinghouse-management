@@ -180,6 +180,17 @@ CREATE TABLE IF NOT EXISTS tenant_documents (
     file_type VARCHAR(10) NOT NULL,                   -- jpg | png | webp | pdf
     uploaded_at TIMESTAMP NULL DEFAULT NULL
 );
+
+-- Rooms a tenant rents on top of their main room (tenants.room_id), each billed on its own
+CREATE TABLE IF NOT EXISTS tenant_rooms (
+    id SERIAL PRIMARY KEY,
+    tenant_id INT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    room_id INT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    start_date DATE NOT NULL,                         -- rent starts (first month: full or half)
+    ended_at DATE NULL,                               -- released; NULL while still rented
+    last_billed_month VARCHAR(7),                     -- 'YYYY-MM' of the latest rent posted
+    created_at TIMESTAMP NULL DEFAULT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_notifications_ref ON notifications (ref);
 
 CREATE TABLE IF NOT EXISTS settings (

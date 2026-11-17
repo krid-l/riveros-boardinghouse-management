@@ -14,7 +14,7 @@ $totalRooms = $pdo->query("SELECT COUNT(*) FROM rooms")->fetchColumn() ?: 0;
 
 $roomsData = $pdo->query("
     SELECT r.id, r.room_number, r.capacity, r.status,
-           (SELECT COUNT(*) FROM tenants t WHERE t.room_id = r.id AND t.status = 'active') as tenant_count
+           " . roomBedsTakenSql('r.id') . " as tenant_count
     FROM rooms r
 ")->fetchAll();
 usort($roomsData, fn($a, $b) => strnatcasecmp((string)$a['room_number'], (string)$b['room_number']));   // 1, 2, 10 - not 1, 10, 2

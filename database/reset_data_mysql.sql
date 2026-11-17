@@ -28,6 +28,9 @@ DELETE FROM rooms;
 -- The SMS log (created the first time the app is opened after the SMS update). Cleared too,
 -- because new tenants reuse old ids and would otherwise look already reminded.
 DELETE FROM sms_log;
+-- Additional rooms rented by tenants (created the first time the app is opened after the
+-- multiple-rooms update). Foreign keys are off, so deleting tenants doesn't clear these.
+DELETE FROM tenant_rooms;
 
 -- Tenant logins only. The admin account stays.
 DELETE FROM users WHERE role = 'tenant';
@@ -42,5 +45,6 @@ ALTER TABLE complaints     AUTO_INCREMENT = 1;
 ALTER TABLE tenants        AUTO_INCREMENT = 1;
 ALTER TABLE announcements  AUTO_INCREMENT = 1;
 ALTER TABLE rooms          AUTO_INCREMENT = 1;
+ALTER TABLE tenant_rooms   AUTO_INCREMENT = 1;
 
 SELECT 'Test data cleared. The admin account and your settings are untouched.' AS result;

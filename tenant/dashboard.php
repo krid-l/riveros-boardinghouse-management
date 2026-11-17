@@ -21,7 +21,7 @@ $room = null;
 $roomOccupants = 0;
 if (!empty($currentTenant['room_id'])) {
     $stmt = $pdo->prepare("
-        SELECT r.*, (SELECT COUNT(*) FROM tenants WHERE room_id = r.id AND status = 'active') as occupant_count 
+        SELECT r.*, " . roomBedsTakenSql('r.id') . " as occupant_count 
         FROM rooms r WHERE r.id = ?
     ");
     $stmt->execute([$currentTenant['room_id']]);
@@ -31,6 +31,9 @@ if (!empty($currentTenant['room_id'])) {
 // Rent is per bed: the room price divided by its capacity, however many beds are taken.
 $roomCapacity = $room ? max(1, (int)$room['capacity']) : 1;
 $myRentShare = $room ? rentShare((float)$room['price_per_month'], $roomCapacity) : 0.0;
+// Rooms the tenant rents on top of their main room, each with its own monthly rent.
+$myExtraRooms = $room ? tenantAdditionalRooms($pdo, (int)$currentTenant['id']) : [];
+$myTotalRent = $myRentShare + array_sum(array_column($myExtraRooms, 'rent'));
 // Held to pay for their last month: one month of their rent.
 $myDeposit = tenantDeposit($pdo, $currentTenant);
 $depositUsed = depositAppliedThisStay($pdo, $currentTenant);
@@ -180,7 +183,7 @@ $balance = $currentTenant['balance'] ?? 0;
     <div class="room-card-circle"></div>
     <div class="d-flex justify-content-between align-items-start mb-3 position-relative z-2">
         <div class="text-white d-flex align-items-center gap-2" style="font-size: 0.85rem; font-weight: 500;">
-            <i class="fa-solid fa-door-closed"></i> Current Room
+            <i class="fa-solid fa-door-closed"></i> <?= $myExtraRooms ? 'Main Room' : 'Current Room' ?>
         </div>
         <div class="room-badge">
             <div class="dot"></div> Active
@@ -243,6 +246,42 @@ $balance = $currentTenant['balance'] ?? 0;
     </div>
     <h5 class="fw-bold text-dark">No Room Assigned</h5>
     <p class="text-muted mb-0">Please wait for the administrator to assign you to a room.</p>
+</div>
+<?php endif; ?>
+
+<?php if ($myExtraRooms): ?>
+<!-- Every room the tenant rents: the main room and the additional ones -->
+<div class="section-card mb-4" id="my-rooms">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h6 class="fw-bold text-dark mb-0"><i class="fa-solid fa-door-open text-primary me-2"></i> My Rooms</h6>
+        <span class="badge bg-primary-subtle text-primary-emphasis rounded-pill"><?= 1 + count($myExtraRooms) ?> rooms</span>
+    </div>
+    <?php
+    $myRooms = [['room_number' => $room['room_number'], 'rent' => $myRentShare, 'capacity' => $roomCapacity, 'price_per_month' => (float)$room['price_per_month'], 'main' => true, 'since' => null]];
+    foreach ($myExtraRooms as $x) {
+        $myRooms[] = ['room_number' => $x['room_number'], 'rent' => $x['rent'], 'capacity' => max(1, (int)$x['capacity']), 'price_per_month' => (float)$x['price_per_month'], 'main' => false, 'since' => $x['start_date']];
+    }
+    foreach ($myRooms as $mr): ?>
+    <div class="d-flex align-items-center gap-3 py-2 border-bottom">
+        <div class="deposit-icon" style="width:38px;height:38px;font-size:0.95rem;"><i class="fa-solid fa-bed"></i></div>
+        <div class="flex-grow-1" style="min-width:0;">
+            <div class="fw-bold text-dark" style="font-size:0.9rem;">Room <?= htmlspecialchars($mr['room_number']) ?>
+                <span class="badge <?= $mr['main'] ? 'bg-primary-subtle text-primary-emphasis' : 'bg-secondary-subtle text-secondary-emphasis' ?> fw-semibold ms-1" style="font-size:0.62rem;"><?= $mr['main'] ? 'Main room' : 'Additional room' ?></span>
+            </div>
+            <div class="text-muted" style="font-size:0.72rem;">
+                <?= $mr['since'] ? 'Since ' . date('M j, Y', strtotime($mr['since'])) : 'Where you live' ?><?= $mr['capacity'] > 1 ? ' · 1 of ' . $mr['capacity'] . ' beds' : '' ?>
+            </div>
+        </div>
+        <div class="text-end flex-shrink-0">
+            <div class="fw-bold text-dark" style="font-size:0.85rem;">PHP <?= number_format($mr['rent'], 2) ?></div>
+            <div class="text-muted" style="font-size:0.65rem;">a month</div>
+        </div>
+    </div>
+    <?php endforeach; ?>
+    <div class="d-flex justify-content-between align-items-center pt-3 fw-bold text-dark" style="font-size:0.85rem;">
+        <span>Total monthly rent</span><span>PHP <?= number_format($myTotalRent, 2) ?></span>
+    </div>
+    <div class="text-muted mt-1" style="font-size:0.7rem;">The rent for all your rooms goes on the same balance and is due every 30th. Ask the admin to add or release a room.</div>
 </div>
 <?php endif; ?>
 

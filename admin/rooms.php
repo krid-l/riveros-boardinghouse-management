@@ -99,6 +99,17 @@ $tenantsStmt = $pdo->query("SELECT t.id, t.first_name, t.last_name, t.room_id, t
 foreach ($tenantsStmt->fetchAll() as $t) {
     $tenantsByRoom[$t['room_id']][] = $t;
 }
+// Tenants renting a room on top of their main room take a bed in it too (extra_id set).
+$extraRoomIdsByTenant = [];
+$extraStmt = $pdo->query("SELECT x.id AS extra_id, x.room_id, t.id, t.first_name, t.last_name, t.balance, t.move_in_date, t.profile_picture,
+    x.start_date AS created_at
+    FROM tenant_rooms x JOIN tenants t ON t.id = x.tenant_id
+    WHERE x.ended_at IS NULL AND t.status = 'active'
+    ORDER BY t.first_name");
+foreach ($extraStmt->fetchAll() as $t) {
+    $tenantsByRoom[$t['room_id']][] = $t;
+    $extraRoomIdsByTenant[(int)$t['id']][] = (int)$t['room_id'];
+}
 
 // Calculate Stats
 // rooms.price_per_month is the price of the whole room when every bed is taken. Each tenant
@@ -405,10 +416,12 @@ require_once 'header.php';
                         <div class="text-center py-4 text-muted bg-light rounded-3" style="font-size: 0.78rem;">No tenants in this room yet.</div>
                     <?php endif; ?>
                     <?php foreach ($roomTenants as $t):
+                        $isExtra = !empty($t['extra_id']);
                         $tData = htmlspecialchars(json_encode([
                             'id' => (int)$t['id'],
                             'name' => $t['first_name'] . ' ' . $t['last_name'],
                             'room_id' => (int)$t['room_id'],
+                            'extra_room_ids' => $extraRoomIdsByTenant[(int)$t['id']] ?? [],
                             'room_number' => $r['room_number'],
                             'balance' => round((float)$t['balance'], 2),
                             'return_room' => (int)$r['id'],
@@ -420,14 +433,26 @@ require_once 'header.php';
                                 <?= avatarHtml($t['first_name'] . ' ' . $t['last_name'], 34, 'me-2 shadow-sm', $t['profile_picture'] ?? null, '../') ?>
                                 <div style="min-width: 0;">
                                     <div class="fw-bold text-dark text-truncate" style="font-size: 0.8rem;"><?= htmlspecialchars($t['first_name'] . ' ' . $t['last_name']) ?></div>
-                                    <div class="text-muted" style="font-size: 0.68rem;">Since <?= date('M j, Y', strtotime($t['created_at'])) ?>
+                                    <div class="text-muted" style="font-size: 0.68rem;"><?php if ($isExtra): ?><span class="badge bg-secondary-subtle text-secondary-emphasis fw-semibold me-1">Additional room</span><?php endif; ?>Since <?= date('M j, Y', strtotime($t['created_at'])) ?>
                                         · <?= $bal > 0 ? '<span class="text-danger fw-semibold">owes ₱' . number_format($bal, 2) . '</span>' : '<span class="text-success fw-semibold">paid up</span>' ?></div>
                                 </div>
                             </a>
                             <div class="d-flex gap-1 flex-shrink-0">
                                 <a href="tenant_details.php?id=<?= (int)$t['id'] ?>" class="btn btn-sm btn-light border" title="View details" aria-label="View details"><i class="fa-regular fa-eye"></i></a>
+                                <?php if ($isExtra): ?>
+                                <!-- An additional room: give it up today (other dates: the tenant's Rooms tab) -->
+                                <form method="POST" class="m-0" onsubmit="return confirm('Release Room <?= htmlspecialchars(addslashes($r['room_number']), ENT_QUOTES) ?> from <?= htmlspecialchars(addslashes($t['first_name'] . ' ' . $t['last_name']), ENT_QUOTES) ?> today? Its rent stops from next month. Their main room is not affected.');">
+                                    <input type="hidden" name="action" value="release_room">
+                                    <input type="hidden" name="tenant_id" value="<?= (int)$t['id'] ?>">
+                                    <input type="hidden" name="tenant_room_id" value="<?= (int)$t['extra_id'] ?>">
+                                    <input type="hidden" name="end_date" value="<?= date('Y-m-d') ?>">
+                                    <input type="hidden" name="return_room" value="<?= (int)$r['id'] ?>">
+                                    <button type="submit" class="btn btn-sm btn-light border text-danger" title="Release this room" aria-label="Release this room"><i class="fa-solid fa-right-from-bracket"></i></button>
+                                </form>
+                                <?php else: ?>
                                 <button type="button" class="btn btn-sm btn-light border text-info" title="Change room" aria-label="Change room" onclick="fromDetails(() => openRoomModal(this))"><i class="fa-solid fa-right-left"></i></button>
                                 <button type="button" class="btn btn-sm btn-light border text-danger" title="Remove tenant" aria-label="Remove tenant" onclick="fromDetails(() => openDeactivateModal(this))"><i class="fa-solid fa-user-xmark"></i></button>
+                                <?php endif; ?>
                             </div>
                         </div>
                     <?php endforeach; ?>
@@ -741,7 +766,7 @@ function openRoomModal(el) {
     select.value = '';
     for (const opt of select.options) {
         if (!opt.value) continue;
-        opt.disabled = opt.dataset.full === '1' || Number(opt.value) === t.room_id;
+        opt.disabled = opt.dataset.full === '1' || Number(opt.value) === t.room_id || (t.extra_room_ids || []).includes(Number(opt.value));
     }
     bootstrap.Modal.getOrCreateInstance(document.getElementById('roomChangeModal')).show();
 }

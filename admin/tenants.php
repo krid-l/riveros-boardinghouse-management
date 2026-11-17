@@ -127,7 +127,7 @@ $notYetDue = chargesNotYetDue($pdo);
 
 // Fetch available rooms for the dropdown (only active tenants take up beds)
 // Rooms under maintenance aren't offered at all.
-$roomsStmt = $pdo->query("SELECT r.id, r.room_number, r.capacity, r.price_per_month, (SELECT COUNT(*) FROM tenants t WHERE t.room_id = r.id AND t.status = 'active') as occupied FROM rooms r WHERE r.status <> 'maintenance'");
+$roomsStmt = $pdo->query("SELECT r.id, r.room_number, r.capacity, r.price_per_month, " . roomBedsTakenSql('r.id') . " as occupied FROM rooms r WHERE r.status <> 'maintenance'");
 $allRooms = $roomsStmt->fetchAll();
 usort($allRooms, fn($a, $b) => strnatcasecmp((string)$a['room_number'], (string)$b['room_number']));   // 1, 2, 10 - not 1, 10, 2
 
@@ -281,8 +281,16 @@ require_once 'header.php';
                             </tr>
                         <?php endif; ?>
 
-                        <?php foreach($tenants as $t):
+                        <?php
+                        // Rooms each tenant rents on top of their main room.
+                        $extraRoomsByTenant = [];
+                        foreach ($pdo->query("SELECT x.tenant_id, x.room_id, r.room_number FROM tenant_rooms x JOIN rooms r ON r.id = x.room_id
+                                              WHERE x.ended_at IS NULL ORDER BY x.start_date, x.id")->fetchAll() as $x) {
+                            $extraRoomsByTenant[(int)$x['tenant_id']][] = $x;
+                        }
+                        foreach($tenants as $t):
                             $bs = tenantBillingStatus($t, $notYetDue);
+                            $extraRooms = $extraRoomsByTenant[(int)$t['id']] ?? [];
                             $balance = $bs['balance'];
                             $isDeactivated = $bs['key'] === 'deactivated';
                             // Moved in, owes money, and hasn't paid anything since: the advance and
@@ -300,6 +308,7 @@ require_once 'header.php';
                                 'profile' => array_combine(TENANT_PROFILE_COLUMNS, array_map(fn($c) => $t[$c] ?? '', TENANT_PROFILE_COLUMNS)),
                                 'room_id' => $t['room_id'] ? (int)$t['room_id'] : null,
                                 'room_number' => $t['room_number'],
+                                'extra_room_ids' => array_map(fn($x) => (int)$x['room_id'], $extraRooms),
                                 'has_move_in' => !empty($t['move_in_date']),
                                 'balance' => $balance,
                                 'movein_due' => $moveInDue,
@@ -319,6 +328,9 @@ require_once 'header.php';
                                     <span class="text-muted fw-normal">Moved out<?= $t['deactivated_at'] ? ' ' . date('M j, Y', strtotime($t['deactivated_at'])) : '' ?></span>
                                 <?php else: ?>
                                     <?= $t['room_number'] ? 'Room ' . htmlspecialchars($t['room_number'] ?? '') : '<span class="text-muted fw-normal">Unassigned</span>' ?>
+                                    <?php if ($extraRooms): ?>
+                                        <div class="text-muted fw-normal" style="font-size:0.6rem;" title="Additional rooms">+ <?= htmlspecialchars(implode(', ', array_map(fn($x) => 'Room ' . $x['room_number'], $extraRooms))) ?></div>
+                                    <?php endif; ?>
                                 <?php endif; ?>
                             </td>
                             <td class="fw-bold <?= $balance > 0 ? 'text-danger' : 'text-success' ?>">
@@ -694,7 +706,7 @@ function openRoomModal(btn) {
     select.value = '';
     for (const opt of select.options) {
         if (!opt.value) continue;
-        opt.disabled = opt.dataset.full === '1' || Number(opt.value) === t.room_id;
+        opt.disabled = opt.dataset.full === '1' || Number(opt.value) === t.room_id || (t.extra_room_ids || []).includes(Number(opt.value));
     }
     // Only a first assignment is a move-in with an advance and deposit to collect.
     document.getElementById('room_movein').classList.toggle('d-none', !firstAssignment);

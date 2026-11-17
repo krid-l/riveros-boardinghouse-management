@@ -206,6 +206,19 @@ CREATE TABLE IF NOT EXISTS tenant_documents (
     FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
+-- Rooms a tenant rents on top of their main room (tenants.room_id), each billed on its own
+CREATE TABLE IF NOT EXISTS tenant_rooms (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    tenant_id INT NOT NULL,
+    room_id INT NOT NULL,
+    start_date DATE NOT NULL,                         -- rent starts (first month: full or half)
+    ended_at DATE NULL,                               -- released; NULL while still rented
+    last_billed_month VARCHAR(7),                     -- 'YYYY-MM' of the latest rent posted
+    created_at TIMESTAMP NULL DEFAULT NULL,
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
+    FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
 CREATE TABLE IF NOT EXISTS settings (
     setting_key VARCHAR(50) PRIMARY KEY,
     setting_value TEXT

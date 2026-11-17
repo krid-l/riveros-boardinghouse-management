@@ -9,7 +9,7 @@ require_once __DIR__ . '/billing.php';
 require_once __DIR__ . '/sql_compat.php';
 require_once __DIR__ . '/sms.php';
 
-const SCHEMA_VERSION = '13';
+const SCHEMA_VERSION = '14';
 
 function runMigrations(PDO $pdo): void {
     try {
@@ -49,6 +49,7 @@ function runMigrations(PDO $pdo): void {
         migrateToV11($pdo);
         migrateToV12($pdo);
         migrateToV13($pdo);
+        migrateToV14($pdo);
 
         $pdo->prepare("INSERT INTO settings (setting_key, setting_value) VALUES ('schema_version', ?)
                        " . sqlUpsert(['setting_key'], ['setting_value']))
@@ -216,6 +217,20 @@ function migrateToV13(PDO $pdo): void {
         file_path VARCHAR(255) NOT NULL,
         file_type VARCHAR(10) NOT NULL,
         uploaded_at TIMESTAMP NULL DEFAULT NULL
+    )");
+}
+
+// v14: tenants can rent more than one room. tenants.room_id stays the main room; the rooms a
+// tenant rents on top of it are kept here, each billed on its own (see billing.php).
+function migrateToV14(PDO $pdo): void {
+    $pdo->exec("CREATE TABLE IF NOT EXISTS tenant_rooms (
+        id " . sqlSerialPk() . ",
+        tenant_id INT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        room_id INT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+        start_date DATE NOT NULL,
+        ended_at DATE NULL,
+        last_billed_month VARCHAR(7),
+        created_at TIMESTAMP NULL DEFAULT NULL
     )");
 }
 

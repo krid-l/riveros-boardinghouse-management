@@ -106,12 +106,23 @@ function buildReport(PDO $pdo, string $type, string $from, string $to): array {
         $tenants = $pdo->query("SELECT t.*, r.room_number, r.price_per_month, r.capacity FROM tenants t
                                 LEFT JOIN rooms r ON r.id = t.room_id
                                 ORDER BY (t.status = 'active') DESC, t.first_name, t.last_name")->fetchAll();
+        // Rooms rented on top of the main room add their rent, and are listed after it.
+        $extra = [];
+        foreach ($pdo->query("SELECT x.tenant_id, r.room_number, r.price_per_month, r.capacity FROM tenant_rooms x
+                              JOIN rooms r ON r.id = x.room_id WHERE x.ended_at IS NULL ORDER BY x.start_date, x.id")->fetchAll() as $x) {
+            $extra[(int)$x['tenant_id']][] = $x;
+        }
         $active = 0;
         foreach ($tenants as $t) {
             $isActive = $t['status'] === 'active';
             $active += $isActive ? 1 : 0;
             $rent = $t['room_id'] ? rentShare((float)$t['price_per_month'], (int)$t['capacity']) : 0;
-            $report['rows'][] = [$name($t), $t['contact_number'] ?? '', $t['email'] ?? '', $t['room_number'] ?? '-',
+            $roomText = $t['room_number'] ?? '-';
+            foreach ($extra[(int)$t['id']] ?? [] as $x) {
+                $rent += rentShare((float)$x['price_per_month'], (int)$x['capacity']);
+                $roomText .= ', ' . $x['room_number'];
+            }
+            $report['rows'][] = [$name($t), $t['contact_number'] ?? '', $t['email'] ?? '', $roomText,
                                  $t['move_in_date'] ?? '-', $isActive ? 'Active' : 'Moved out', $rent ? $money($rent) : '-', $money($t['balance'])];
         }
         $report['totals']['Active tenants'] = (string)$active;
@@ -126,6 +137,12 @@ function buildReport(PDO $pdo, string $type, string $from, string $to): array {
         $byRoom = [];
         foreach ($who as $w) {
             $byRoom[$w['room_id']][] = $name($w);
+        }
+        // Tenants renting a room on top of their main one take a bed in it too.
+        $extraWho = $pdo->query("SELECT x.room_id, t.first_name, t.last_name FROM tenant_rooms x JOIN tenants t ON t.id = x.tenant_id
+                                 WHERE x.ended_at IS NULL AND t.status = 'active' ORDER BY t.first_name")->fetchAll();
+        foreach ($extraWho as $w) {
+            $byRoom[$w['room_id']][] = $name($w) . ' (additional)';
         }
         $beds = $taken = 0;
         foreach ($rooms as $r) {
