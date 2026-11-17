@@ -9,7 +9,7 @@ require_once __DIR__ . '/billing.php';
 require_once __DIR__ . '/sql_compat.php';
 require_once __DIR__ . '/sms.php';
 
-const SCHEMA_VERSION = '16';
+const SCHEMA_VERSION = '17';
 
 function runMigrations(PDO $pdo): void {
     try {
@@ -52,6 +52,7 @@ function runMigrations(PDO $pdo): void {
         migrateToV14($pdo);
         migrateToV15($pdo);
         migrateToV16($pdo);
+        migrateToV17($pdo);
 
         $pdo->prepare("INSERT INTO settings (setting_key, setting_value) VALUES ('schema_version', ?)
                        " . sqlUpsert(['setting_key'], ['setting_value']))
@@ -260,6 +261,23 @@ function migrateToV16(PDO $pdo): void {
         start_date DATE NULL,
         ended_at DATE NULL,
         last_billed_month VARCHAR(7),
+        created_at TIMESTAMP NULL DEFAULT NULL
+    )");
+}
+
+// v17: damage charges. Something in the boarding house found broken or damaged, charged to the
+// tenant once (see damages.php).
+function migrateToV17(PDO $pdo): void {
+    $pdo->exec("CREATE TABLE IF NOT EXISTS damage_charges (
+        id " . sqlSerialPk() . ",
+        tenant_id INT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        room_id INT NULL REFERENCES rooms(id) ON DELETE SET NULL,
+        item VARCHAR(120) NOT NULL,
+        note TEXT,
+        amount DECIMAL(10,2) NOT NULL,
+        found_on DATE NOT NULL,
+        due_date DATE NOT NULL,
+        photo_path VARCHAR(255),
         created_at TIMESTAMP NULL DEFAULT NULL
     )");
 }

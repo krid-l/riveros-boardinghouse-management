@@ -244,6 +244,22 @@ CREATE TABLE IF NOT EXISTS tenant_appliances (
     FOREIGN KEY (appliance_id) REFERENCES appliances(id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
+-- Damage found in the boarding house, charged once to the tenant responsible
+CREATE TABLE IF NOT EXISTS damage_charges (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    tenant_id INT NOT NULL,
+    room_id INT NULL,
+    item VARCHAR(120) NOT NULL,                       -- what was damaged, e.g. "Broken window"
+    note TEXT,
+    amount DECIMAL(10,2) NOT NULL,
+    found_on DATE NOT NULL,                           -- when the owner found it
+    due_date DATE NOT NULL,
+    photo_path VARCHAR(255),                          -- optional photo of the damage
+    created_at TIMESTAMP NULL DEFAULT NULL,
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
+    FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+
 CREATE TABLE IF NOT EXISTS settings (
     setting_key VARCHAR(50) PRIMARY KEY,
     setting_value TEXT

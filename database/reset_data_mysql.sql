@@ -33,6 +33,7 @@ DELETE FROM sms_log;
 DELETE FROM tenant_rooms;
 -- Tenants' appliances (the appliance list in Settings is kept).
 DELETE FROM tenant_appliances;
+DELETE FROM damage_charges;
 
 -- Tenant logins only. The admin account stays.
 DELETE FROM users WHERE role = 'tenant';
@@ -49,5 +50,6 @@ ALTER TABLE announcements  AUTO_INCREMENT = 1;
 ALTER TABLE rooms          AUTO_INCREMENT = 1;
 ALTER TABLE tenant_rooms   AUTO_INCREMENT = 1;
 ALTER TABLE tenant_appliances AUTO_INCREMENT = 1;
+ALTER TABLE damage_charges AUTO_INCREMENT = 1;
 
 SELECT 'Test data cleared. The admin account and your settings are untouched.' AS result;

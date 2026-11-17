@@ -2,6 +2,7 @@
 require_once 'header.php';
 require_once '../includes/billing.php';
 require_once '../includes/deposit_requests.php';
+require_once '../includes/damages.php';
 
 // "Use my deposit for my last month": the tenant asks, the admin approves.
 $depositMsg = '';
@@ -39,6 +40,8 @@ $myTotalRent = $myRentShare + array_sum(array_column($myExtraRooms, 'rent'));
 // Appliances they are charged for every month, on top of the rent.
 $myAppliances = tenantAppliances($pdo, (int)$currentTenant['id']);
 $myApplianceTotal = array_sum(array_column($myAppliances, 'monthly'));
+// Damage charges: things found broken in the boarding house, charged to them once.
+$myDamages = tenantDamageCharges($pdo, (int)$currentTenant['id']);
 // Held to pay for their last month: one month of their rent.
 $myDeposit = tenantDeposit($pdo, $currentTenant);
 $depositUsed = depositAppliedThisStay($pdo, $currentTenant);
@@ -316,6 +319,29 @@ $balance = $currentTenant['balance'] ?? 0;
     </div>
     <?php endif; ?>
     <div class="text-muted mt-1" style="font-size:0.7rem;">Added to your balance with the rent. Ask the admin if something here is not right.</div>
+</div>
+<?php endif; ?>
+
+<?php if ($myDamages): ?>
+<!-- Damage charges: one-time charges for something found broken -->
+<div class="section-card mb-4" id="my-damages">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h6 class="fw-bold text-dark mb-0"><i class="fa-solid fa-hammer text-danger me-2"></i> Damage Charges</h6>
+        <span class="badge bg-danger-subtle text-danger-emphasis rounded-pill">PHP <?= number_format(array_sum(array_map(fn($d) => (float)$d['amount'], $myDamages)), 2) ?></span>
+    </div>
+    <?php foreach ($myDamages as $d): ?>
+    <div class="d-flex align-items-start gap-3 py-2 border-bottom">
+        <div class="deposit-icon" style="width:38px;height:38px;font-size:0.95rem;background:#fef2f2;color:#dc2626;"><i class="fa-solid fa-hammer"></i></div>
+        <div class="flex-grow-1" style="min-width:0;">
+            <div class="fw-bold text-dark" style="font-size:0.9rem;"><?= htmlspecialchars($d['item']) ?><?= $d['room_number'] ? ' <span class="text-muted fw-normal" style="font-size:0.75rem;">· Room ' . htmlspecialchars($d['room_number']) . '</span>' : '' ?></div>
+            <div class="text-muted" style="font-size:0.72rem;">Found <?= date('M j, Y', strtotime($d['found_on'])) ?> · Due <?= date('M j, Y', strtotime($d['due_date'])) ?></div>
+            <?php if (!empty($d['note'])): ?><div class="text-dark" style="font-size:0.75rem;"><?= nl2br(htmlspecialchars($d['note'])) ?></div><?php endif; ?>
+            <?php if (!empty($d['photo_path'])): ?><a href="<?= htmlspecialchars(uploadSrc($d['photo_path'], '../')) ?>" target="_blank" rel="noopener" style="font-size:0.72rem;"><i class="fa-regular fa-image me-1"></i>View photo</a><?php endif; ?>
+        </div>
+        <div class="fw-bold text-dark flex-shrink-0" style="font-size:0.85rem;">PHP <?= number_format((float)$d['amount'], 2) ?></div>
+    </div>
+    <?php endforeach; ?>
+    <div class="text-muted mt-2" style="font-size:0.7rem;">Added to your balance and paid like rent. Please talk to the admin if you have questions about a charge.</div>
 </div>
 <?php endif; ?>
 

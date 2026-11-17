@@ -214,6 +214,20 @@ CREATE TABLE IF NOT EXISTS tenant_appliances (
     created_at TIMESTAMP NULL DEFAULT NULL
 );
 
+-- Damage found in the boarding house, charged once to the tenant responsible
+CREATE TABLE IF NOT EXISTS damage_charges (
+    id SERIAL PRIMARY KEY,
+    tenant_id INT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    room_id INT NULL REFERENCES rooms(id) ON DELETE SET NULL,
+    item VARCHAR(120) NOT NULL,                       -- what was damaged, e.g. "Broken window"
+    note TEXT,
+    amount DECIMAL(10,2) NOT NULL,
+    found_on DATE NOT NULL,                           -- when the owner found it
+    due_date DATE NOT NULL,
+    photo_path VARCHAR(255),                          -- optional photo of the damage
+    created_at TIMESTAMP NULL DEFAULT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_notifications_ref ON notifications (ref);
 
 CREATE TABLE IF NOT EXISTS settings (

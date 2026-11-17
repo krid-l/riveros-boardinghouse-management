@@ -20,7 +20,7 @@ DECLARE
 BEGIN
     -- Tenant rows cascade into the rest, but clear each table explicitly so this
     -- still works if a foreign key is missing. Tables that don't exist are skipped.
-    FOREACH t IN ARRAY ARRAY['sms_log', 'tenant_rooms', 'tenant_appliances', 'payments', 'complaints', 'charges', 'room_transfers', 'announcements', 'tenants']
+    FOREACH t IN ARRAY ARRAY['sms_log', 'tenant_rooms', 'tenant_appliances', 'damage_charges', 'payments', 'complaints', 'charges', 'room_transfers', 'announcements', 'tenants']
     LOOP
         IF to_regclass('public.' || t) IS NOT NULL THEN
             EXECUTE format('DELETE FROM %I', t);

@@ -10,6 +10,7 @@ require_once '../includes/uploads.php';
 require_once '../includes/sms_templates.php';
 require_once '../includes/deposit_requests.php';
 require_once '../includes/tenant_actions.php';
+require_once '../includes/damages.php';
 requireAdmin();
 
 $reminderSuccess = '';
@@ -92,6 +93,48 @@ $roomError = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array($_POST['action'] ?? '', ['add_room', 'release_room', 'add_appliance', 'remove_appliance'], true)
     && (int)($_POST['tenant_id'] ?? 0) === $tenantId) {
     ['success' => $roomMessage, 'error' => $roomError] = handleTenantAction($pdo);
+}
+
+// Damage charges: something found broken in the boarding house, charged once to this tenant.
+$damageMessage = '';
+$damageError = '';
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add_damage' && (int)($_POST['tenant_id'] ?? 0) === $tenantId) {
+    $photo = ['path' => null, 'error' => null];
+    if (isset($_FILES['photo']) && ($_FILES['photo']['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_NO_FILE) {
+        $photo = storeUploadedImage($_FILES['photo'], 'payments/damages');
+    }
+    if ($photo['error']) {
+        $damageError = $photo['error'];
+    } else {
+        try {
+            addDamageCharge($pdo, $tenantId, [
+                'item' => $_POST['item'] ?? '', 'note' => $_POST['note'] ?? '', 'amount' => $_POST['amount'] ?? 0,
+                'found_on' => $_POST['found_on'] ?? '', 'due_date' => $_POST['due_date'] ?? '',
+                'room_id' => $_POST['room_id'] ?? null, 'photo_path' => $photo['path'],
+            ]);
+            $amount = round((float)$_POST['amount'], 2);
+            $damageMessage = 'Damage charge of ₱' . number_format($amount, 2) . ' added to the balance, due ' . date('M j, Y', strtotime($_POST['due_date'])) . '.';
+            if (!empty($_POST['notify'])) {
+                $t = $pdo->prepare("SELECT first_name, contact_number, balance FROM tenants WHERE id = ?");
+                $t->execute([$tenantId]);
+                $tRow = $t->fetch();
+                $r = sendSMS($pdo, $tRow['contact_number'],
+                    smsDamageChargeMessage($pdo, $tRow['first_name'], trim((string)$_POST['item']), $amount, $_POST['due_date'], (float)$tRow['balance']),
+                    'damage_charge', $tenantId);
+                $damageMessage .= ' ' . smsOutcomeText($r);
+            }
+        } catch (Exception $e) {
+            if ($photo['path']) deleteLocalUpload($photo['path']);
+            $damageError = $e->getMessage();
+        }
+    }
+}
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'remove_damage' && (int)($_POST['tenant_id'] ?? 0) === $tenantId) {
+    $removed = removeDamageCharge($pdo, (int)($_POST['damage_id'] ?? 0), $tenantId);
+    if ($removed) {
+        deleteLocalUpload($removed['photo_path'] ?? null);
+        $damageMessage = 'Damage charge for "' . $removed['item'] . '" removed and taken off the balance.';
+    }
 }
 
 // The admin's own notes on the tenant (only the admin sees them).
@@ -236,6 +279,8 @@ foreach ($charges as $c) {
     $chargeDate = $c['billing_month'] . '-01';
     if ($c['kind'] === 'opening') {
         $chargeDate = $tenant['move_in_date'] ?? $c['due_date'];
+    } elseif (str_starts_with($c['kind'], 'dmg_') && !empty($c['created_at'])) {
+        $chargeDate = substr($c['created_at'], 0, 10);   // a damage charge: the day it was added
     } elseif ($tenant['move_in_date'] && date('Y-m', strtotime($tenant['move_in_date'])) === $c['billing_month']) {
         $chargeDate = $tenant['move_in_date'];
     }
@@ -262,7 +307,9 @@ usort($ledger, fn($a, $b) => [$a['date'], $a['order']] <=> [$b['date'], $b['orde
 $docStmt = $pdo->prepare("SELECT * FROM tenant_documents WHERE tenant_id = ? ORDER BY uploaded_at DESC, id DESC");
 $docStmt->execute([$tenantId]);
 $documents = $docStmt->fetchAll();
-$openTab = ($docMessage || $docError) ? 'documents' : (($roomMessage || $roomError) ? 'rooms' : 'overview');
+$openTab = ($docMessage || $docError) ? 'documents' : (($roomMessage || $roomError) ? 'rooms' : (($damageMessage || $damageError) ? 'damages' : 'overview'));
+$damages = tenantDamageCharges($pdo, $tenantId);
+$damageTotal = array_sum(array_map(fn($d) => (float)$d['amount'], $damages));
 
 // Rooms the tenant could also rent: a free bed, not under maintenance, not one they already have.
 $rentedRoomIds = array_merge($tenant['room_id'] ? [(int)$tenant['room_id']] : [], array_map('intval', array_column($additionalRooms, 'room_id')));
@@ -484,7 +531,8 @@ $upcomingDue = upcomingDueDate($pdo, $tenantId);
     <?php foreach ([['overview', 'fa-regular fa-user', 'Overview'], ['transactions', 'fa-regular fa-file-lines', 'Transactions'],
                     ['payments', 'fa-solid fa-wallet', 'Payments & Receipts'], ['ledger', 'fa-solid fa-book-open', 'Ledger'],
                     ['documents', 'fa-regular fa-file', 'Documents' . ($documents ? ' (' . count($documents) . ')' : '')],
-                    ['rooms', 'fa-solid fa-door-open', 'Rooms' . ($roomCount ? ' (' . $roomCount . ')' : '')]] as [$id, $icon, $label]): ?>
+                    ['rooms', 'fa-solid fa-door-open', 'Rooms' . ($roomCount ? ' (' . $roomCount . ')' : '')],
+                    ['damages', 'fa-solid fa-hammer', 'Damages' . ($damages ? ' (' . count($damages) . ')' : '')]] as [$id, $icon, $label]): ?>
     <li class="nav-item" role="presentation">
         <button class="nav-link <?= $openTab === $id ? 'active' : '' ?>" id="<?= $id ?>-tab" data-bs-toggle="tab" data-bs-target="#<?= $id ?>" type="button" role="tab"><i class="<?= $icon ?> me-2"></i><?= $label ?></button>
     </li>
@@ -1164,6 +1212,106 @@ $upcomingDue = upcomingDueDate($pdo, $tenantId);
                         </form>
                         <?php endif; ?>
                     </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- DAMAGES TAB: things found broken in the boarding house, charged once to the tenant -->
+    <div class="tab-pane fade <?= $openTab === 'damages' ? 'show active' : '' ?>" id="damages" role="tabpanel" aria-labelledby="damages-tab">
+        <?php if ($damageError): ?><div class="alert alert-danger py-2 px-3" style="font-size:0.78rem;"><?= htmlspecialchars($damageError) ?></div><?php endif; ?>
+        <?php if ($damageMessage): ?><div class="alert alert-success py-2 px-3" style="font-size:0.78rem;"><?= htmlspecialchars($damageMessage) ?></div><?php endif; ?>
+        <div class="row g-3">
+            <div class="col-lg-7">
+                <div class="section-card shadow-sm">
+                    <div class="section-header"><h6 class="section-title"><i class="fa-solid fa-hammer text-primary me-2"></i>Damage Charges</h6></div>
+                    <?php if (!$damages): ?>
+                        <div class="empty-state"><span><i class="fa-solid fa-hammer"></i></span><div class="fw-semibold text-dark">No damage charges.</div><div>If something in the boarding house is found broken, charge it here.</div></div>
+                    <?php else: foreach ($damages as $d): $pastDue = $d['due_date'] < date('Y-m-d'); ?>
+                        <div class="rented-room">
+                            <div class="d-flex align-items-start gap-3">
+                                <span class="rented-room-icon bg-danger-subtle text-danger"><i class="fa-solid fa-hammer"></i></span>
+                                <div class="flex-grow-1" style="min-width:0;">
+                                    <div class="fw-bold text-dark"><?= htmlspecialchars($d['item']) ?><?= $d['room_number'] ? ' <span class="text-muted fw-normal">· Room ' . htmlspecialchars($d['room_number']) . '</span>' : '' ?></div>
+                                    <div class="text-muted" style="font-size:0.7rem;">Found <?= date('M j, Y', strtotime($d['found_on'])) ?> · Due <?= date('M j, Y', strtotime($d['due_date'])) ?></div>
+                                    <?php if (!empty($d['note'])): ?><div class="text-dark mt-1" style="font-size:0.72rem;"><?= nl2br(htmlspecialchars($d['note'])) ?></div><?php endif; ?>
+                                    <?php if (!empty($d['photo_path'])): ?>
+                                        <a href="<?= htmlspecialchars(uploadSrc($d['photo_path'], '../')) ?>" target="_blank" rel="noopener" class="d-inline-block mt-2"><img src="<?= htmlspecialchars(uploadSrc($d['photo_path'], '../')) ?>" alt="Photo of the damage" style="height:64px; width:auto; max-width:120px; object-fit:cover; border-radius:6px; border:1px solid #e2e8f0;"></a>
+                                    <?php endif; ?>
+                                </div>
+                                <div class="text-end flex-shrink-0">
+                                    <div class="fw-bold text-dark">₱<?= number_format((float)$d['amount'], 2) ?></div>
+                                    <?php if ($pastDue): ?><div class="text-danger" style="font-size:0.66rem;">past due date</div><?php endif; ?>
+                                    <form method="POST" class="mt-2" onsubmit="return confirm('Remove this damage charge? It is taken off the tenant\'s balance.');">
+                                        <input type="hidden" name="action" value="remove_damage">
+                                        <input type="hidden" name="tenant_id" value="<?= $tenantId ?>">
+                                        <input type="hidden" name="damage_id" value="<?= (int)$d['id'] ?>">
+                                        <button type="submit" class="btn btn-sm btn-outline-danger py-0 px-2" style="font-size:0.7rem;" aria-label="Remove damage charge for <?= htmlspecialchars($d['item']) ?>"><i class="fa-regular fa-trash-can"></i></button>
+                                    </form>
+                                </div>
+                            </div>
+                        </div>
+                    <?php endforeach; ?>
+                        <div class="rooms-total"><span>Total damage charges</span><span>₱<?= number_format($damageTotal, 2) ?></span></div>
+                    <?php endif; ?>
+                </div>
+                <div class="text-muted px-1" style="font-size:0.7rem;"><i class="fa-solid fa-circle-info me-1"></i>Damage charges go on the tenant's balance and show in the Ledger. Payments cover them like rent.</div>
+            </div>
+            <div class="col-lg-5">
+                <div class="section-card shadow-sm">
+                    <div class="section-header"><h6 class="section-title"><i class="fa-solid fa-plus text-primary me-2"></i>Charge for Damage</h6></div>
+                    <?php $old = $damageError ? $_POST : []; ?>
+                    <form method="POST" enctype="multipart/form-data" class="p-3 form-compact" onsubmit="return confirm('Add this damage charge to the tenant\'s balance?');">
+                        <input type="hidden" name="action" value="add_damage">
+                        <input type="hidden" name="tenant_id" value="<?= $tenantId ?>">
+                        <div class="mb-2">
+                            <label for="dmgItem">What was damaged</label>
+                            <input type="text" id="dmgItem" name="item" class="form-control" maxlength="120" required placeholder="e.g. Broken window, damaged door lock" value="<?= htmlspecialchars($old['item'] ?? '') ?>">
+                        </div>
+                        <div class="row g-2 mb-2">
+                            <div class="col-6">
+                                <label for="dmgAmount">Amount (₱)</label>
+                                <input type="number" id="dmgAmount" name="amount" class="form-control" min="0.01" step="0.01" required value="<?= htmlspecialchars($old['amount'] ?? '') ?>">
+                            </div>
+                            <div class="col-6">
+                                <label for="dmgRoom">Where</label>
+                                <select id="dmgRoom" name="room_id" class="form-select">
+                                    <option value="">Common area / other</option>
+                                    <?php
+                                    $allRoomsForDamage = $pdo->query("SELECT id, room_number FROM rooms")->fetchAll();
+                                    usort($allRoomsForDamage, fn($a, $b) => strnatcasecmp((string)$a['room_number'], (string)$b['room_number']));
+                                    $defaultDamageRoom = (int)($old['room_id'] ?? ($tenant['room_id'] ?? 0));
+                                    foreach ($allRoomsForDamage as $r): ?>
+                                        <option value="<?= (int)$r['id'] ?>" <?= (int)$r['id'] === $defaultDamageRoom ? 'selected' : '' ?>>Room <?= htmlspecialchars($r['room_number']) ?><?= in_array((int)$r['id'], $rentedRoomIds, true) ? ' (theirs)' : '' ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="row g-2 mb-2">
+                            <div class="col-6">
+                                <label for="dmgFound">Found on</label>
+                                <input type="date" id="dmgFound" name="found_on" class="form-control" required max="<?= date('Y-m-d') ?>" value="<?= htmlspecialchars($old['found_on'] ?? date('Y-m-d')) ?>">
+                            </div>
+                            <div class="col-6">
+                                <label for="dmgDue">Due date</label>
+                                <input type="date" id="dmgDue" name="due_date" class="form-control" required value="<?= htmlspecialchars($old['due_date'] ?? billingDueDate(date('Y-m'))) ?>">
+                            </div>
+                        </div>
+                        <div class="mb-2">
+                            <label for="dmgNote">Note <span class="text-muted fw-normal">(optional)</span></label>
+                            <textarea id="dmgNote" name="note" class="form-control" rows="2" maxlength="2000" placeholder="What happened, how the amount was worked out"><?= htmlspecialchars($old['note'] ?? '') ?></textarea>
+                        </div>
+                        <div class="mb-2">
+                            <label for="dmgPhoto">Photo <span class="text-muted fw-normal">(optional)</span></label>
+                            <input type="file" id="dmgPhoto" name="photo" class="form-control" accept="image/jpeg,image/png,image/webp,image/gif">
+                            <div class="form-text" style="font-size:0.7rem;">A picture of the damage, as proof. The tenant can see it.</div>
+                        </div>
+                        <div class="form-check mb-3">
+                            <input class="form-check-input" type="checkbox" name="notify" value="1" id="dmgNotify" <?= !$damageError || !empty($old['notify']) ? 'checked' : '' ?> <?= smsConfigured($pdo) ? '' : 'disabled' ?>>
+                            <label class="form-check-label" for="dmgNotify" style="font-size:0.75rem;">Text the tenant about this charge<?= smsConfigured($pdo) ? '' : ' (SMS not set up)' ?></label>
+                        </div>
+                        <button type="submit" class="btn btn-danger btn-sm w-100"><i class="fa-solid fa-plus me-1"></i>Add Damage Charge</button>
+                    </form>
                 </div>
             </div>
         </div>
