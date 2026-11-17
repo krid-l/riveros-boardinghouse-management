@@ -9,7 +9,7 @@ require_once __DIR__ . '/billing.php';
 require_once __DIR__ . '/sql_compat.php';
 require_once __DIR__ . '/sms.php';
 
-const SCHEMA_VERSION = '17';
+const SCHEMA_VERSION = '18';
 
 function runMigrations(PDO $pdo): void {
     try {
@@ -53,6 +53,7 @@ function runMigrations(PDO $pdo): void {
         migrateToV15($pdo);
         migrateToV16($pdo);
         migrateToV17($pdo);
+        migrateToV18($pdo);
 
         $pdo->prepare("INSERT INTO settings (setting_key, setting_value) VALUES ('schema_version', ?)
                        " . sqlUpsert(['setting_key'], ['setting_value']))
@@ -280,6 +281,12 @@ function migrateToV17(PDO $pdo): void {
         photo_path VARCHAR(255),
         created_at TIMESTAMP NULL DEFAULT NULL
     )");
+}
+
+// v18: a damage charge split between roommates: each tenant's share is its own row, and the
+// rows of one split share split_group.
+function migrateToV18(PDO $pdo): void {
+    ensureColumn($pdo, 'damage_charges', 'split_group', 'VARCHAR(40) NULL');
 }
 
 // v7: rent per bed. A tenant now pays price / capacity, however many beds are taken, instead of

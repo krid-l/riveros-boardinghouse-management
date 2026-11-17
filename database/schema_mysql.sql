@@ -255,6 +255,7 @@ CREATE TABLE IF NOT EXISTS damage_charges (
     found_on DATE NOT NULL,                           -- when the owner found it
     due_date DATE NOT NULL,
     photo_path VARCHAR(255),                          -- optional photo of the damage
+    split_group VARCHAR(40) NULL,                     -- shares of one charge split between roommates
     created_at TIMESTAMP NULL DEFAULT NULL,
     FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
     FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE SET NULL

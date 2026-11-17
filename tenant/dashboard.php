@@ -42,6 +42,7 @@ $myAppliances = tenantAppliances($pdo, (int)$currentTenant['id']);
 $myApplianceTotal = array_sum(array_column($myAppliances, 'monthly'));
 // Damage charges: things found broken in the boarding house, charged to them once.
 $myDamages = tenantDamageCharges($pdo, (int)$currentTenant['id']);
+$myDamageSplits = damageSplitShares($pdo, array_column($myDamages, 'split_group'));
 // Held to pay for their last month: one month of their rent.
 $myDeposit = tenantDeposit($pdo, $currentTenant);
 $depositUsed = depositAppliedThisStay($pdo, $currentTenant);
@@ -335,6 +336,9 @@ $balance = $currentTenant['balance'] ?? 0;
         <div class="flex-grow-1" style="min-width:0;">
             <div class="fw-bold text-dark" style="font-size:0.9rem;"><?= htmlspecialchars($d['item']) ?><?= $d['room_number'] ? ' <span class="text-muted fw-normal" style="font-size:0.75rem;">· Room ' . htmlspecialchars($d['room_number']) . '</span>' : '' ?></div>
             <div class="text-muted" style="font-size:0.72rem;">Found <?= date('M j, Y', strtotime($d['found_on'])) ?> · Due <?= date('M j, Y', strtotime($d['due_date'])) ?></div>
+            <?php if (!empty($d['split_group']) && !empty($myDamageSplits[$d['split_group']])): $sh = $myDamageSplits[$d['split_group']]; ?>
+                <div class="text-primary" style="font-size:0.72rem;">Your share of PHP <?= number_format(array_sum(array_column($sh, 'amount')), 2) ?>, split among <?= count($sh) ?> tenants</div>
+            <?php endif; ?>
             <?php if (!empty($d['note'])): ?><div class="text-dark" style="font-size:0.75rem;"><?= nl2br(htmlspecialchars($d['note'])) ?></div><?php endif; ?>
             <?php if (!empty($d['photo_path'])): ?><a href="<?= htmlspecialchars(uploadSrc($d['photo_path'], '../')) ?>" target="_blank" rel="noopener" style="font-size:0.72rem;"><i class="fa-regular fa-image me-1"></i>View photo</a><?php endif; ?>
         </div>

@@ -107,21 +107,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add_d
         $damageError = $photo['error'];
     } else {
         try {
-            addDamageCharge($pdo, $tenantId, [
+            // Split equally with the roommates ticked (only when "Split with roommates" is on).
+            $splitWith = !empty($_POST['split']) ? array_map('intval', (array)($_POST['split_with'] ?? [])) : [];
+            if (!empty($_POST['split']) && !$splitWith) {
+                throw new Exception('Tick at least one roommate to split with, or turn off "Split with roommates".');
+            }
+            $added = addDamageCharge($pdo, $tenantId, [
                 'item' => $_POST['item'] ?? '', 'note' => $_POST['note'] ?? '', 'amount' => $_POST['amount'] ?? 0,
                 'found_on' => $_POST['found_on'] ?? '', 'due_date' => $_POST['due_date'] ?? '',
                 'room_id' => $_POST['room_id'] ?? null, 'photo_path' => $photo['path'],
-            ]);
+            ], $splitWith);
             $amount = round((float)$_POST['amount'], 2);
-            $damageMessage = 'Damage charge of ₱' . number_format($amount, 2) . ' added to the balance, due ' . date('M j, Y', strtotime($_POST['due_date'])) . '.';
+            $ways = count($added);
+            $damageMessage = $ways > 1
+                ? 'Damage charge of ₱' . number_format($amount, 2) . ' split ' . $ways . ' ways: ₱' . number_format($added[$tenantId]['share'], 2)
+                  . ' on this tenant and ₱' . number_format(end($added)['share'], 2) . ' on each roommate, due ' . date('M j, Y', strtotime($_POST['due_date'])) . '.'
+                : 'Damage charge of ₱' . number_format($amount, 2) . ' added to the balance, due ' . date('M j, Y', strtotime($_POST['due_date'])) . '.';
             if (!empty($_POST['notify'])) {
                 $t = $pdo->prepare("SELECT first_name, contact_number, balance FROM tenants WHERE id = ?");
-                $t->execute([$tenantId]);
-                $tRow = $t->fetch();
-                $r = sendSMS($pdo, $tRow['contact_number'],
-                    smsDamageChargeMessage($pdo, $tRow['first_name'], trim((string)$_POST['item']), $amount, $_POST['due_date'], (float)$tRow['balance']),
-                    'damage_charge', $tenantId);
-                $damageMessage .= ' ' . smsOutcomeText($r);
+                $results = [];
+                foreach ($added as $tid => $share) {
+                    $t->execute([$tid]);
+                    $tRow = $t->fetch();
+                    $r = sendSMS($pdo, $tRow['contact_number'],
+                        smsDamageChargeMessage($pdo, $tRow['first_name'], trim((string)$_POST['item']), $share['share'], $_POST['due_date'],
+                                               (float)$tRow['balance'], $amount, $ways),
+                        'damage_charge', $tid);
+                    $results[] = $r;
+                }
+                $damageMessage .= ' ' . smsOutcomeText(mergeSmsResults(...$results));
             }
         } catch (Exception $e) {
             if ($photo['path']) deleteLocalUpload($photo['path']);
@@ -133,7 +147,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'remov
     $removed = removeDamageCharge($pdo, (int)($_POST['damage_id'] ?? 0), $tenantId);
     if ($removed) {
         deleteLocalUpload($removed['photo_path'] ?? null);
-        $damageMessage = 'Damage charge for "' . $removed['item'] . '" removed and taken off the balance.';
+        $damageMessage = 'Damage charge for "' . $removed['item'] . '" removed and taken off the balance'
+                       . ($removed['tenants'] > 1 ? ' of ' . ($removed['tenants'] === 2 ? 'both tenants' : 'all ' . $removed['tenants'] . ' tenants') . ' who shared it.' : '.');
     }
 }
 
@@ -309,6 +324,7 @@ $docStmt->execute([$tenantId]);
 $documents = $docStmt->fetchAll();
 $openTab = ($docMessage || $docError) ? 'documents' : (($roomMessage || $roomError) ? 'rooms' : (($damageMessage || $damageError) ? 'damages' : 'overview'));
 $damages = tenantDamageCharges($pdo, $tenantId);
+$damageSplits = damageSplitShares($pdo, array_column($damages, 'split_group'));
 $damageTotal = array_sum(array_map(fn($d) => (float)$d['amount'], $damages));
 
 // Rooms the tenant could also rent: a free bed, not under maintenance, not one they already have.
@@ -1234,6 +1250,15 @@ $upcomingDue = upcomingDueDate($pdo, $tenantId);
                                 <div class="flex-grow-1" style="min-width:0;">
                                     <div class="fw-bold text-dark"><?= htmlspecialchars($d['item']) ?><?= $d['room_number'] ? ' <span class="text-muted fw-normal">· Room ' . htmlspecialchars($d['room_number']) . '</span>' : '' ?></div>
                                     <div class="text-muted" style="font-size:0.7rem;">Found <?= date('M j, Y', strtotime($d['found_on'])) ?> · Due <?= date('M j, Y', strtotime($d['due_date'])) ?></div>
+                                    <?php if (!empty($d['split_group']) && !empty($damageSplits[$d['split_group']])):
+                                        $shares = $damageSplits[$d['split_group']];
+                                        $others = array_filter($shares, fn($x) => $x['tenant_id'] !== $tenantId); ?>
+                                        <div class="mt-1" style="font-size:0.7rem;">
+                                            <span class="soft-pill bg-primary-subtle text-primary-emphasis">Split <?= count($shares) ?> ways</span>
+                                            <span class="text-muted">₱<?= number_format(array_sum(array_column($shares, 'amount')), 2) ?> total, shared with
+                                            <?= implode(', ', array_map(fn($x) => '<a href="tenant_details.php?id=' . $x['tenant_id'] . '">' . htmlspecialchars($x['name']) . '</a>', $others)) ?></span>
+                                        </div>
+                                    <?php endif; ?>
                                     <?php if (!empty($d['note'])): ?><div class="text-dark mt-1" style="font-size:0.72rem;"><?= nl2br(htmlspecialchars($d['note'])) ?></div><?php endif; ?>
                                     <?php if (!empty($d['photo_path'])): ?>
                                         <a href="<?= htmlspecialchars(uploadSrc($d['photo_path'], '../')) ?>" target="_blank" rel="noopener" class="d-inline-block mt-2"><img src="<?= htmlspecialchars(uploadSrc($d['photo_path'], '../')) ?>" alt="Photo of the damage" style="height:64px; width:auto; max-width:120px; object-fit:cover; border-radius:6px; border:1px solid #e2e8f0;"></a>
@@ -1241,8 +1266,9 @@ $upcomingDue = upcomingDueDate($pdo, $tenantId);
                                 </div>
                                 <div class="text-end flex-shrink-0">
                                     <div class="fw-bold text-dark">₱<?= number_format((float)$d['amount'], 2) ?></div>
+                                    <?php if (!empty($d['split_group'])): ?><div class="text-muted" style="font-size:0.66rem;">their share</div><?php endif; ?>
                                     <?php if ($pastDue): ?><div class="text-danger" style="font-size:0.66rem;">past due date</div><?php endif; ?>
-                                    <form method="POST" class="mt-2" onsubmit="return confirm('Remove this damage charge? It is taken off the tenant\'s balance.');">
+                                    <form method="POST" class="mt-2" onsubmit="return confirm('<?= !empty($d['split_group']) ? 'Remove this split damage charge? It is taken off the balance of every tenant sharing it.' : 'Remove this damage charge? It is taken off the tenant\\\'s balance.' ?>');">
                                         <input type="hidden" name="action" value="remove_damage">
                                         <input type="hidden" name="tenant_id" value="<?= $tenantId ?>">
                                         <input type="hidden" name="damage_id" value="<?= (int)$d['id'] ?>">
@@ -1287,6 +1313,69 @@ $upcomingDue = upcomingDueDate($pdo, $tenantId);
                                 </select>
                             </div>
                         </div>
+                        <?php
+                        // Who lives in each room (besides this tenant), for "Split with roommates".
+                        $roommatesByRoom = [];
+                        foreach ($allRoomsForDamage as $r) {
+                            $mates = array_values(array_filter(roomOccupants($pdo, (int)$r['id']), fn($o) => (int)$o['id'] !== $tenantId));
+                            if ($mates) {
+                                $roommatesByRoom[(int)$r['id']] = array_map(fn($o) => ['id' => (int)$o['id'], 'name' => trim($o['first_name'] . ' ' . $o['last_name'])], $mates);
+                            }
+                        }
+                        $oldSplitWith = array_map('intval', (array)($old['split_with'] ?? []));
+                        ?>
+                        <div class="split-box mb-2 p-2 rounded-2 border bg-light d-none" id="dmgSplitBox">
+                            <div class="form-check form-switch mb-0">
+                                <input class="form-check-input" type="checkbox" role="switch" name="split" value="1" id="dmgSplit" <?= !empty($old['split']) ? 'checked' : '' ?>>
+                                <label class="form-check-label fw-semibold" for="dmgSplit" style="font-size:0.75rem;">Split with roommates</label>
+                            </div>
+                            <div id="dmgSplitList" class="mt-1"></div>
+                            <div id="dmgSplitPreview" class="text-primary fw-semibold" style="font-size:0.7rem;"></div>
+                        </div>
+                        <script>
+                        (function () {
+                            const roommates = <?= json_encode($roommatesByRoom) ?>;
+                            const keep = <?= json_encode($oldSplitWith) ?>;
+                            const form = document.getElementById('dmgItem').form;
+                            const room = document.getElementById('dmgRoom'), box = document.getElementById('dmgSplitBox');
+                            const toggle = document.getElementById('dmgSplit'), list = document.getElementById('dmgSplitList');
+                            const preview = document.getElementById('dmgSplitPreview'), amount = document.getElementById('dmgAmount');
+                            const peso = n => '₱' + n.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                            let first = true;
+                            function renderList() {
+                                const mates = roommates[room.value] || [];
+                                box.classList.toggle('d-none', mates.length === 0);
+                                if (!mates.length) toggle.checked = false;
+                                list.innerHTML = '';
+                                mates.forEach(m => {
+                                    const id = 'dmgMate' + m.id;
+                                    const wrap = document.createElement('div');
+                                    wrap.className = 'form-check mb-0';
+                                    wrap.innerHTML = '<input class="form-check-input" type="checkbox" name="split_with[]" id="' + id + '">'
+                                                   + '<label class="form-check-label" style="font-size:0.72rem;" for="' + id + '"></label>';
+                                    const input = wrap.querySelector('input');
+                                    input.value = m.id;
+                                    input.checked = first && keep.length ? keep.includes(m.id) : true;
+                                    wrap.querySelector('label').textContent = m.name;
+                                    list.appendChild(wrap);
+                                });
+                                first = false;
+                                update();
+                            }
+                            function update() {
+                                list.classList.toggle('d-none', !toggle.checked);
+                                list.querySelectorAll('input').forEach(i => i.disabled = !toggle.checked);
+                                const n = toggle.checked ? list.querySelectorAll('input:checked').length + 1 : 1;
+                                const total = parseFloat(amount.value);
+                                preview.textContent = toggle.checked && n > 1 && total > 0
+                                    ? n + ' tenants · about ' + peso(Math.floor(total * 100 / n) / 100) + ' each' : '';
+                            }
+                            room.addEventListener('change', renderList);
+                            form.addEventListener('input', update);
+                            form.addEventListener('change', e => { if (e.target !== room) update(); });
+                            renderList();
+                        })();
+                        </script>
                         <div class="row g-2 mb-2">
                             <div class="col-6">
                                 <label for="dmgFound">Found on</label>
