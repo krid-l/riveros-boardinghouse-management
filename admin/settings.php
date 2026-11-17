@@ -151,6 +151,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } else {
             $error = 'Could not check the balance. ' . $b['error'];
         }
+    } elseif ($action === 'appliance_add' || $action === 'appliance_update') {
+        // Appliance charges: the list tenants' appliances are picked from, with a monthly fee each.
+        $name = mb_substr(trim((string)($_POST['appliance_name'] ?? '')), 0, 80);
+        $fee = $_POST['appliance_fee'] ?? '';
+        if ($name === '') {
+            $error = 'Give the appliance a name, e.g. "Electric fan".';
+        } elseif (!is_numeric($fee) || (float)$fee < 0) {
+            $error = 'Enter the monthly charge in pesos, e.g. 100.';
+        } else {
+            $fee = round((float)$fee, 2);
+            $same = $pdo->prepare("SELECT COUNT(*) FROM appliances WHERE LOWER(name) = LOWER(?) AND active = " . (isPgsql() ? 'TRUE' : '1') . " AND id <> ?");
+            $same->execute([$name, (int)($_POST['appliance_id'] ?? 0)]);
+            if ((int)$same->fetchColumn() > 0) {
+                $error = "\"$name\" is already on the list.";
+            } elseif ($action === 'appliance_add') {
+                $pdo->prepare("INSERT INTO appliances (name, monthly_fee, active, created_at) VALUES (?, ?, ?, ?)")
+                    ->execute([$name, $fee, dbBool(true), date('Y-m-d H:i:s')]);
+                $success = "$name added: ₱" . number_format($fee, 2) . ' a month.';
+            } else {
+                $pdo->prepare("UPDATE appliances SET name = ?, monthly_fee = ? WHERE id = ?")->execute([$name, $fee, (int)$_POST['appliance_id']]);
+                $success = "$name saved. A new charge applies from next month's bill.";
+            }
+        }
+    } elseif ($action === 'appliance_remove') {
+        $id = (int)($_POST['appliance_id'] ?? 0);
+        $used = $pdo->prepare("SELECT COUNT(*) FROM tenant_appliances WHERE appliance_id = ?");
+        $used->execute([$id]);
+        if ((int)$used->fetchColumn() === 0) {
+            $pdo->prepare("DELETE FROM appliances WHERE id = ?")->execute([$id]);   // never used: gone for good
+        } else {
+            // Kept for the tenants who have it (and their past charges); just no longer offered.
+            $pdo->prepare("UPDATE appliances SET active = ? WHERE id = ?")->execute([dbBool(false), $id]);
+        }
+        $success = 'Appliance removed from the list. Tenants already charged for it keep paying until it is taken off them on their page.';
     } elseif ($action === 'update_business') {
         updateSetting($pdo, 'boarding_house_name', $_POST['boarding_house_name'] ?? '');
         updateSetting($pdo, 'address', $_POST['address'] ?? '');
@@ -158,6 +192,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $success = 'Business information updated successfully.';
     }
 }
+
+// Appliance charges, with how many tenants pay for each now.
+$applianceRows = $pdo->query("SELECT a.id, a.name, a.monthly_fee,
+        (SELECT COUNT(*) FROM tenant_appliances x JOIN tenants t ON t.id = x.tenant_id
+         WHERE x.appliance_id = a.id AND x.ended_at IS NULL AND t.status = 'active') AS tenants
+    FROM appliances a WHERE a.active = " . (isPgsql() ? 'TRUE' : '1') . " ORDER BY a.name, a.id")->fetchAll();
 
 // Fetch current user details
 $stmt = $pdo->prepare("SELECT * FROM users WHERE id = ?");
@@ -575,6 +615,65 @@ require_once 'header.php';
             </form>
         </div>
         
+        <!-- Appliance Charges: the list picked from when adding a tenant -->
+        <div class="settings-card shadow-sm" id="appliances">
+            <div class="settings-header">
+                <div>
+                    <h6 class="card-title-lg"><i class="fa-solid fa-plug icon-header text-primary"></i> Appliance Charges</h6>
+                    <div class="card-subtitle-sm">Monthly charge for each appliance a tenant brings. Picked when adding a tenant or on their page.</div>
+                </div>
+            </div>
+            <div class="settings-body pt-2">
+                <?php if (!$applianceRows): ?>
+                    <div class="text-muted mb-3" style="font-size:0.7rem;">No appliances yet. Add the ones you charge for, e.g. electric fan, rice cooker, TV.</div>
+                <?php else: ?>
+                <div class="mb-3">
+                    <?php foreach ($applianceRows as $a): ?>
+                    <div class="border-bottom py-2">
+                        <div class="d-flex align-items-center gap-2" style="font-size:0.72rem;">
+                            <div class="flex-grow-1" style="min-width:0;">
+                                <div class="fw-semibold text-dark text-truncate"><?= htmlspecialchars($a['name']) ?></div>
+                                <div class="text-muted" style="font-size:0.62rem;"><?= (int)$a['tenants'] ? (int)$a['tenants'] . ' ' . ((int)$a['tenants'] === 1 ? 'tenant' : 'tenants') . ' charged' : 'No tenant charged yet' ?></div>
+                            </div>
+                            <span class="fw-bold text-dark text-nowrap">₱<?= number_format((float)$a['monthly_fee'], 2) ?><span class="text-muted fw-normal">/mo</span></span>
+                            <button type="button" class="btn btn-sm btn-light border py-0 px-2" title="Edit" aria-label="Edit <?= htmlspecialchars($a['name']) ?>" data-bs-toggle="collapse" data-bs-target="#applEdit<?= (int)$a['id'] ?>"><i class="fa-solid fa-pen" style="font-size:0.6rem;"></i></button>
+                            <form method="POST" class="m-0" onsubmit="return confirm('Remove <?= htmlspecialchars(addslashes($a['name']), ENT_QUOTES) ?> from the list?<?= (int)$a['tenants'] ? ' Tenants already charged for it keep paying until it is taken off them.' : '' ?>');">
+                                <input type="hidden" name="action" value="appliance_remove">
+                                <input type="hidden" name="appliance_id" value="<?= (int)$a['id'] ?>">
+                                <button type="submit" class="btn btn-sm btn-light border text-danger py-0 px-2" title="Remove" aria-label="Remove <?= htmlspecialchars($a['name']) ?>"><i class="fa-regular fa-trash-can" style="font-size:0.6rem;"></i></button>
+                            </form>
+                        </div>
+                        <div class="collapse" id="applEdit<?= (int)$a['id'] ?>">
+                            <form method="POST" class="row g-2 mt-1">
+                                <input type="hidden" name="action" value="appliance_update">
+                                <input type="hidden" name="appliance_id" value="<?= (int)$a['id'] ?>">
+                                <div class="col-7"><input type="text" name="appliance_name" class="form-control" maxlength="80" required value="<?= htmlspecialchars($a['name']) ?>" aria-label="Appliance name"></div>
+                                <div class="col-5"><input type="number" name="appliance_fee" class="form-control" min="0" step="0.01" required value="<?= htmlspecialchars((string)(float)$a['monthly_fee']) ?>" aria-label="Monthly charge"></div>
+                                <div class="col-12"><button type="submit" class="btn btn-primary btn-save w-100">Save</button></div>
+                            </form>
+                        </div>
+                    </div>
+                    <?php endforeach; ?>
+                </div>
+                <?php endif; ?>
+                <form method="POST" class="m-0">
+                    <input type="hidden" name="action" value="appliance_add">
+                    <div class="row g-2 mb-2">
+                        <div class="col-7">
+                            <label class="form-label" for="applName">Appliance</label>
+                            <input type="text" id="applName" name="appliance_name" class="form-control" maxlength="80" required placeholder="e.g. Electric fan">
+                        </div>
+                        <div class="col-5">
+                            <label class="form-label" for="applFee">Per month (₱)</label>
+                            <input type="number" id="applFee" name="appliance_fee" class="form-control" min="0" step="0.01" required placeholder="100">
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-save shadow-sm w-100"><i class="fa-solid fa-plus me-2" style="font-size:0.65rem;"></i>Add Appliance</button>
+                    <div class="form-text">A change to a charge applies from the next month's bill.</div>
+                </form>
+            </div>
+        </div>
+
         <!-- Login Page -->
         <div class="settings-card shadow-sm" id="login-page">
             <form method="POST" enctype="multipart/form-data">

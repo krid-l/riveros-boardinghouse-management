@@ -193,6 +193,27 @@ CREATE TABLE IF NOT EXISTS tenant_rooms (
     last_billed_month VARCHAR(7),                     -- 'YYYY-MM' of the latest rent posted
     created_at TIMESTAMP NULL DEFAULT NULL
 );
+-- Appliances tenants are charged for every month (Settings -> Appliance Charges)
+CREATE TABLE IF NOT EXISTS appliances (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(80) NOT NULL,
+    monthly_fee DECIMAL(10,2) NOT NULL,               -- per unit, per month
+    active BOOLEAN NOT NULL DEFAULT TRUE,             -- FALSE: removed from the list (tenants who have it keep paying)
+    created_at TIMESTAMP NULL DEFAULT NULL
+);
+
+-- Each tenant's appliances, billed monthly on top of the rent
+CREATE TABLE IF NOT EXISTS tenant_appliances (
+    id SERIAL PRIMARY KEY,
+    tenant_id INT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    appliance_id INT NOT NULL REFERENCES appliances(id) ON DELETE CASCADE,
+    quantity INT NOT NULL DEFAULT 1,
+    start_date DATE NULL,                             -- NULL: from the tenant's move-in
+    ended_at DATE NULL,                               -- removed; NULL while still charged
+    last_billed_month VARCHAR(7),
+    created_at TIMESTAMP NULL DEFAULT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_notifications_ref ON notifications (ref);
 
 CREATE TABLE IF NOT EXISTS settings (

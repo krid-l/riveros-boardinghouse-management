@@ -86,9 +86,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delet
 }
 
 // Rooms: rent the tenant another room on top of their main one, or release one of those.
+// Appliances: start or stop a monthly appliance charge.
 $roomMessage = '';
 $roomError = '';
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array($_POST['action'] ?? '', ['add_room', 'release_room'], true)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array($_POST['action'] ?? '', ['add_room', 'release_room', 'add_appliance', 'remove_appliance'], true)
     && (int)($_POST['tenant_id'] ?? 0) === $tenantId) {
     ['success' => $roomMessage, 'error' => $roomError] = handleTenantAction($pdo);
 }
@@ -211,6 +212,12 @@ $monthlyRent = $mainRoomRent + array_sum(array_column($additionalRooms, 'rent'))
 $roomCount = ($tenant['room_id'] ? 1 : 0) + count($additionalRooms);
 if ($additionalRooms) {
     $rentSplitNote = 'For ' . $roomCount . ' rooms';
+}
+// Appliance charges on top of the rent.
+$myAppliances = tenantAppliances($pdo, $tenantId);
+$applianceTotal = array_sum(array_column($myAppliances, 'monthly'));
+if ($applianceTotal > 0) {
+    $rentSplitNote = ($rentSplitNote ? $rentSplitNote . ' · ' : '') . '+ ₱' . number_format($applianceTotal, 2) . ' appliances';
 }
 $currentBalance = round((float)($tenant['balance'] ?? 0), 2);
 $depositHeld = tenantDeposit($pdo, $tenant);
@@ -1025,6 +1032,50 @@ $upcomingDue = upcomingDueDate($pdo, $tenantId);
                         <div class="rooms-total"><span>Total monthly rent<?= $roomCount > 1 ? ' (' . $roomCount . ' rooms)' : '' ?></span><span>₱<?= number_format($monthlyRent, 2) ?></span></div>
                     <?php endif; ?>
                 </div>
+
+                <!-- Appliance charges: billed monthly with the rent -->
+                <div class="section-card shadow-sm" id="appliances">
+                    <div class="section-header"><h6 class="section-title"><i class="fa-solid fa-plug text-primary me-2"></i>Appliance Charges</h6></div>
+                    <?php if (!$myAppliances): ?>
+                        <div class="empty-state"><span><i class="fa-solid fa-plug"></i></span><div class="fw-semibold text-dark">No appliance charges.</div><div>Appliances the tenant brings (fan, rice cooker...) are charged here every month.</div></div>
+                    <?php else: foreach ($myAppliances as $ap): ?>
+                        <div class="rented-room">
+                            <div class="d-flex align-items-center gap-3">
+                                <span class="rented-room-icon bg-warning-subtle text-warning-emphasis"><i class="fa-solid fa-plug"></i></span>
+                                <div class="flex-grow-1" style="min-width:0;">
+                                    <div class="fw-bold text-dark"><?= htmlspecialchars(applianceLabel($ap['name'], (int)$ap['quantity'])) ?></div>
+                                    <div class="text-muted" style="font-size:0.7rem;">
+                                        <?= $ap['start_date'] ? 'Since ' . date('M j, Y', strtotime($ap['start_date'])) : 'From move-in' ?><?= (int)$ap['quantity'] > 1 ? ' · ₱' . number_format((float)$ap['unit_fee'], 2) . ' each' : '' ?>
+                                    </div>
+                                </div>
+                                <div class="text-end flex-shrink-0">
+                                    <div class="fw-bold text-dark">₱<?= number_format($ap['monthly'], 2) ?></div>
+                                    <div class="text-muted" style="font-size:0.66rem;">a month</div>
+                                </div>
+                            </div>
+                            <div class="mt-2 text-end">
+                                <button type="button" class="btn btn-sm btn-outline-danger py-0 px-2" style="font-size:0.7rem;" data-bs-toggle="collapse" data-bs-target="#applRemove<?= (int)$ap['id'] ?>" aria-expanded="false"><i class="fa-regular fa-trash-can me-1"></i>Remove</button>
+                            </div>
+                            <div class="collapse" id="applRemove<?= (int)$ap['id'] ?>">
+                                <form method="POST" class="mt-2 p-2 bg-light rounded-2 d-flex flex-wrap align-items-end gap-2" onsubmit="return confirm('Stop charging for <?= htmlspecialchars(addslashes($ap['name']), ENT_QUOTES) ?>? The charge stops after the month of this date.');">
+                                    <input type="hidden" name="action" value="remove_appliance">
+                                    <input type="hidden" name="tenant_id" value="<?= $tenantId ?>">
+                                    <input type="hidden" name="tenant_appliance_id" value="<?= (int)$ap['id'] ?>">
+                                    <div class="flex-grow-1">
+                                        <label for="applEnd<?= (int)$ap['id'] ?>" class="form-label mb-1" style="font-size:0.7rem;">Last day it is used</label>
+                                        <input type="date" id="applEnd<?= (int)$ap['id'] ?>" name="end_date" class="form-control form-control-sm" required value="<?= date('Y-m-d') ?>">
+                                    </div>
+                                    <button type="submit" class="btn btn-sm btn-danger">Remove</button>
+                                </form>
+                            </div>
+                        </div>
+                    <?php endforeach; ?>
+                        <div class="rooms-total"><span>Total appliance charges</span><span>₱<?= number_format($applianceTotal, 2) ?></span></div>
+                    <?php endif; ?>
+                </div>
+                <?php if ($applianceTotal > 0 && $roomCount): ?>
+                <div class="section-card shadow-sm"><div class="rooms-total" style="border-radius:10px; border-top:0;"><span>Total monthly charges (rent + appliances)</span><span>₱<?= number_format($monthlyRent + $applianceTotal, 2) ?></span></div></div>
+                <?php endif; ?>
                 <div class="text-muted px-1" style="font-size:0.7rem;"><i class="fa-solid fa-circle-info me-1"></i>The tenant sees these rooms on their dashboard. To move them to a different main room, use Change room on the Tenants or Rooms page.</div>
             </div>
             <div class="col-lg-5">
@@ -1068,6 +1119,49 @@ $upcomingDue = upcomingDueDate($pdo, $tenantId);
                                 <button type="submit" class="btn btn-primary btn-sm w-100"><i class="fa-solid fa-plus me-1"></i>Add Room</button>
                             </form>
                             <?php endif; ?>
+                        <?php endif; ?>
+                    </div>
+                </div>
+                <div class="section-card shadow-sm">
+                    <div class="section-header"><h6 class="section-title"><i class="fa-solid fa-plug text-primary me-2"></i>Add an Appliance</h6></div>
+                    <div class="p-3 form-compact">
+                        <?php $applianceChoices = activeAppliances($pdo);
+                              $chargedIds = array_map('intval', array_column($myAppliances, 'appliance_id'));
+                              $applianceChoices = array_values(array_filter($applianceChoices, fn($a) => !in_array((int)$a['id'], $chargedIds, true))); ?>
+                        <?php if ($tenant['status'] !== 'active'): ?>
+                            <div class="text-muted" style="font-size:0.78rem;">This tenant has moved out.</div>
+                        <?php elseif (!$applianceChoices): ?>
+                            <div class="text-muted" style="font-size:0.78rem;"><?= $myAppliances ? 'Every appliance on the list is already charged.' : 'No appliance charges set up yet.' ?> Manage the list in <a href="settings.php#appliances">Settings &rsaquo; Appliance Charges</a>.</div>
+                        <?php else: ?>
+                        <form method="POST" class="m-0">
+                            <input type="hidden" name="action" value="add_appliance">
+                            <input type="hidden" name="tenant_id" value="<?= $tenantId ?>">
+                            <div class="row g-2 mb-2">
+                                <div class="col-8">
+                                    <label for="applSelect">Appliance</label>
+                                    <select id="applSelect" name="appliance_id" class="form-select" required>
+                                        <option value="">Choose</option>
+                                        <?php foreach ($applianceChoices as $a): ?>
+                                            <option value="<?= (int)$a['id'] ?>"><?= htmlspecialchars($a['name']) ?> · ₱<?= number_format((float)$a['monthly_fee'], 2) ?>/mo</option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                </div>
+                                <div class="col-4">
+                                    <label for="applQty">How many</label>
+                                    <input type="number" id="applQty" name="quantity" class="form-control" min="1" max="20" value="1" required>
+                                </div>
+                            </div>
+                            <?php if (!empty($tenant['move_in_date'])): ?>
+                            <div class="mb-3">
+                                <label for="applStart">Start date</label>
+                                <input type="date" id="applStart" name="start_date" class="form-control" required min="<?= htmlspecialchars($tenant['move_in_date']) ?>" value="<?= date('Y-m-d') ?>">
+                                <div class="form-text" style="font-size:0.7rem;">Its first month is due on this day (half if after the 15th), then it is charged every month with the rent.</div>
+                            </div>
+                            <?php else: ?>
+                            <div class="form-text mb-3" style="font-size:0.7rem;">Charged from the tenant's move-in, once they get a room.</div>
+                            <?php endif; ?>
+                            <button type="submit" class="btn btn-primary btn-sm w-100"><i class="fa-solid fa-plus me-1"></i>Add Appliance</button>
+                        </form>
                         <?php endif; ?>
                     </div>
                 </div>

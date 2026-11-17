@@ -27,10 +27,14 @@
 //    to one bed's share: they pay the whole room only for months nobody joined them. The
 //    deposit stays one bed's share.
 //
+// Appliance charges (a monthly fee per appliance a tenant brings) follow the same calendar; see
+// appliances.php.
+//
 // tenants.balance is the running total (charges minus payments). Every rent charge is also
 // recorded in the charges table, so the ledger can always be rebuilt and checked against it.
 
 require_once __DIR__ . '/sql_compat.php';
+require_once __DIR__ . '/appliances.php';
 
 const BILLING_DUE_DAY = 30;
 const HALF_MONTH_CUTOFF_DAY = 15;
@@ -255,6 +259,7 @@ function runBilling(PDO $pdo, ?int $onlyTenantId = null): void {
     }
 
     billAdditionalRooms($pdo, $onlyTenantId);
+    billAppliances($pdo, $onlyTenantId);
 }
 
 // ---------------------------------------------------------------------------------------------

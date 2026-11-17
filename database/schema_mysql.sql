@@ -221,6 +221,29 @@ CREATE TABLE IF NOT EXISTS tenant_rooms (
     FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
+-- Appliances tenants are charged for every month (Settings -> Appliance Charges)
+CREATE TABLE IF NOT EXISTS appliances (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(80) NOT NULL,
+    monthly_fee DECIMAL(10,2) NOT NULL,               -- per unit, per month
+    active BOOLEAN NOT NULL DEFAULT TRUE,             -- FALSE: removed from the list (tenants who have it keep paying)
+    created_at TIMESTAMP NULL DEFAULT NULL
+) ENGINE=InnoDB;
+
+-- Each tenant's appliances, billed monthly on top of the rent
+CREATE TABLE IF NOT EXISTS tenant_appliances (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    tenant_id INT NOT NULL,
+    appliance_id INT NOT NULL,
+    quantity INT NOT NULL DEFAULT 1,
+    start_date DATE NULL,                             -- NULL: from the tenant's move-in
+    ended_at DATE NULL,                               -- removed; NULL while still charged
+    last_billed_month VARCHAR(7),
+    created_at TIMESTAMP NULL DEFAULT NULL,
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
+    FOREIGN KEY (appliance_id) REFERENCES appliances(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
 CREATE TABLE IF NOT EXISTS settings (
     setting_key VARCHAR(50) PRIMARY KEY,
     setting_value TEXT

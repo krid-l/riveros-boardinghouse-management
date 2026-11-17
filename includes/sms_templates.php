@@ -23,13 +23,14 @@ function smsDate(?string $date): string {
 
 /** Sent when the admin adds a tenant: their room, what to pay on moving in and how to log in. */
 function smsRegistrationMessage(PDO $pdo, string $name, ?string $room, ?string $moveIn, ?float $advance, ?float $deposit,
-                                string $username, string $password): string {
+                                string $username, string $password, float $applianceFees = 0.0): string {
     return smsHeader($pdo) . "\n\n"
          . "Welcome, $name! Your registration is successful.\n\n"
          . 'Assigned Room: ' . ($room !== null ? "Room $room" : 'Pending') . "\n"
          . 'Move-in Date: ' . smsDate($moveIn) . "\n"
          . 'Advance Payment: ' . ($advance !== null ? smsPeso($advance) : 'Pending') . "\n"
-         . 'Deposit: ' . ($deposit !== null ? smsPeso($deposit) : 'Pending') . "\n\n"
+         . 'Deposit: ' . ($deposit !== null ? smsPeso($deposit) : 'Pending') . "\n"
+         . ($applianceFees > 0 ? 'Appliance Charges: ' . smsPeso($applianceFees) . " a month\n" : '') . "\n"
          . "Username: $username\n"
          . "Temporary Password: $password\n\n"
          . 'Please keep your login credentials secure and change your temporary password after your first login. Thank you!';

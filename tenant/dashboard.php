@@ -36,6 +36,9 @@ $myRentShare = $room ? bedRent($room, $roomOccupants) : 0.0;
 // Rooms the tenant rents on top of their main room, each with its own monthly rent.
 $myExtraRooms = $room ? tenantAdditionalRooms($pdo, (int)$currentTenant['id']) : [];
 $myTotalRent = $myRentShare + array_sum(array_column($myExtraRooms, 'rent'));
+// Appliances they are charged for every month, on top of the rent.
+$myAppliances = tenantAppliances($pdo, (int)$currentTenant['id']);
+$myApplianceTotal = array_sum(array_column($myAppliances, 'monthly'));
 // Held to pay for their last month: one month of their rent.
 $myDeposit = tenantDeposit($pdo, $currentTenant);
 $depositUsed = depositAppliedThisStay($pdo, $currentTenant);
@@ -284,6 +287,35 @@ $balance = $currentTenant['balance'] ?? 0;
         <span>Total monthly rent</span><span>PHP <?= number_format($myTotalRent, 2) ?></span>
     </div>
     <div class="text-muted mt-1" style="font-size:0.7rem;">The rent for all your rooms goes on the same balance and is due every 30th. Ask the admin to add or release a room.</div>
+</div>
+<?php endif; ?>
+
+<?php if ($myAppliances): ?>
+<!-- Appliance charges: billed every month with the rent -->
+<div class="section-card mb-4" id="my-appliances">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h6 class="fw-bold text-dark mb-0"><i class="fa-solid fa-plug text-primary me-2"></i> Appliance Charges</h6>
+        <span class="badge bg-warning-subtle text-warning-emphasis rounded-pill">PHP <?= number_format($myApplianceTotal, 2) ?> / month</span>
+    </div>
+    <?php foreach ($myAppliances as $ap): ?>
+    <div class="d-flex align-items-center gap-3 py-2 border-bottom">
+        <div class="deposit-icon" style="width:38px;height:38px;font-size:0.95rem;background:#fffbeb;color:#b45309;"><i class="fa-solid fa-plug"></i></div>
+        <div class="flex-grow-1" style="min-width:0;">
+            <div class="fw-bold text-dark" style="font-size:0.9rem;"><?= htmlspecialchars(applianceLabel($ap['name'], (int)$ap['quantity'])) ?></div>
+            <div class="text-muted" style="font-size:0.72rem;"><?= (int)$ap['quantity'] > 1 ? 'PHP ' . number_format((float)$ap['unit_fee'], 2) . ' each' : 'Monthly charge' ?></div>
+        </div>
+        <div class="text-end flex-shrink-0">
+            <div class="fw-bold text-dark" style="font-size:0.85rem;">PHP <?= number_format($ap['monthly'], 2) ?></div>
+            <div class="text-muted" style="font-size:0.65rem;">a month</div>
+        </div>
+    </div>
+    <?php endforeach; ?>
+    <?php if ($room): ?>
+    <div class="d-flex justify-content-between align-items-center pt-3 fw-bold text-dark" style="font-size:0.85rem;">
+        <span>Rent + appliances</span><span>PHP <?= number_format($myTotalRent + $myApplianceTotal, 2) ?> / month</span>
+    </div>
+    <?php endif; ?>
+    <div class="text-muted mt-1" style="font-size:0.7rem;">Added to your balance with the rent. Ask the admin if something here is not right.</div>
 </div>
 <?php endif; ?>
 

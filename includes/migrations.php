@@ -9,7 +9,7 @@ require_once __DIR__ . '/billing.php';
 require_once __DIR__ . '/sql_compat.php';
 require_once __DIR__ . '/sms.php';
 
-const SCHEMA_VERSION = '15';
+const SCHEMA_VERSION = '16';
 
 function runMigrations(PDO $pdo): void {
     try {
@@ -51,6 +51,7 @@ function runMigrations(PDO $pdo): void {
         migrateToV13($pdo);
         migrateToV14($pdo);
         migrateToV15($pdo);
+        migrateToV16($pdo);
 
         $pdo->prepare("INSERT INTO settings (setting_key, setting_value) VALUES ('schema_version', ?)
                        " . sqlUpsert(['setting_key'], ['setting_value']))
@@ -239,6 +240,28 @@ function migrateToV14(PDO $pdo): void {
 // (from their second month in it) instead of one bed's share. Off for every existing room.
 function migrateToV15(PDO $pdo): void {
     ensureColumn($pdo, 'rooms', 'solo_pays_full', 'BOOLEAN NOT NULL DEFAULT FALSE');
+}
+
+// v16: appliance charges. The admin keeps a list of appliances with a monthly fee (Settings);
+// each tenant's appliances are billed every month on top of the rent (see billing.php).
+function migrateToV16(PDO $pdo): void {
+    $pdo->exec("CREATE TABLE IF NOT EXISTS appliances (
+        id " . sqlSerialPk() . ",
+        name VARCHAR(80) NOT NULL,
+        monthly_fee DECIMAL(10,2) NOT NULL,
+        active BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at TIMESTAMP NULL DEFAULT NULL
+    )");
+    $pdo->exec("CREATE TABLE IF NOT EXISTS tenant_appliances (
+        id " . sqlSerialPk() . ",
+        tenant_id INT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        appliance_id INT NOT NULL REFERENCES appliances(id) ON DELETE CASCADE,
+        quantity INT NOT NULL DEFAULT 1,
+        start_date DATE NULL,
+        ended_at DATE NULL,
+        last_billed_month VARCHAR(7),
+        created_at TIMESTAMP NULL DEFAULT NULL
+    )");
 }
 
 // v7: rent per bed. A tenant now pays price / capacity, however many beds are taken, instead of

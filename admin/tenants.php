@@ -179,6 +179,9 @@ require_once 'header.php';
     tr.tenant-row[data-href] { cursor: pointer; }
     tr.tenant-row[data-href] .row-actions { cursor: default; }
     tr.tenant-row[data-href]:hover .tenant-link { color: #2563eb !important; text-decoration: underline !important; }
+    .appliance-row { padding: 0.3rem 0; border-bottom: 1px solid #f1f5f9; }
+    .appliance-row .form-check-label { font-size: 0.75rem; }
+    .appliance-qty { width: 64px; flex: 0 0 64px; }
     .movein-box { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 0.6rem 0.75rem; }
     .movein-box .form-check-label { font-size: 0.75rem; font-weight: 600; color: #0f172a; margin-bottom: 0; }
 </style>
@@ -482,6 +485,25 @@ function moveInPaymentFields(string $id, bool $startHidden = false): string {
                     </div>
                     </div>
                     </div>
+                    <div class="profile-section-title">Additional charges (appliances)</div>
+                    <?php $applianceList = activeAppliances($pdo); $oldAppl = array_map('intval', (array)($addOld['appliances'] ?? [])); ?>
+                    <?php if (!$applianceList): ?>
+                        <div class="text-muted mb-3" style="font-size:0.7rem;">No appliance charges set up. Add them in <a href="settings.php#appliances">Settings &rsaquo; Appliance Charges</a>.</div>
+                    <?php else: ?>
+                    <div class="appliance-list mb-3">
+                        <?php foreach ($applianceList as $a): $aid = (int)$a['id']; $checked = in_array($aid, $oldAppl, true); ?>
+                        <div class="appliance-row d-flex align-items-center gap-2">
+                            <div class="form-check flex-grow-1 mb-0" style="min-width:0;">
+                                <input class="form-check-input" type="checkbox" name="appliances[]" value="<?= $aid ?>" id="add_appl_<?= $aid ?>" data-fee="<?= (float)$a['monthly_fee'] ?>" <?= $checked ? 'checked' : '' ?>>
+                                <label class="form-check-label text-truncate d-block" for="add_appl_<?= $aid ?>"><?= htmlspecialchars($a['name']) ?> <span class="text-muted fw-normal">· ₱<?= number_format((float)$a['monthly_fee'], 2) ?>/mo</span></label>
+                            </div>
+                            <input type="number" class="form-control form-control-sm appliance-qty" name="appliance_qty[<?= $aid ?>]" min="1" max="20" value="<?= max(1, (int)($addOld['appliance_qty'][$aid] ?? 1)) ?>" aria-label="How many <?= htmlspecialchars($a['name']) ?>" title="How many" <?= $checked ? '' : 'disabled' ?>>
+                        </div>
+                        <?php endforeach; ?>
+                        <div class="appliance-total text-primary fw-semibold mt-1" style="font-size:0.7rem;"></div>
+                        <small class="text-muted d-block" style="font-size:0.62rem;">Charged every month with the rent, from the move-in day (half the first month if moving in after the <?= HALF_MONTH_CUTOFF_DAY ?>th).</small>
+                    </div>
+                    <?php endif; ?>
                     <?= moveInPaymentFields('add_movein', true) ?>
                     <small class="text-muted d-block" style="font-size:0.65rem;"><i class="fa-solid fa-key me-1"></i>A username and temporary password are created automatically, shown after saving and texted to the tenant.</small>
                     </div>
@@ -728,7 +750,21 @@ function openMoveInModal(btn) {
 // The advance and deposit for the room and date picked: a full share each, or half a share
 // for the first month when moving in after the <?= HALF_MONTH_CUTOFF_DAY ?>th. The server works
 // out the exact figures when the form is saved.
+// Monthly total of the appliances ticked on a form (fee x how many); also shown under the list.
+function applianceMonthly(form) {
+    let total = 0;
+    form.querySelectorAll('input[name="appliances[]"]').forEach(box => {
+        const qty = box.closest('.appliance-row').querySelector('.appliance-qty');
+        qty.disabled = !box.checked;
+        if (box.checked) total += parseFloat(box.dataset.fee) * Math.max(1, parseInt(qty.value, 10) || 1);
+    });
+    const out = form.querySelector('.appliance-total');
+    if (out) out.textContent = total > 0 ? 'Appliance charges: ' + peso(total) + ' a month' : '';
+    return total;
+}
+
 function updateMoveIn(form) {
+    applianceMonthly(form);
     const box = form.querySelector('[data-movein]');
     if (!box) return;
     const room = form.querySelector('select[name="room_id"]');
@@ -745,8 +781,12 @@ function updateMoveIn(form) {
         estimate.textContent = 'Pick a room to see the amount.';
     } else {
         const day = dateInput && dateInput.value ? Number(dateInput.value.slice(8, 10)) : new Date().getDate();
-        const advance = day > <?= HALF_MONTH_CUTOFF_DAY ?> ? share / 2 : share;
-        estimate.textContent = 'Advance ' + peso(advance) + ' + deposit ' + peso(share) + ' = ' + peso(advance + share);
+        const half = day > <?= HALF_MONTH_CUTOFF_DAY ?>;
+        const advance = half ? share / 2 : share;
+        // The first month of the appliances ticked on this form is due on moving in too.
+        const appliances = applianceMonthly(form) * (half ? 0.5 : 1);
+        estimate.textContent = 'Advance ' + peso(advance) + ' + deposit ' + peso(share)
+            + (appliances > 0 ? ' + appliances ' + peso(appliances) : '') + ' = ' + peso(advance + share + appliances);
     }
     const paid = box.querySelector('input[name="movein_paid"]');
     box.querySelector('.movein-details').classList.toggle('d-none', !paid.checked);
@@ -757,6 +797,7 @@ document.addEventListener('DOMContentLoaded', () => showModal('addTenantModal'))
 document.addEventListener('DOMContentLoaded', function () {
     document.querySelectorAll('form[data-movein-form]').forEach(function (form) {
         form.addEventListener('change', () => updateMoveIn(form));
+        form.addEventListener('input', e => { if (e.target.classList.contains('appliance-qty')) updateMoveIn(form); });
         updateMoveIn(form);
     });
 });
