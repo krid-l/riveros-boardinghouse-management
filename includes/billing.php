@@ -597,7 +597,10 @@ function repriceTenantToBedRent(PDO $pdo, int $tenantId): void {
  * Anything a tenant owes beyond this amount is overdue.
  */
 function chargesNotYetDue(PDO $pdo, ?int $tenantId = null): array {
-    $sql = "SELECT tenant_id, SUM(amount) FROM charges WHERE due_date >= ?";
+    // Bills only: a credit dated ahead (the deposit applied to the month someone moves out) already
+    // counts against the balance; treating it as "not due yet" would make the overdue part look
+    // bigger than the balance itself.
+    $sql = "SELECT tenant_id, SUM(amount) FROM charges WHERE due_date >= ? AND amount > 0";
     $params = [date('Y-m-d')];
     if ($tenantId !== null) {
         $sql .= " AND tenant_id = ?";

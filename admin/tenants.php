@@ -61,7 +61,7 @@ $listSql = "
     SELECT * FROM (
         SELECT t.*, u.username, u.created_at AS user_created_at, r.room_number,
                COALESCE((SELECT SUM(c.amount) FROM charges c
-                         WHERE c.tenant_id = t.id AND c.due_date >= ?), 0) AS not_yet_due,
+                         WHERE c.tenant_id = t.id AND c.due_date >= ? AND c.amount > 0), 0) AS not_yet_due,
                (SELECT COUNT(*) FROM payments p
                 WHERE p.tenant_id = t.id AND p.status <> 'rejected' AND p.payment_date >= t.move_in_date) AS stay_payments
         FROM tenants t

@@ -194,6 +194,7 @@ CREATE TABLE IF NOT EXISTS report_exports (
     date_from DATE NULL,
     date_to DATE NULL,
     row_count INT NOT NULL DEFAULT 0,
+    filters TEXT,                                     -- the report's filters, as JSON
     created_at TIMESTAMP NULL DEFAULT NULL
 ) ENGINE=InnoDB;
 

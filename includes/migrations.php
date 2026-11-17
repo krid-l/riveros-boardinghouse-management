@@ -9,7 +9,7 @@ require_once __DIR__ . '/billing.php';
 require_once __DIR__ . '/sql_compat.php';
 require_once __DIR__ . '/sms.php';
 
-const SCHEMA_VERSION = '18';
+const SCHEMA_VERSION = '19';
 
 function runMigrations(PDO $pdo): void {
     try {
@@ -54,6 +54,7 @@ function runMigrations(PDO $pdo): void {
         migrateToV16($pdo);
         migrateToV17($pdo);
         migrateToV18($pdo);
+        migrateToV19($pdo);
 
         $pdo->prepare("INSERT INTO settings (setting_key, setting_value) VALUES ('schema_version', ?)
                        " . sqlUpsert(['setting_key'], ['setting_value']))
@@ -287,6 +288,12 @@ function migrateToV17(PDO $pdo): void {
 // rows of one split share split_group.
 function migrateToV18(PDO $pdo): void {
     ensureColumn($pdo, 'damage_charges', 'split_group', 'VARCHAR(40) NULL');
+}
+
+// v19: report filters. An exported report keeps the filters it was made with (as JSON), so
+// "Download again" rebuilds the same report.
+function migrateToV19(PDO $pdo): void {
+    ensureColumn($pdo, 'report_exports', 'filters', 'TEXT');
 }
 
 // v7: rent per bed. A tenant now pays price / capacity, however many beds are taken, instead of

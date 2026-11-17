@@ -39,9 +39,25 @@ $availableBeds = max(0, $totalCapacity - $totalOccupied - $maintenanceBeds);
 $bedShares = percentShares(['occupied' => $totalOccupied, 'available' => $availableBeds, 'maintenance' => $maintenanceBeds]);
 $bedOccupancyRate = $bedShares['occupied'];
 
-// The Exported Reports tab: what was downloaded, newest first.
-$exportPager = paginate((int)$pdo->query("SELECT COUNT(*) FROM report_exports")->fetchColumn(), 15, 'page_exports', ['tab' => 'exported']);
-$exportRows = $pdo->query("SELECT * FROM report_exports ORDER BY created_at DESC, id DESC" . paginationLimitSql($exportPager))->fetchAll();
+// The Exported Reports tab: what was downloaded, newest first, filtered by report, format and
+// when it was exported.
+$expType = array_key_exists(queryParam('exported_type'), REPORT_TYPES) ? queryParam('exported_type') : '';
+$expFormat = in_array(queryParam('exported_format'), ['csv', 'pdf'], true) ? queryParam('exported_format') : '';
+$expPeriod = array_key_exists(queryParam('exported_period'), REPORT_PERIODS) ? queryParam('exported_period') : 'all';
+[$expFrom, $expTo] = reportPeriodRange($expPeriod, queryParam('exported_from'), queryParam('exported_to'));
+$expWhere = [];
+$expParams = [];
+if ($expType !== '') { $expWhere[] = 'report_type = ?'; $expParams[] = $expType; }
+if ($expFormat !== '') { $expWhere[] = 'format = ?'; $expParams[] = $expFormat; }
+if ($expFrom) { $expWhere[] = 'created_at >= ?'; $expParams[] = $expFrom . ' 00:00:00'; }
+if ($expTo) { $expWhere[] = 'created_at < ?'; $expParams[] = date('Y-m-d', strtotime($expTo . ' +1 day')) . ' 00:00:00'; }
+$expWhereSql = $expWhere ? ' WHERE ' . implode(' AND ', $expWhere) : '';
+$expCount = $pdo->prepare("SELECT COUNT(*) FROM report_exports" . $expWhereSql);
+$expCount->execute($expParams);
+$exportPager = paginate((int)$expCount->fetchColumn(), 15, 'page_exports', ['tab' => 'exported']);
+$expStmt = $pdo->prepare("SELECT * FROM report_exports" . $expWhereSql . " ORDER BY created_at DESC, id DESC" . paginationLimitSql($exportPager));
+$expStmt->execute($expParams);
+$exportRows = $expStmt->fetchAll();
 
 // Revenue excludes "covered by roommate" rows: that money is already in the room payment itself.
 $totalRevenue = $pdo->query("SELECT SUM(amount) FROM payments WHERE " . REVENUE_FILTER_SQL)->fetchColumn() ?: 0;
@@ -62,38 +78,28 @@ $recentTransactions = $pdo->query("
 // the active tab travels in the URL so a page link doesn't bounce you back to Overview.
 $activeTab = preg_match('/^[a-z]+$/', queryParam('tab')) ? queryParam('tab') : 'overview';
 
-// Income & Ledger: money actually received.
-$ledgerPager = paginate(
-    (int)$pdo->query("SELECT COUNT(*) FROM payments p WHERE " . revenueFilterSql('p'))->fetchColumn(),
-    15, 'page_ledger', ['tab' => 'financial']
-);
-$ledgerRows = $pdo->query("
-    SELECT p.*, t.first_name, t.last_name, r.room_number
-    FROM payments p
-    JOIN tenants t ON p.tenant_id = t.id
-    LEFT JOIN rooms r ON t.room_id = r.id
-    WHERE " . revenueFilterSql('p') . "
-    ORDER BY p.payment_date DESC, p.id DESC" . paginationLimitSql($ledgerPager) . "
-")->fetchAll();
-
-// Comprehensive payment log: every payment row, verified or not.
-$payLogPager = paginate((int)$pdo->query("SELECT COUNT(*) FROM payments")->fetchColumn(), 15, 'page_paylog', ['tab' => 'payment']);
-$allPayments = $pdo->query("
-    SELECT p.*, t.first_name, t.last_name, r.room_number
-    FROM payments p
-    JOIN tenants t ON p.tenant_id = t.id
-    LEFT JOIN rooms r ON t.room_id = r.id
-    ORDER BY p.payment_date DESC, p.id DESC" . paginationLimitSql($payLogPager) . "
-")->fetchAll();
-
-// Tenant report.
-$tenantPager = paginate((int)$pdo->query("SELECT COUNT(*) FROM tenants")->fetchColumn(), 15, 'page_tenants', ['tab' => 'tenant']);
-$allTenants = $pdo->query("
-    SELECT t.*, r.room_number
-    FROM tenants t
-    LEFT JOIN rooms r ON t.room_id = r.id
-    ORDER BY t.first_name ASC, t.id ASC" . paginationLimitSql($tenantPager) . "
-")->fetchAll();
+// The report tabs: each shows one report (includes/reports.php) with its own filters, read from
+// the query string with the tab's name in front ("payment_status=verified"), so every tab keeps
+// its filters while you move between them. What a tab shows is exactly what its Export gives.
+const REPORT_TABS = [
+    // tab        => [report type, tab label]
+    'financial'  => ['financial',  'Financial'],
+    'payment'    => ['payments',   'Payments'],
+    'charges'    => ['charges',    'Charges'],
+    'unpaid'     => ['unpaid',     'Unpaid'],
+    'tenant'     => ['tenants',    'Tenants'],
+    'occupancy'  => ['occupancy',  'Occupancy'],
+    'complaints' => ['complaints', 'Complaints'],
+];
+$tabReports = [];
+foreach (REPORT_TABS as $tab => [$type]) {
+    $f = normalizeReportFilters($type, fn($key) => isset($_GET[$tab . '_' . $key]) && is_scalar($_GET[$tab . '_' . $key]) ? (string)$_GET[$tab . '_' . $key] : null);
+    $report = buildReport($pdo, $type, $f);
+    $pager = paginate(count($report['rows']), 15, 'page_' . $tab, ['tab' => $tab]);
+    $tabReports[$tab] = ['type' => $type, 'filters' => $f, 'report' => $report, 'pager' => $pager];
+}
+$roomOptions = $pdo->query("SELECT id, room_number FROM rooms")->fetchAll();
+usort($roomOptions, fn($a, $b) => strnatcasecmp((string)$a['room_number'], (string)$b['room_number']));
 
 // Revenue Overview and Top Paying Tenants: one month, this month unless another is picked.
 $monthChoices = revenueMonthChoices($pdo);
@@ -119,11 +125,96 @@ $trendMonths = queryParam('trend') === '12' ? 12 : 6;
 $trend = monthlyRevenueTrend($pdo, $trendMonths);
 $trendHasData = array_sum($trend) > 0;
 
+/** A coloured pill for a status cell (Verified, Pending, Overdue, Full...). */
+function reportStatusBadge(string $text): string {
+    $colour = match ($text) {
+        'Verified', 'Active', 'Paid', 'Resolved', 'Available' => 'success',
+        'Pending', 'Unpaid', 'Partial', 'In Progress' => 'warning',
+        'Rejected', 'Overdue', 'Full' => 'danger',
+        'Maintenance', 'Moved out', 'Deactivated' => 'secondary',
+        default => 'primary',
+    };
+    return '<span class="badge bg-' . $colour . '-subtle text-' . $colour . '-emphasis rounded-pill px-2" style="font-size:0.58rem;">' . htmlspecialchars($text) . '</span>';
+}
+
+/**
+ * The filter bar of one report tab: period (or "as of" date), search, room and the report's own
+ * choices, plus Reset and the Excel / PDF exports of exactly what is shown.
+ */
+function reportFilterBar(string $tab, string $type, array $f, array $rooms, callable $exportQuery): string {
+    $spec = reportFilterSpec($type);
+    $id = fn($k) => "f_{$tab}_{$k}";
+    $name = fn($k) => "{$tab}_{$k}";
+    $h = 'htmlspecialchars';
+    $html = '<form method="GET" class="filter-bar card border-0 shadow-sm rounded-3 p-3 mb-3" data-filter-bar>';
+    $html .= '<input type="hidden" name="tab" value="' . $h($tab) . '">';
+    // Keep the other tabs' filters (and their page numbers) as they are.
+    foreach ($_GET as $k => $v) {
+        if (!is_scalar($v) || $k === 'tab' || str_starts_with($k, $tab . '_') || $k === 'page_' . $tab) continue;
+        $html .= '<input type="hidden" name="' . $h($k) . '" value="' . $h((string)$v) . '">';
+    }
+    $html .= '<div class="row g-2 align-items-end">';
+    if (!empty($spec['period'])) {
+        $html .= '<div class="col-6 col-md-3 col-xl-2"><label class="filter-label" for="' . $id('period') . '">' . $h($spec['period']) . '</label>'
+               . '<select class="form-select form-select-sm" name="' . $name('period') . '" id="' . $id('period') . '" data-period>';
+        foreach (REPORT_PERIODS as $value => $label) {
+            $html .= '<option value="' . $value . '"' . ($f['period'] === $value ? ' selected' : '') . '>' . $label . '</option>';
+        }
+        $html .= '</select></div>';
+        $custom = $f['period'] === 'custom';
+        $html .= '<div class="col-6 col-md-3 col-xl-2 custom-dates' . ($custom ? '' : ' d-none') . '"><label class="filter-label" for="' . $id('from') . '">From</label>'
+               . '<input type="date" class="form-control form-control-sm" name="' . $name('from') . '" id="' . $id('from') . '" value="' . $h((string)$f['from']) . '" max="' . date('Y-m-d') . '"' . ($custom ? '' : ' disabled') . '></div>'
+               . '<div class="col-6 col-md-3 col-xl-2 custom-dates' . ($custom ? '' : ' d-none') . '"><label class="filter-label" for="' . $id('to') . '">To</label>'
+               . '<input type="date" class="form-control form-control-sm" name="' . $name('to') . '" id="' . $id('to') . '" value="' . $h((string)$f['to']) . '"' . ($custom ? '' : ' disabled') . '></div>';
+    }
+    if (!empty($spec['as_of'])) {
+        $html .= '<div class="col-6 col-md-3 col-xl-2"><label class="filter-label" for="' . $id('as_of') . '">As of</label>'
+               . '<input type="date" class="form-control form-control-sm" name="' . $name('as_of') . '" id="' . $id('as_of') . '" value="' . $h((string)$f['as_of']) . '" max="' . date('Y-m-d') . '"></div>';
+    }
+    foreach ($spec['selects'] ?? [] as $key => [$label, $options]) {
+        $html .= '<div class="col-6 col-md-3 col-xl-2"><label class="filter-label" for="' . $id($key) . '">' . $h($label) . '</label>'
+               . '<select class="form-select form-select-sm" name="' . $name($key) . '" id="' . $id($key) . '" data-autosubmit>';
+        foreach ($options as $value => $text) {
+            $html .= '<option value="' . $h((string)$value) . '"' . ((string)$f[$key] === (string)$value ? ' selected' : '') . '>' . $h($text) . '</option>';
+        }
+        $html .= '</select></div>';
+    }
+    if (!empty($spec['room'])) {
+        $html .= '<div class="col-6 col-md-3 col-xl-2"><label class="filter-label" for="' . $id('room') . '">Room</label>'
+               . '<select class="form-select form-select-sm" name="' . $name('room') . '" id="' . $id('room') . '" data-autosubmit><option value="">All rooms</option>';
+        foreach ($rooms as $r) {
+            $html .= '<option value="' . (int)$r['id'] . '"' . ((int)$f['room'] === (int)$r['id'] ? ' selected' : '') . '>Room ' . $h($r['room_number']) . '</option>';
+        }
+        $html .= '</select></div>';
+    }
+    if (!empty($spec['q'])) {
+        $html .= '<div class="col-12 col-md-4 col-xl-2"><label class="filter-label" for="' . $id('q') . '">Search</label>'
+               . '<input type="search" class="form-control form-control-sm" name="' . $name('q') . '" id="' . $id('q') . '" value="' . $h($f['q']) . '" placeholder="' . $h($spec['q']) . '"></div>';
+    }
+    $hasFilters = (bool)reportFilterParams($type, $f);
+    $reset = pageUrl(array_fill_keys(array_merge(
+        array_map(fn($k) => $tab . '_' . $k, ['period', 'from', 'to', 'as_of', 'q', 'room']),
+        array_map(fn($k) => $tab . '_' . $k, array_keys($spec['selects'] ?? [])), ['page_' . $tab]), null) + ['tab' => $tab]);
+    $html .= '<div class="col-12 col-xl d-flex flex-wrap gap-2 justify-content-xl-end">'
+           . '<button type="submit" class="btn btn-primary btn-sm"><i class="fa-solid fa-filter me-1"></i>Apply</button>'
+           . ($hasFilters ? '<a href="' . $h($reset) . '" class="btn btn-light border btn-sm">Reset</a>' : '')
+           . '<a href="' . $h($exportQuery('csv')) . '" class="btn btn-outline-success btn-sm" data-export><i class="fa-regular fa-file-excel me-1"></i>Excel</a>'
+           . '<a href="' . $h($exportQuery('pdf')) . '" class="btn btn-outline-danger btn-sm" data-export><i class="fa-regular fa-file-pdf me-1"></i>PDF</a>'
+           . '</div>';
+    $html .= '</div></form>';
+    return $html;
+}
+
 require_once 'header.php';
 ?>
 
 <style>
     body { background-color: #f8fafc; }
+    /* Report filters */
+    .filter-bar .filter-label { font-size: 0.62rem; font-weight: 700; color: #64748b; margin-bottom: 0.2rem; display: block; }
+    .filter-bar .form-select-sm, .filter-bar .form-control-sm { font-size: 0.72rem; }
+    .filter-bar .btn-sm { font-size: 0.72rem; }
+    .filter-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #2563eb; vertical-align: middle; margin-left: 2px; }
     
     /* Metrics & Cards */
     .metric-card { border: 1px solid #f1f5f9; background: #fff; border-radius: 8px; }
@@ -207,10 +298,9 @@ require_once 'header.php';
 <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center mb-3 gap-2">
     <div class="nav-tabs-custom px-2 overflow-auto w-100" id="reportTabs">
         <div class="tab-item <?= $activeTab === 'overview' ? 'active' : '' ?>" data-target="tab-overview">Overview</div>
-        <div class="tab-item text-nowrap <?= $activeTab === 'financial' ? 'active' : '' ?>" data-target="tab-financial">Financial Reports</div>
-        <div class="tab-item text-nowrap <?= $activeTab === 'occupancy' ? 'active' : '' ?>" data-target="tab-occupancy">Occupancy Reports</div>
-        <div class="tab-item text-nowrap <?= $activeTab === 'tenant' ? 'active' : '' ?>" data-target="tab-tenant">Tenant Reports</div>
-        <div class="tab-item text-nowrap <?= $activeTab === 'payment' ? 'active' : '' ?>" data-target="tab-payment">Payment Reports</div>
+        <?php foreach (REPORT_TABS as $tab => [, $tabLabel]): ?>
+        <div class="tab-item text-nowrap <?= $activeTab === $tab ? 'active' : '' ?>" data-target="tab-<?= $tab ?>"><?= $tabLabel ?><?php if (reportFilterParams($tabReports[$tab]['type'], $tabReports[$tab]['filters'])): ?> <span class="filter-dot" title="Filtered"></span><?php endif; ?></div>
+        <?php endforeach; ?>
         <div class="tab-item text-nowrap <?= $activeTab === 'exported' ? 'active' : '' ?>" data-target="tab-exported">Exported Reports</div>
     </div>
     
@@ -447,162 +537,109 @@ require_once 'header.php';
 </div>
 
 <!-- ============================================== -->
-<!-- TAB: FINANCIAL REPORTS -->
+<!-- REPORT TABS: one report each, with its filters -->
 <!-- ============================================== -->
-<div id="tab-financial" class="tab-pane <?= $activeTab === 'financial' ? '' : 'd-none' ?>">
+<?php foreach ($tabReports as $tab => $tr):
+    $report = $tr['report'];
+    $f = $tr['filters'];
+    $pager = $tr['pager'];
+    $active = reportFilterParams($tr['type'], $f);
+    $exportQuery = fn($format) => 'export_report.php?' . http_build_query(['type' => $tr['type'], 'format' => $format] + $active);
+    $tenantCol = array_search('Tenant', array_column($report['columns'], 0), true);
+    $statusCol = array_search('Status', array_column($report['columns'], 0), true);
+    $rows = array_slice($report['rows'], $pager['offset'], $pager['perPage'], true);
+?>
+<div id="tab-<?= $tab ?>" class="tab-pane <?= $activeTab === $tab ? '' : 'd-none' ?>">
+    <?= reportFilterBar($tab, $tr['type'], $f, $roomOptions, $exportQuery) ?>
+
+    <!-- Summary of what the filters show -->
     <div class="row g-2 mb-3">
-        <div class="col-md-4"><div class="metric-card p-3 shadow-sm text-center"><div class="card-title-sm">Total Collected</div><h4 class="fw-bold text-success mb-0">₱<?= number_format($totalRevenue, 2) ?></h4></div></div>
-        <div class="col-md-4"><div class="metric-card p-3 shadow-sm text-center"><div class="card-title-sm">Total Deficit (Unpaid)</div><h4 class="fw-bold text-danger mb-0">₱<?= number_format($outstandingBalance, 2) ?></h4></div></div>
-        <div class="col-md-4"><div class="metric-card p-3 shadow-sm text-center"><div class="card-title-sm">Projected Revenue</div><h4 class="fw-bold text-primary mb-0">₱<?= number_format($totalRevenue + $outstandingBalance, 2) ?></h4></div></div>
-    </div>
-    
-    <div class="card border-0 shadow-sm rounded-3">
-        <div class="card-header bg-white border-0 p-3 pb-0"><h6 class="fw-bold text-dark mb-0" style="font-size:0.75rem;">Income & Ledger Report</h6></div>
-        <div class="card-body p-0 mt-2">
-            <table class="table table-compact mb-0">
-                <thead class="bg-light">
-                    <tr><th class="ps-3 border-0">Date</th><th class="border-0">Reference</th><th class="border-0">Description</th><th class="border-0 text-end pe-3">Credit (Amount)</th></tr>
-                </thead>
-                <tbody>
-                    <?php if(empty($ledgerRows)): ?>
-                        <tr><td colspan="4" class="text-center py-4 text-muted">No financial records found.</td></tr>
-                    <?php else: ?>
-                        <?php foreach($ledgerRows as $p): ?>
-                        <tr>
-                            <td class="ps-3 text-dark fw-semibold" style="font-size:0.65rem;"><?= date('M d, Y', strtotime($p['payment_date'])) ?></td>
-                            <td class="text-muted" style="font-size:0.65rem;"><?= htmlspecialchars($p['reference_number'] ?: 'MANUAL-'.str_pad($p['id'], 5, '0', STR_PAD_LEFT)) ?></td>
-                            <td class="text-dark fw-semibold" style="font-size:0.65rem;">Rent Payment - <?= htmlspecialchars($p['first_name'].' '.$p['last_name']) ?></td>
-                            <td class="text-success fw-bold text-end pe-3" style="font-size:0.65rem;">+ ₱<?= number_format($p['amount'], 2) ?></td>
-                        </tr>
-                        <?php endforeach; ?>
-                    <?php endif; ?>
-                </tbody>
-            </table>
-        </div>
-            <div class="card-footer bg-white border-top p-2 d-flex justify-content-between align-items-center flex-wrap gap-2">
-                <span class="text-muted" style="font-size:0.65rem;"><?= paginationSummary($ledgerPager, 'entries') ?></span>
-                <nav><ul class="pagination pagination-sm mb-0 shadow-sm" style="font-size:0.65rem;"><?= paginationControls($ledgerPager) ?></ul></nav>
-            </div>
-    </div>
-</div>
-
-<!-- ============================================== -->
-<!-- TAB: OCCUPANCY REPORTS -->
-<!-- ============================================== -->
-<div id="tab-occupancy" class="tab-pane <?= $activeTab === 'occupancy' ? '' : 'd-none' ?>">
-    <div class="row g-2 mb-3">
-        <div class="col-md-4"><div class="metric-card p-3 shadow-sm text-center"><div class="card-title-sm">Total Bed Capacity</div><h4 class="fw-bold text-dark mb-0"><?= $totalCapacity ?></h4></div></div>
-        <div class="col-md-4"><div class="metric-card p-3 shadow-sm text-center"><div class="card-title-sm">Occupied Beds</div><h4 class="fw-bold text-primary mb-0"><?= $totalOccupied ?></h4></div></div>
-        <div class="col-md-4"><div class="metric-card p-3 shadow-sm text-center"><div class="card-title-sm">Overall Bed Occupancy</div><h4 class="fw-bold text-success mb-0"><?= number_format($bedOccupancyRate, 1) ?>%</h4></div></div>
+        <?php foreach ($report['totals'] as $label => $value): ?>
+        <div class="col-6 col-md-4 col-xl"><div class="metric-card p-3 shadow-sm h-100"><div class="card-title-sm"><?= htmlspecialchars($label) ?></div><div class="fw-bold text-dark" style="font-size:1rem;"><?= htmlspecialchars(str_replace('PHP ', '₱', $value)) ?></div></div></div>
+        <?php endforeach; ?>
     </div>
 
-    <div class="card border-0 shadow-sm rounded-3">
-        <div class="card-header bg-white border-0 p-3 pb-0"><h6 class="fw-bold text-dark mb-0" style="font-size:0.75rem;">Detailed Room Utilization</h6></div>
-        <div class="card-body p-0 mt-2">
-            <table class="table table-compact mb-0">
-                <thead class="bg-light">
-                    <tr><th class="ps-3 border-0">Room Number</th><th class="border-0 text-center">Max Capacity</th><th class="border-0 text-center">Current Occupants</th><th class="border-0 text-center">Vacant Spaces</th><th class="border-0 text-end pe-3">Utilization</th></tr>
-                </thead>
-                <tbody>
-                    <?php foreach($roomsData as $r): 
-                        $rate = $r['capacity'] > 0 ? round(($r['tenant_count'] / $r['capacity']) * 100) : 0;
-                        $rateColor = $rate == 100 ? 'success' : ($rate >= 50 ? 'warning' : 'danger');
-                        $vacant = $r['capacity'] - $r['tenant_count'];
-                    ?>
-                    <tr>
-                        <td class="ps-3 fw-bold text-dark">Room <?= htmlspecialchars($r['room_number'] ?? '') ?></td>
-                        <td class="text-center text-muted"><?= $r['capacity'] ?> Beds</td>
-                        <td class="text-center text-dark fw-semibold"><?= $r['tenant_count'] ?> Tenants</td>
-                        <td class="text-center <?= $vacant > 0 ? 'text-success fw-bold' : 'text-muted' ?>"><?= $vacant ?> Available</td>
-                        <td class="text-end pe-3"><span class="badge bg-<?= $rateColor ?>-subtle text-<?= $rateColor ?> rounded-pill px-2" style="font-size:0.55rem;"><?= $rate ?>% Full</span></td>
-                    </tr>
-                    <?php endforeach; ?>
-                </tbody>
-            </table>
-        </div>
-    </div>
-</div>
-
-<!-- ============================================== -->
-<!-- TAB: TENANT REPORTS -->
-<!-- ============================================== -->
-<div id="tab-tenant" class="tab-pane <?= $activeTab === 'tenant' ? '' : 'd-none' ?>">
-    <div class="card border-0 shadow-sm rounded-3">
-        <div class="card-header bg-white border-0 p-3 pb-0 d-flex justify-content-between">
-            <h6 class="fw-bold text-dark mb-0" style="font-size:0.75rem;">Tenant Directory & Status Report</h6>
-            <span class="badge bg-primary rounded-pill px-3"><?= $totalTenants ?> Active Tenants</span>
-        </div>
-        <div class="card-body p-0 mt-2">
-            <table class="table table-compact mb-0">
-                <thead class="bg-light">
-                    <tr><th class="ps-3 border-0">Tenant Name</th><th class="border-0">Contact Number</th><th class="border-0">Assigned Room</th><th class="border-0 text-center">Standing</th><th class="border-0 text-end pe-3">Unpaid Rent</th></tr>
-                </thead>
-                <tbody>
-                    <?php $reportNotYetDue = chargesNotYetDue($pdo);
-                    foreach($allTenants as $t):
-                        $bs = tenantBillingStatus($t, $reportNotYetDue);
-                        $hasBalance = $bs['balance'] > 0;
-                        $statBadge = '<span class="badge bg-' . $bs['color'] . '-subtle text-' . $bs['color'] . '">' . ($bs['key'] === 'paid' ? 'Good Standing' : $bs['label']) . '</span>';
-                    ?>
-                    <tr>
-                        <td class="ps-3 fw-bold text-dark" style="font-size:0.65rem;"><?= htmlspecialchars($t['first_name'].' '.$t['last_name']) ?></td>
-                        <td class="text-muted" style="font-size:0.65rem;"><?= htmlspecialchars($t['contact_number'] ?? '') ?></td>
-                        <td class="text-dark fw-semibold" style="font-size:0.65rem;">Room <?= htmlspecialchars($t['room_number'] ?? 'None') ?></td>
-                        <td class="text-center"><?= $statBadge ?></td>
-                        <td class="text-end pe-3 fw-bold <?= $hasBalance ? 'text-danger' : 'text-success' ?>" style="font-size:0.65rem;">₱<?= number_format($t['balance'] ?? 0, 2) ?></td>
-                    </tr>
-                    <?php endforeach; ?>
-                </tbody>
-            </table>
-        </div>
-            <div class="card-footer bg-white border-top p-2 d-flex justify-content-between align-items-center flex-wrap gap-2">
-                <span class="text-muted" style="font-size:0.65rem;"><?= paginationSummary($tenantPager, 'tenants') ?></span>
-                <nav><ul class="pagination pagination-sm mb-0 shadow-sm" style="font-size:0.65rem;"><?= paginationControls($tenantPager) ?></ul></nav>
-            </div>
-    </div>
-</div>
-
-<!-- ============================================== -->
-<!-- TAB: PAYMENT REPORTS -->
-<!-- ============================================== -->
-<div id="tab-payment" class="tab-pane <?= $activeTab === 'payment' ? '' : 'd-none' ?>">
     <div class="card border-0 shadow-sm rounded-3">
         <div class="card-header bg-white border-0 p-3 pb-0">
-            <h6 class="fw-bold text-dark mb-0" style="font-size:0.75rem;">Comprehensive Payment Log</h6>
+            <h6 class="fw-bold text-dark mb-0" style="font-size:0.75rem;"><?= htmlspecialchars($report['title']) ?></h6>
+            <small class="text-muted" style="font-size:0.68rem;"><?= htmlspecialchars(REPORT_TYPES[$tr['type']][2]) ?> · <?= htmlspecialchars($report['period']) ?><?= $report['filters'] !== '' ? ' · ' . htmlspecialchars($report['filters']) : '' ?></small>
         </div>
         <div class="card-body p-0 mt-2">
+            <div class="table-responsive">
             <table class="table table-compact mb-0">
                 <thead class="bg-light">
-                    <tr><th class="ps-3 border-0">Date Logged</th><th class="border-0">Tenant</th><th class="border-0">Reference No</th><th class="border-0 text-center">Status</th><th class="border-0 text-end pe-3">Amount Processed</th></tr>
+                    <tr><?php foreach ($report['columns'] as $i => [$label, , $align]): ?><th class="border-0 text-nowrap <?= $i === 0 ? 'ps-3' : '' ?> <?= $align === 'R' ? 'text-end' : '' ?> <?= $i === count($report['columns']) - 1 ? 'pe-3' : '' ?>"><?= htmlspecialchars($label) ?></th><?php endforeach; ?></tr>
                 </thead>
                 <tbody>
-                    <?php foreach($allPayments as $p): 
-                        $isVerified = $p['status'] == 'verified';
-                        $sClass = $isVerified ? 'success' : 'warning';
-                        $sText = $isVerified ? 'Verified' : 'Pending Verification';
-                    ?>
+                    <?php if (!$rows): ?>
+                        <tr><td colspan="<?= count($report['columns']) ?>" class="text-center py-4 text-muted"><?= $active ? 'Nothing matches these filters.' : 'Nothing to show yet.' ?></td></tr>
+                    <?php endif; ?>
+                    <?php foreach ($rows as $n => $row): ?>
                     <tr>
-                        <td class="ps-3 text-dark fw-semibold" style="font-size:0.65rem;"><?= date('M j, Y', strtotime($p['payment_date'])) ?></td>
-                        <td class="text-dark fw-semibold" style="font-size:0.65rem;"><?= htmlspecialchars($p['first_name'].' '.$p['last_name']) ?> (Rm <?= htmlspecialchars($p['room_number'] ?? '?') ?>)</td>
-                        <td class="text-muted" style="font-size:0.65rem;"><?= htmlspecialchars($p['reference_number'] ?: 'N/A') ?></td>
-                        <td class="text-center"><span class="badge bg-<?= $sClass ?>-subtle text-<?= $sClass ?> rounded-pill px-2" style="font-size:0.55rem;"><?= $sText ?></span></td>
-                        <td class="text-end pe-3 fw-bold text-dark" style="font-size:0.65rem;">₱<?= number_format($p['amount'], 2) ?></td>
+                        <?php foreach ($row as $i => $value):
+                            $align = $report['columns'][$i][2];
+                            $cls = ($i === 0 ? 'ps-3 ' : '') . ($align === 'R' ? 'text-end text-nowrap ' : '') . ($i === count($row) - 1 ? 'pe-3' : '');
+                            if ($i === $tenantCol && isset($report['links'][$n])) {
+                                $cell = '<a href="tenant_details.php?id=' . (int)$report['links'][$n] . '" class="fw-semibold text-dark">' . htmlspecialchars((string)$value) . '</a>';
+                            } elseif ($i === $statusCol) {
+                                $cell = reportStatusBadge((string)$value);
+                            } else {
+                                $cell = htmlspecialchars((string)$value);
+                            }
+                        ?>
+                            <td class="<?= $cls ?>" style="font-size:0.65rem;"><?= $cell ?></td>
+                        <?php endforeach; ?>
                     </tr>
                     <?php endforeach; ?>
                 </tbody>
             </table>
-        </div>
-            <div class="card-footer bg-white border-top p-2 d-flex justify-content-between align-items-center flex-wrap gap-2">
-                <span class="text-muted" style="font-size:0.65rem;"><?= paginationSummary($payLogPager, 'payments') ?></span>
-                <nav><ul class="pagination pagination-sm mb-0 shadow-sm" style="font-size:0.65rem;"><?= paginationControls($payLogPager) ?></ul></nav>
             </div>
+        </div>
+        <div class="card-footer bg-white border-top p-2 d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <span class="text-muted" style="font-size:0.65rem;"><?= paginationSummary($pager, 'rows') ?></span>
+            <?php if ($pager['totalPages'] > 1): ?><nav><ul class="pagination pagination-sm mb-0 shadow-sm" style="font-size:0.65rem;"><?= paginationControls($pager) ?></ul></nav><?php endif; ?>
+        </div>
     </div>
 </div>
+<?php endforeach; ?>
 
 <!-- ============================================== -->
 <!-- TAB: EXPORTED REPORTS -->
 <!-- ============================================== -->
 <div id="tab-exported" class="tab-pane <?= $activeTab === 'exported' ? '' : 'd-none' ?>">
+    <form method="GET" class="filter-bar card border-0 shadow-sm rounded-3 p-3 mb-3" data-filter-bar>
+        <input type="hidden" name="tab" value="exported">
+        <?php foreach ($_GET as $k => $v): if (!is_scalar($v) || $k === 'tab' || str_starts_with($k, 'exported_') || $k === 'page_exports') continue; ?>
+            <input type="hidden" name="<?= htmlspecialchars($k) ?>" value="<?= htmlspecialchars((string)$v) ?>">
+        <?php endforeach; ?>
+        <div class="row g-2 align-items-end">
+            <div class="col-6 col-md-3 col-xl-2"><label class="filter-label" for="f_exp_type">Report</label>
+                <select class="form-select form-select-sm" name="exported_type" id="f_exp_type" data-autosubmit>
+                    <option value="">All reports</option>
+                    <?php foreach (REPORT_TYPES as $key => [$label]): ?><option value="<?= $key ?>" <?= $expType === $key ? 'selected' : '' ?>><?= htmlspecialchars($label) ?></option><?php endforeach; ?>
+                </select></div>
+            <div class="col-6 col-md-3 col-xl-2"><label class="filter-label" for="f_exp_format">Format</label>
+                <select class="form-select form-select-sm" name="exported_format" id="f_exp_format" data-autosubmit>
+                    <option value="">Excel and PDF</option>
+                    <option value="csv" <?= $expFormat === 'csv' ? 'selected' : '' ?>>Excel (CSV)</option>
+                    <option value="pdf" <?= $expFormat === 'pdf' ? 'selected' : '' ?>>PDF</option>
+                </select></div>
+            <div class="col-6 col-md-3 col-xl-2"><label class="filter-label" for="f_exp_period">Exported</label>
+                <select class="form-select form-select-sm" name="exported_period" id="f_exp_period" data-period>
+                    <?php foreach (REPORT_PERIODS as $value => $label): ?><option value="<?= $value ?>" <?= $expPeriod === $value ? 'selected' : '' ?>><?= $label ?></option><?php endforeach; ?>
+                </select></div>
+            <div class="col-6 col-md-3 col-xl-2 custom-dates <?= $expPeriod === 'custom' ? '' : 'd-none' ?>"><label class="filter-label" for="f_exp_from">From</label>
+                <input type="date" class="form-control form-control-sm" name="exported_from" id="f_exp_from" value="<?= htmlspecialchars((string)$expFrom) ?>" <?= $expPeriod === 'custom' ? '' : 'disabled' ?>></div>
+            <div class="col-6 col-md-3 col-xl-2 custom-dates <?= $expPeriod === 'custom' ? '' : 'd-none' ?>"><label class="filter-label" for="f_exp_to">To</label>
+                <input type="date" class="form-control form-control-sm" name="exported_to" id="f_exp_to" value="<?= htmlspecialchars((string)$expTo) ?>" <?= $expPeriod === 'custom' ? '' : 'disabled' ?>></div>
+            <div class="col-12 col-xl d-flex gap-2 justify-content-xl-end">
+                <button type="submit" class="btn btn-primary btn-sm"><i class="fa-solid fa-filter me-1"></i>Apply</button>
+                <?php if ($expType !== '' || $expFormat !== '' || $expPeriod !== 'all'): ?>
+                    <a href="<?= htmlspecialchars(pageUrl(['exported_type' => null, 'exported_format' => null, 'exported_period' => null, 'exported_from' => null, 'exported_to' => null, 'page_exports' => null, 'tab' => 'exported'])) ?>" class="btn btn-light border btn-sm">Reset</a>
+                <?php endif; ?>
+            </div>
+        </div>
+    </form>
     <div class="card border-0 shadow-sm rounded-3">
         <div class="card-header bg-white border-0 p-3 pb-0 d-flex justify-content-between align-items-center flex-wrap gap-2">
             <div>
@@ -615,21 +652,31 @@ require_once 'header.php';
             <div class="table-responsive">
             <table class="table table-compact mb-0">
                 <thead class="bg-light">
-                    <tr><th class="ps-3 border-0">Report</th><th class="border-0">Period</th><th class="border-0">Format</th><th class="border-0 text-end">Rows</th><th class="border-0">Exported</th><th class="border-0 text-end pe-3">Action</th></tr>
+                    <tr><th class="ps-3 border-0">Report</th><th class="border-0">Period</th><th class="border-0">Filters</th><th class="border-0">Format</th><th class="border-0 text-end">Rows</th><th class="border-0">Exported</th><th class="border-0 text-end pe-3">Action</th></tr>
                 </thead>
                 <tbody>
                     <?php if (!$exportRows): ?>
-                    <tr><td colspan="6" class="text-center text-muted py-4" style="font-size:0.75rem;">Nothing exported yet. Use <strong>Export Report</strong> to download one.</td></tr>
+                    <tr><td colspan="7" class="text-center text-muted py-4" style="font-size:0.75rem;"><?= $expWhere ? 'No exports match these filters.' : 'Nothing exported yet. Use <strong>Export Report</strong> to download one.' ?></td></tr>
                     <?php endif; ?>
                     <?php foreach ($exportRows as $x):
                         $xType = REPORT_TYPES[$x['report_type']] ?? null;
                         if (!$xType) continue;
-                        $again = 'export_report.php?' . http_build_query(array_filter(['type' => $x['report_type'], 'format' => $x['format'],
-                                 'from' => $x['date_from'], 'to' => $x['date_to'], 'again' => 1]));
+                        // Its filters as saved; exports from before filters existed kept only their dates.
+                        $saved = json_decode((string)($x['filters'] ?? ''), true);
+                        if (!is_array($saved)) {
+                            $saved = array_filter(['period' => $x['date_from'] ? 'custom' : null, 'from' => $x['date_from'], 'to' => $x['date_to']]);
+                        }
+                        $saved = array_filter($saved, 'is_scalar');
+                        $xf = normalizeReportFilters($x['report_type'], fn($k) => $saved[$k] ?? null);
+                        $again = 'export_report.php?' . http_build_query(['type' => $x['report_type'], 'format' => $x['format']] + $saved + ['again' => 1]);
+                        $xPeriod = !empty(reportFilterSpec($x['report_type'])['period']) ? reportPeriodText($xf['from'], $xf['to'])
+                                 : 'As of ' . date('M j, Y', strtotime($xf['as_of'] && isset($saved['as_of']) ? $xf['as_of'] : $x['created_at']));
+                        $xFilters = describeReportFilters($pdo, $x['report_type'], $xf);
                     ?>
                     <tr>
                         <td class="ps-3 fw-semibold text-dark"><i class="fa-regular <?= $x['format'] === 'pdf' ? 'fa-file-pdf text-danger' : 'fa-file-excel text-success' ?> me-2"></i><?= htmlspecialchars($xType[0]) ?></td>
-                        <td class="text-muted"><?= $x['date_from'] ? date('M j, Y', strtotime($x['date_from'])) . ' – ' . date('M j, Y', strtotime($x['date_to'])) : 'As of ' . date('M j, Y', strtotime($x['created_at'])) ?></td>
+                        <td class="text-muted text-nowrap"><?= htmlspecialchars($xPeriod) ?></td>
+                        <td class="text-muted" style="font-size:0.65rem;"><?= $xFilters !== '' ? htmlspecialchars($xFilters) : '—' ?></td>
                         <td><span class="badge bg-light text-dark border"><?= strtoupper($x['format']) ?></span></td>
                         <td class="text-end"><?= (int)$x['row_count'] ?></td>
                         <td class="text-muted text-nowrap"><?= date('M j, Y g:i A', strtotime($x['created_at'])) ?></td>
@@ -662,30 +709,26 @@ require_once 'header.php';
                     <label for="exportType">Report</label>
                     <select name="type" id="exportType" class="form-select">
                         <?php foreach (REPORT_TYPES as $key => [$label, $range, $about]): ?>
-                            <option value="<?= $key ?>" data-range="<?= $range ? 1 : 0 ?>" data-about="<?= htmlspecialchars($about) ?>"><?= htmlspecialchars($label) ?></option>
+                            <option value="<?= $key ?>" data-range="<?= !empty(reportFilterSpec($key)['period']) ? 1 : 0 ?>" data-asof="<?= !empty(reportFilterSpec($key)['as_of']) ? 1 : 0 ?>" data-about="<?= htmlspecialchars($about) ?>"><?= htmlspecialchars($label) ?></option>
                         <?php endforeach; ?>
                     </select>
                     <div class="form-text" id="exportAbout" style="font-size:0.68rem;"></div>
                 </div>
                 <div id="exportRange">
-                    <label>Period</label>
-                    <div class="d-flex flex-wrap gap-1 mb-2">
-                        <?php
-                        $presets = [
-                            'This month' => [date('Y-m-01'), date('Y-m-d')],
-                            'Last month' => [date('Y-m-01', strtotime('first day of last month')), date('Y-m-t', strtotime('first day of last month'))],
-                            'This year'  => [date('Y-01-01'), date('Y-m-d')],
-                            'All time'   => [$pdo->query("SELECT MIN(payment_date) FROM payments")->fetchColumn() ?: date('Y-m-01'), date('Y-m-d')],
-                        ];
-                        foreach ($presets as $label => [$pf, $pt]): ?>
-                            <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2 export-preset" style="font-size:0.7rem;" data-from="<?= $pf ?>" data-to="<?= $pt ?>"><?= $label ?></button>
-                        <?php endforeach; ?>
-                    </div>
                     <div class="row g-2 mb-3">
-                        <div class="col-6"><label for="exportFrom" class="text-muted fw-normal">From</label><input type="date" name="from" id="exportFrom" class="form-control" value="<?= date('Y-m-01') ?>" max="<?= date('Y-m-d') ?>"></div>
-                        <div class="col-6"><label for="exportTo" class="text-muted fw-normal">To</label><input type="date" name="to" id="exportTo" class="form-control" value="<?= date('Y-m-d') ?>" max="<?= date('Y-m-d') ?>"></div>
+                        <div class="col-12"><label for="exportPeriod">Period</label>
+                            <select name="period" id="exportPeriod" class="form-select">
+                                <?php foreach (REPORT_PERIODS as $value => $label): ?><option value="<?= $value ?>" <?= $value === 'month' ? 'selected' : '' ?>><?= $label ?></option><?php endforeach; ?>
+                            </select></div>
+                        <div class="col-6 export-custom d-none"><label for="exportFrom" class="text-muted fw-normal">From</label><input type="date" name="from" id="exportFrom" class="form-control" value="<?= date('Y-m-01') ?>" max="<?= date('Y-m-d') ?>"></div>
+                        <div class="col-6 export-custom d-none"><label for="exportTo" class="text-muted fw-normal">To</label><input type="date" name="to" id="exportTo" class="form-control" value="<?= date('Y-m-d') ?>"></div>
                     </div>
                 </div>
+                <div id="exportAsOf" class="mb-3 d-none">
+                    <label for="exportAsOfDate">As of</label>
+                    <input type="date" name="as_of" id="exportAsOfDate" class="form-control" value="<?= date('Y-m-d') ?>" max="<?= date('Y-m-d') ?>">
+                </div>
+                <div class="form-text mb-3" style="font-size:0.68rem;"><i class="fa-solid fa-filter me-1"></i>For more filters (status, room, search...), filter the report on its tab and use its Excel / PDF buttons.</div>
                 <label class="d-block">Format</label>
                 <div class="btn-group w-100" role="group" aria-label="Format">
                     <input type="radio" class="btn-check" name="format" id="formatCsv" value="csv" checked>
@@ -708,18 +751,24 @@ document.addEventListener('DOMContentLoaded', function () {
     const type = document.getElementById('exportType');
     const range = document.getElementById('exportRange');
     const about = document.getElementById('exportAbout');
+    const period = document.getElementById('exportPeriod');
+    const asOf = document.getElementById('exportAsOf');
     const sync = () => {
         const opt = type.selectedOptions[0];
-        range.classList.toggle('d-none', opt.dataset.range !== '1');
-        range.querySelectorAll('input').forEach(i => i.disabled = opt.dataset.range !== '1');
+        const usesRange = opt.dataset.range === '1', custom = usesRange && period.value === 'custom';
+        range.classList.toggle('d-none', !usesRange);
+        period.disabled = !usesRange;
+        document.querySelectorAll('.export-custom').forEach(el => {
+            el.classList.toggle('d-none', !custom);
+            el.querySelector('input').disabled = !custom;
+        });
+        asOf.classList.toggle('d-none', opt.dataset.asof !== '1');
+        asOf.querySelector('input').disabled = opt.dataset.asof !== '1';
         about.textContent = opt.dataset.about;
     };
     type.addEventListener('change', sync);
-    document.querySelectorAll('.export-preset').forEach(b => b.addEventListener('click', () => {
-        document.getElementById('exportFrom').value = b.dataset.from;
-        document.getElementById('exportTo').value = b.dataset.to;
-    }));
-    const tabToReport = { 'tab-financial': 'financial', 'tab-occupancy': 'occupancy', 'tab-tenant': 'tenants', 'tab-payment': 'payments' };
+    period.addEventListener('change', sync);
+    const tabToReport = <?= json_encode(array_combine(array_map(fn($t) => 'tab-' . $t, array_keys(REPORT_TABS)), array_column(REPORT_TABS, 0))) ?>;
     document.getElementById('exportModal').addEventListener('show.bs.modal', () => {
         const open = document.querySelector('#reportTabs .tab-item.active');
         const pick = open && tabToReport[open.dataset.target];
@@ -742,6 +791,33 @@ document.addEventListener('DOMContentLoaded', function () {
 // load, Chart.register below throws and everything after it in that block stops running.
 // The tabs must keep working regardless. The open tab is already set server-side; this only
 // handles clicking between them.
+// Filter bars: "Custom dates" shows the from / to boxes; any other period, and the drop-downs,
+// apply straight away.
+document.addEventListener("DOMContentLoaded", function () {
+    document.querySelectorAll('[data-filter-bar]').forEach(form => {
+        // Leave out empty boxes and "All time", so the address stays short.
+        const go = () => {
+            form.querySelectorAll('input[name], select[name]').forEach(el => {
+                if (el.name !== 'tab' && (el.value === '' || (el.name.endsWith('_period') && el.value === 'all'))) el.disabled = true;
+            });
+            form.submit();
+        };
+        form.addEventListener('submit', e => { e.preventDefault(); go(); });
+        const period = form.querySelector('[data-period]');
+        if (period) period.addEventListener('change', () => {
+            const custom = period.value === 'custom';
+            form.querySelectorAll('.custom-dates').forEach(el => {
+                el.classList.toggle('d-none', !custom);
+                el.querySelector('input').disabled = !custom;
+            });
+            if (!custom) go();
+        });
+        form.querySelectorAll('[data-autosubmit]').forEach(sel => sel.addEventListener('change', go));
+        // A single "as of" date applies when picked.
+        form.querySelectorAll('input[type="date"][name$="_as_of"]').forEach(i => i.addEventListener('change', go));
+    });
+});
+
 document.addEventListener("DOMContentLoaded", function () {
     const tabs = document.querySelectorAll('#reportTabs .tab-item');
     const panes = document.querySelectorAll('.tab-pane');
